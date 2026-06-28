@@ -30,10 +30,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # --- LLM provider selection ---
+    # Fallback chain: OpenAI (primary) -> Anthropic -> OpenRouter -> simulated demo.
     # OpenAI is the primary provider. Anthropic is a configurable fallback used only
     # when llm_fallback_enabled is true AND an Anthropic key is present.
     llm_provider: Literal["openai", "anthropic"] = "openai"
     llm_fallback_enabled: bool = True
+    # OpenRouter is an additional fallback tier tried after the openai/anthropic pair,
+    # gated by llm_openrouter_fallback AND an OpenRouter key being present.
+    llm_openrouter_fallback: bool = True
     # Final safety net: when NO LLM provider can be reached (no key / offline / every
     # provider call failed), serve realistic simulated "[DEMO MODE]" clinical responses
     # instead of raising, so the product is always demonstrable. Default on.
@@ -50,12 +54,23 @@ class Settings(BaseSettings):
     anthropic_max_tokens: int = 4096
     extraction_prompt_version: str = "v1.0"
 
+    # --- OpenRouter (fallback LLM, OpenAI-compatible API) ---
+    # Tried after OpenAI/Anthropic. Uses the openai SDK with a custom base_url.
+    # Default model is a capable free model suitable for clinical reasoning; override
+    # via OPENROUTER_MODEL (e.g. "openrouter/auto" or any ":free" model).
+    openrouter_api_key: str = ""
+    openrouter_model: str = "nvidia/llama-3.3-nemotron-super-49b-v1:free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_max_tokens: int = 4096
+
     @property
     def llm_configured(self) -> bool:
         """True when at least one usable LLM provider key is configured."""
         if self.openai_api_key:
             return True
-        return bool(self.llm_fallback_enabled and self.anthropic_api_key)
+        if self.llm_fallback_enabled and self.anthropic_api_key:
+            return True
+        return bool(self.llm_openrouter_fallback and self.openrouter_api_key)
 
     # --- Reasoning engine (Phase 2) ---
     reasoning_info_gain_threshold: float = 0.35

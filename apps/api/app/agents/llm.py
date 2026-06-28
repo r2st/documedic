@@ -1,9 +1,10 @@
 """LLM client for the reasoning agents (architecture §7.1).
 
-Provider-agnostic wrapper that returns parsed JSON for structured agent output. OpenAI
-(GPT) is the PRIMARY provider; Anthropic Claude is a configurable fallback (see
-``settings.llm_provider`` / ``settings.llm_fallback_enabled``). Each provider SDK is
-imported lazily and only used when its API key is configured. When no provider is
+Provider-agnostic wrapper that returns parsed JSON for structured agent output. The
+fallback chain is OpenAI (GPT, primary) -> Anthropic Claude -> OpenRouter -> simulated
+demo data (see ``settings.llm_provider`` / ``settings.llm_fallback_enabled`` /
+``settings.llm_openrouter_fallback`` / ``settings.llm_demo_fallback``). Each provider SDK
+is imported lazily and only used when its API key is configured. When no provider is
 available (no key / offline / error) callers fall back to deterministic reasoning, and
 the case is marked ``degraded`` — the system never silently produces output.
 
@@ -26,16 +27,24 @@ class LLMUnavailable(RuntimeError):
 
 
 def _provider_order() -> list[str]:
-    """Primary provider first, then the other as fallback when enabled."""
+    """Fallback order: primary, then the other openai/anthropic, then OpenRouter."""
     primary = settings.llm_provider
     order = [primary]
     if settings.llm_fallback_enabled:
         order.append("anthropic" if primary == "openai" else "openai")
+    if settings.llm_openrouter_fallback:
+        order.append("openrouter")
     return order
 
 
 def _key_for(provider: str) -> str:
-    return settings.openai_api_key if provider == "openai" else settings.anthropic_api_key
+    if provider == "openai":
+        return settings.openai_api_key
+    if provider == "anthropic":
+        return settings.anthropic_api_key
+    if provider == "openrouter":
+        return settings.openrouter_api_key
+    return ""
 
 
 def available_providers() -> list[str]:
@@ -100,11 +109,36 @@ def _complete_anthropic(system: str, user: str, model: str, max_tokens: int) -> 
     return "".join(b.text for b in message.content if b.type == "text")
 
 
+def _complete_openrouter(system: str, user: str, model: str, max_tokens: int) -> str:
+    # OpenRouter exposes an OpenAI-compatible API, so reuse the openai SDK with a
+    # custom base_url. The optional referer/title headers identify the app to OpenRouter.
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
+        default_headers={
+            "HTTP-Referer": "https://documedic.aiknol.com",
+            "X-Title": "Documedic (Aether Clinician)",
+        },
+    )
+    completion = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=0.0,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return completion.choices[0].message.content or ""
+
+
 class LLMClient:
     """Synchronous, provider-agnostic client (called from a worker thread by the orchestrator).
 
-    Tries each configured provider in priority order (OpenAI primary, Anthropic fallback),
-    so a transient failure or missing key on the primary degrades to the fallback rather
+    Tries each configured provider in priority order (OpenAI primary, then Anthropic, then
+    OpenRouter), so a transient failure or missing key on one degrades to the next rather
     than to the deterministic path.
     """
 
@@ -120,6 +154,10 @@ class LLMClient:
             model = self._model_override or settings.openai_model
             max_tokens = self._max_tokens_override or settings.openai_max_tokens
             return _complete_openai(system, user, model, max_tokens)
+        if provider == "openrouter":
+            model = self._model_override or settings.openrouter_model
+            max_tokens = self._max_tokens_override or settings.openrouter_max_tokens
+            return _complete_openrouter(system, user, model, max_tokens)
         model = self._model_override or settings.anthropic_model
         max_tokens = self._max_tokens_override or settings.anthropic_max_tokens
         return _complete_anthropic(system, user, model, max_tokens)

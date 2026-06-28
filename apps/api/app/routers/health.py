@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.llm import available_providers, demo_fallback_enabled, using_simulated_llm
+from app.agents.llm import (
+    available_providers,
+    demo_fallback_enabled,
+    using_simulated_llm,
+)
 from app.config import settings
 from app.db.session import get_db
 
@@ -57,7 +61,15 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
         "database": "ok" if db_ok else "error",
         "llm_configured": settings.llm_configured,
         "llm_provider": settings.llm_provider,
+        # Providers (in fallback order) that currently have an API key configured.
+        "llm_available_providers": available_providers(),
         "llm_mode": _llm_mode(),
+        "llm_fallback_enabled": settings.llm_fallback_enabled,
+        "llm_openrouter_fallback": settings.llm_openrouter_fallback,
+        # True when an OpenRouter key is present and the OpenRouter tier is enabled.
+        "llm_openrouter_configured": bool(
+            settings.llm_openrouter_fallback and settings.openrouter_api_key
+        ),
         "llm_demo_fallback": demo_fallback_enabled(),
         "llm_simulated": using_simulated_llm(),
         "storage_backend": settings.storage_backend,
