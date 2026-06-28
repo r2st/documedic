@@ -1,8 +1,14 @@
-"""Claude vision multimodal extraction client (production path).
+"""Multimodal vision extraction client (production path).
 
-Only used when ANTHROPIC_API_KEY is configured. Sends the document to Claude with a
-structured-output instruction and parses the JSON response into ParsedEntity objects.
-When no key is present, callers fall back to the deterministic text parser.
+Provider-agnostic: OpenAI (GPT) vision is the primary path, Anthropic Claude is the
+configurable fallback (same selection logic as the reasoning engine —
+``settings.llm_provider`` / ``settings.llm_fallback_enabled``). The chosen SDK is sent
+the document with a structured-output instruction and the JSON response is parsed into
+ParsedEntity objects. When no provider can handle the document, callers fall back to the
+deterministic text parser.
+
+Note: OpenAI vision handles image inputs; PDF documents are routed to Anthropic when
+available, otherwise the deterministic text/OCR path is used.
 """
 
 from __future__ import annotations
@@ -10,6 +16,7 @@ from __future__ import annotations
 import base64
 import json
 
+from app.agents.llm import available_providers
 from app.config import settings
 from app.services.extraction.text_parser import ParsedEntity, ParsedField
 
@@ -43,7 +50,7 @@ _MEDIA_TYPES = {
 
 
 def is_available() -> bool:
-    return bool(settings.anthropic_api_key)
+    return bool(available_providers())
 
 
 def _to_entities(payload: dict) -> tuple[list[ParsedEntity], str | None]:
@@ -62,14 +69,45 @@ def _to_entities(payload: dict) -> tuple[list[ParsedEntity], str | None]:
     return entities, payload.get("document_type")
 
 
-def extract(file_bytes: bytes, file_type: str) -> tuple[list[ParsedEntity], str | None]:
-    """Call Claude vision/text and return (entities, document_type).
+def model_label() -> str:
+    """Human-readable label of the provider/model that would handle extraction."""
+    providers = available_providers()
+    if providers and providers[0] == "openai":
+        return settings.openai_model
+    return settings.anthropic_model
 
-    Raises RuntimeError on any failure so the pipeline can fall back deterministically.
+
+def _extract_openai(file_bytes: bytes, file_type: str) -> str:
+    """OpenAI (GPT) vision extraction. Handles images via data URLs.
+
+    PDFs are not supported on the chat-completions vision path; raise so the caller can
+    fall back to the next provider (Anthropic) or the deterministic parser.
     """
-    if not is_available():
-        raise RuntimeError("ANTHROPIC_API_KEY not configured")
+    if file_type not in _MEDIA_TYPES:
+        raise RuntimeError(f"OpenAI vision path does not support file type: {file_type}")
 
+    from openai import OpenAI
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    data_url = f"data:{_MEDIA_TYPES[file_type]};base64,{base64.b64encode(file_bytes).decode('ascii')}"
+    completion = client.chat.completions.create(
+        model=settings.openai_model,
+        max_tokens=settings.openai_max_tokens,
+        messages=[
+            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract structured clinical data."},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ],
+    )
+    return completion.choices[0].message.content or ""
+
+
+def _extract_anthropic(file_bytes: bytes, file_type: str) -> str:
     import anthropic
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -106,9 +144,32 @@ def extract(file_bytes: bytes, file_type: str) -> tuple[list[ParsedEntity], str 
         system=EXTRACTION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
     )
-    text = "".join(block.text for block in message.content if block.type == "text")
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
-        raise RuntimeError("No JSON object in model response")
-    payload = json.loads(text[start : end + 1])
-    return _to_entities(payload)
+    return "".join(block.text for block in message.content if block.type == "text")
+
+
+def extract(file_bytes: bytes, file_type: str) -> tuple[list[ParsedEntity], str | None]:
+    """Run vision extraction and return (entities, document_type).
+
+    Tries each configured provider in priority order (OpenAI primary, Anthropic fallback).
+    Raises RuntimeError when no provider succeeds so the pipeline can fall back
+    deterministically.
+    """
+    providers = available_providers()
+    if not providers:
+        raise RuntimeError("No LLM provider API key configured")
+
+    last_err: Exception | None = None
+    for provider in providers:
+        try:
+            if provider == "openai":
+                text = _extract_openai(file_bytes, file_type)
+            else:
+                text = _extract_anthropic(file_bytes, file_type)
+            start, end = text.find("{"), text.rfind("}")
+            if start == -1 or end == -1:
+                raise RuntimeError("No JSON object in model response")
+            payload = json.loads(text[start : end + 1])
+            return _to_entities(payload)
+        except Exception as exc:  # noqa: BLE001 — try next provider, then deterministic path
+            last_err = exc
+    raise RuntimeError(str(last_err))

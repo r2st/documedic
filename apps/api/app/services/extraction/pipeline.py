@@ -81,7 +81,7 @@ class ExtractionPipeline:
                 entities, doc_type = claude_client.extract(file_bytes, file_type)
                 if entities and self._mean_confidence(entities) >= settings.ocr_fallback_threshold:
                     return ExtractionResultInternal(
-                        entities, doc_type, False, settings.anthropic_model
+                        entities, doc_type, False, claude_client.model_label()
                     )
             except Exception:
                 pass  # fall through to deterministic path

@@ -29,11 +29,29 @@ class Settings(BaseSettings):
     # --- Redis ---
     redis_url: str = "redis://localhost:6379/0"
 
-    # --- Anthropic / extraction ---
+    # --- LLM provider selection ---
+    # OpenAI is the primary provider. Anthropic is a configurable fallback used only
+    # when llm_fallback_enabled is true AND an Anthropic key is present.
+    llm_provider: Literal["openai", "anthropic"] = "openai"
+    llm_fallback_enabled: bool = True
+
+    # --- OpenAI (primary LLM) ---
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o"
+    openai_max_tokens: int = 4096
+
+    # --- Anthropic (fallback LLM + vision extraction) ---
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-20250514"
     anthropic_max_tokens: int = 4096
     extraction_prompt_version: str = "v1.0"
+
+    @property
+    def llm_configured(self) -> bool:
+        """True when at least one usable LLM provider key is configured."""
+        if self.openai_api_key:
+            return True
+        return bool(self.llm_fallback_enabled and self.anthropic_api_key)
 
     # --- Reasoning engine (Phase 2) ---
     reasoning_info_gain_threshold: float = 0.35

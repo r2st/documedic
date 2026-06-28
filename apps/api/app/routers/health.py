@@ -37,6 +37,7 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
         db_ok = False
     return {
         "database": "ok" if db_ok else "error",
-        "llm_configured": bool(settings.anthropic_api_key),
+        "llm_configured": settings.llm_configured,
+        "llm_provider": settings.llm_provider,
         "storage_backend": settings.storage_backend,
     }
