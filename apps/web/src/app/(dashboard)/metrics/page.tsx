@@ -136,13 +136,14 @@ export default function MetricsPage() {
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Performance & validation</h1>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button
+            className="w-full sm:w-auto"
             variant="secondary"
             onClick={() => void downloadDossier()}
             disabled={downloading}
           >
             {downloading ? 'Downloading…' : 'Download CDSCO dossier'}
           </Button>
-          <Button onClick={() => void runValidation()} disabled={running}>
+          <Button className="w-full sm:w-auto" onClick={() => void runValidation()} disabled={running}>
             {running ? 'Running…' : 'Run validation harness'}
           </Button>
         </div>

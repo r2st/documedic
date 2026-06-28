@@ -87,10 +87,10 @@ export function IntakeFlow({
         ))}
       </div>
       <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
-        <Button onClick={() => void submit()} disabled={submitting}>
+        <Button className="w-full sm:w-auto" onClick={() => void submit()} disabled={submitting}>
           {submitting ? 'Submitting…' : 'Submit answers'}
         </Button>
-        <Button variant="ghost" onClick={onComplete} disabled={submitting}>
+        <Button className="w-full sm:w-auto" variant="ghost" onClick={onComplete} disabled={submitting}>
           Skip — proceed to reasoning
         </Button>
       </div>

@@ -215,11 +215,11 @@ export default function UploadPage({ params }: { params: { id: string } }) {
           </ul>
 
           <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
-            <Button onClick={approve} disabled={busy}>
+            <Button className="w-full sm:w-auto" onClick={approve} disabled={busy}>
               {busy ? 'Saving…' : 'Confirm & merge into record'}
             </Button>
-            <Link href={`/patients/${id}`}>
-              <Button variant="secondary">Discard</Button>
+            <Link href={`/patients/${id}`} className="w-full sm:w-auto">
+              <Button className="w-full sm:w-auto" variant="secondary">Discard</Button>
             </Link>
           </div>
         </Card>

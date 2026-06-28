@@ -28,8 +28,8 @@ export default function PatientsPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Patients</h1>
           {!loading && (
             <p className="mt-1 text-sm text-slate-500">
@@ -37,11 +37,11 @@ export default function PatientsPage() {
             </p>
           )}
         </div>
-        <Button onClick={() => setShowForm((s) => !s)}>
+        <Button className="flex-shrink-0" onClick={() => setShowForm((s) => !s)}>
           {showForm ? (
             'Cancel'
           ) : (
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>

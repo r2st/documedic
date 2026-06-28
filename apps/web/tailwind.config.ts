@@ -3,6 +3,15 @@ import type { Config } from 'tailwindcss';
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
+    // Add an `xs` breakpoint for fine-grained small-phone (≈360–480px) layout control.
+    screens: {
+      xs: '400px',
+      sm: '640px',
+      md: '768px',
+      lg: '1024px',
+      xl: '1280px',
+      '2xl': '1536px',
+    },
     extend: {
       colors: {
         // Brand palette — medical teal

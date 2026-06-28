@@ -120,13 +120,14 @@ export function SuggestionCard({
             />
             <div className="flex flex-col gap-2 sm:flex-row">
               <Button
+                className="w-full sm:w-auto"
                 variant="danger"
                 disabled={!overrideReason.trim()}
                 onClick={() => record('overridden', overrideReason)}
               >
                 Override with documented reason
               </Button>
-              <Button variant="secondary" onClick={() => record('acknowledged')}>
+              <Button className="w-full sm:w-auto" variant="secondary" onClick={() => record('acknowledged')}>
                 Acknowledge (do not override)
               </Button>
             </div>

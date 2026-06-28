@@ -28,10 +28,10 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
           const isComplete = i < currentIndex;
           const isCurrent = i === currentIndex;
           return (
-            <li key={p.key} className="flex items-center">
-              <div className="flex items-center gap-1.5">
+            <li key={p.key} className={`flex items-center ${i < PHASES.length - 1 ? 'flex-1' : ''}`}>
+              <div className="flex flex-shrink-0 items-center gap-1.5">
                 <span
-                  className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold transition-colors ${
+                  className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors sm:h-7 sm:w-7 ${
                     isComplete
                       ? 'bg-brand-600 text-white'
                       : isCurrent
@@ -47,8 +47,9 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                     i + 1
                   )}
                 </span>
+                {/* On the smallest screens only the active step's label shows, to avoid overflow. */}
                 <span
-                  className={`text-xs font-medium ${
+                  className={`whitespace-nowrap text-[11px] font-medium sm:text-xs ${isCurrent ? 'inline' : 'hidden sm:inline'} ${
                     isCurrent ? 'text-brand-700' : isComplete ? 'text-slate-700' : 'text-slate-400'
                   }`}
                 >
@@ -57,7 +58,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
               </div>
               {i < PHASES.length - 1 && (
                 <div
-                  className={`mx-2 h-px w-8 sm:w-12 ${
+                  className={`mx-2 h-px flex-1 ${
                     isComplete ? 'bg-brand-500' : 'bg-slate-200'
                   }`}
                 />
@@ -153,7 +154,7 @@ export default function EncounterPage() {
             placeholder="e.g. 54-year-old with central chest pain radiating to the left arm for 1 hour"
             className="w-full"
           />
-          <Button className="mt-4" onClick={() => void startReasoning()} disabled={complaint.trim().length < 3}>
+          <Button className="mt-4 w-full sm:w-auto" onClick={() => void startReasoning()} disabled={complaint.trim().length < 3}>
             Begin intake
           </Button>
         </Card>
