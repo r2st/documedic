@@ -14,21 +14,24 @@ interface EvidenceItem {
 
 function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'against' }) {
   if (!items?.length) return null;
-  const color = kind === 'for' ? 'text-green-800' : 'text-red-800';
-  const marker = kind === 'for' ? '✓' : '✗';
+  const styles = kind === 'for'
+    ? { text: 'text-emerald-800', bg: 'bg-emerald-50', icon: 'text-emerald-500', marker: '✓', label: 'supporting' }
+    : { text: 'text-red-800', bg: 'bg-red-50', icon: 'text-red-500', marker: '✗', label: 'against' };
   return (
-    <div>
-      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-        Evidence {kind === 'for' ? 'supporting' : 'against'}
+    <div className={`rounded-lg ${styles.bg} p-3`}>
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+        Evidence {styles.label}
       </p>
-      <ul className="space-y-1">
+      <ul className="space-y-1.5">
         {items.map((e, i) => (
-          <li key={i} className={`text-sm ${color}`}>
-            <span className="mr-1.5">{marker}</span>
-            {e.text}
-            {e.source_ref ? (
-              <span className="ml-1 text-xs text-slate-400">({e.source_ref})</span>
-            ) : null}
+          <li key={i} className={`flex items-start gap-2 text-sm ${styles.text}`}>
+            <span className={`mt-0.5 flex-shrink-0 ${styles.icon}`}>{styles.marker}</span>
+            <span>
+              {e.text}
+              {e.source_ref ? (
+                <span className="ml-1 text-xs text-slate-400">({e.source_ref})</span>
+              ) : null}
+            </span>
           </li>
         ))}
       </ul>
@@ -43,25 +46,30 @@ function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
   const baseRate = critique.base_rate_caveat as string | undefined;
   const summary = critique.summary as string | undefined;
   return (
-    <div className="mt-3 rounded-md border-l-4 border-purple-500 bg-purple-50 p-3">
-      <p className="mb-1 text-xs font-bold uppercase tracking-wide text-purple-800">
-        Devil&apos;s advocate — counter-argument
-      </p>
+    <div className="mt-4 rounded-xl border-l-4 border-purple-500 bg-purple-50 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <svg className="h-4 w-4 text-purple-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
+        </svg>
+        <p className="text-xs font-bold uppercase tracking-wider text-purple-800">
+          Devil&apos;s advocate — counter-argument
+        </p>
+      </div>
       {summary && <p className="text-sm text-purple-900">{summary}</p>}
       {disconfirming.length > 0 && (
-        <ul className="mt-1 list-disc pl-5 text-sm text-purple-900">
+        <ul className="mt-2 space-y-1 pl-6 text-sm text-purple-900">
           {disconfirming.map((d, i) => (
-            <li key={i}>{d}</li>
+            <li key={i} className="list-disc">{d}</li>
           ))}
         </ul>
       )}
       {alternatives.length > 0 && (
-        <p className="mt-1 text-sm text-purple-900">
+        <p className="mt-2 text-sm text-purple-900">
           <span className="font-medium">Alternatives to consider: </span>
           {alternatives.join(', ')}
         </p>
       )}
-      {baseRate && <p className="mt-1 text-xs italic text-purple-700">{baseRate}</p>}
+      {baseRate && <p className="mt-2 text-xs italic text-purple-700">{baseRate}</p>}
     </div>
   );
 }
@@ -89,18 +97,25 @@ export function SuggestionCard({
 
   if (s.is_hard_block) {
     return (
-      <div className="rounded-lg border-2 border-red-700 bg-red-50 p-4">
-        <p className="mb-1 text-sm font-bold uppercase text-red-800">Hard block — cannot proceed</p>
+      <div className="animate-slide-up rounded-xl border-2 border-red-600 bg-red-50 p-5 shadow-sm">
+        <div className="mb-2 flex items-center gap-2">
+          <svg className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+          <p className="text-sm font-bold uppercase tracking-wide text-red-800">Hard block — cannot proceed</p>
+        </div>
         <p className="text-sm text-red-900">{s.body}</p>
         {decided ? (
-          <p className="mt-2 text-xs text-slate-600">Recorded decision: {decided}</p>
+          <p className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-xs font-medium text-red-800">
+            Recorded decision: {decided}
+          </p>
         ) : (
-          <div className="mt-3 space-y-2">
+          <div className="mt-4 space-y-3 border-t border-red-200 pt-4">
             <textarea
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
               placeholder="Documented clinical reasoning is required to override a hard block."
-              className="w-full rounded border border-red-300 p-2 text-sm"
+              className="w-full rounded-lg border-red-300 bg-white"
               rows={2}
             />
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -123,27 +138,31 @@ export function SuggestionCard({
 
   const tierBorder: Record<AutonomyTier, string> = {
     informational: 'border-blue-200',
-    suggestive: 'border-green-200',
-    flag_for_review: 'border-amber-400',
+    suggestive: 'border-emerald-200',
+    flag_for_review: 'border-amber-300',
   };
 
   return (
-    <div className={`rounded-lg border bg-white p-4 shadow-sm ${tierBorder[s.autonomy_tier]}`}>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+    <div className={`animate-slide-up rounded-xl border bg-white p-5 shadow-card ${tierBorder[s.autonomy_tier]}`}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <AutonomyBadge tier={s.autonomy_tier} />
         {s.cant_miss_flag && <CantMissBadge />}
         {s.confidence_band && <ProbabilityBandBadge band={s.confidence_band} />}
-        <span className="text-xs text-slate-400">{s.output_type}</span>
+        <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
+          {s.output_type.replace(/_/g, ' ')}
+        </span>
       </div>
 
       {/* Engagement gate for flag-for-review: clinician must actively click through. */}
       {!acknowledged ? (
-        <div className="rounded-md border border-dashed border-amber-400 bg-amber-50 p-4 text-center">
-          <p className="text-sm text-amber-900">
+        <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-5 text-center">
+          <svg className="mx-auto mb-2 h-8 w-8 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          </svg>
+          <p className="mb-3 text-sm font-medium text-amber-900">
             This output is flagged for review. Engage to see the evidence and assessment.
           </p>
           <Button
-            className="mt-2"
             onClick={() => {
               setAcknowledged(true);
               void record('acknowledged');
@@ -163,36 +182,43 @@ export function SuggestionCard({
           )}
 
           {/* Conclusion comes after the evidence. */}
-          <div className="mt-3 border-t border-slate-100 pt-2">
-            <p className="text-xs uppercase tracking-wide text-slate-400">
+          <div className="mt-4 border-t border-slate-100 pt-3">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
               Assessment to consider
             </p>
-            <p className="font-semibold text-slate-900">{s.title}</p>
-            {s.body && <p className="mt-1 text-sm text-slate-600">{s.body}</p>}
+            <p className="text-base font-semibold text-slate-900">{s.title}</p>
+            {s.body && <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{s.body}</p>}
           </div>
 
           {hasDevil && <DevilsAdvocate critique={s.devils_advocate} />}
 
           {s.citations.length > 0 && (
-            <div className="mt-3 space-y-2 rounded bg-slate-50 p-2">
-              <p className="text-xs font-semibold text-slate-500">
+            <div className="mt-4 rounded-xl bg-slate-50 p-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Guideline citations (grounding)
               </p>
-              {s.citations.map((c, i) => (
-                <div key={i} className="border-l-2 border-slate-300 pl-2">
-                  <p className="text-xs font-medium text-slate-700">
-                    <span className="uppercase">{c.source}</span> · {c.document_title}
-                    {c.heading ? ` — ${c.heading}` : ''}{' '}
-                    <span className="text-slate-400">[{c.section_id}]</span>
-                  </p>
-                  {c.snippet && <p className="text-xs italic text-slate-500">“{c.snippet}”</p>}
-                </div>
-              ))}
+              <div className="space-y-2">
+                {s.citations.map((c, i) => (
+                  <div key={i} className="border-l-2 border-slate-300 pl-3">
+                    <p className="text-xs font-medium text-slate-700">
+                      <span className="rounded bg-brand-50 px-1.5 py-0.5 text-brand-700 ring-1 ring-brand-200">
+                        {c.source.toUpperCase()}
+                      </span>{' '}
+                      {c.document_title}
+                      {c.heading ? ` — ${c.heading}` : ''}{' '}
+                      <span className="text-slate-400">[{c.section_id}]</span>
+                    </p>
+                    {c.snippet && <p className="mt-1 text-xs italic text-slate-500">&ldquo;{c.snippet}&rdquo;</p>}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {decided && (
-            <p className="mt-2 text-xs text-slate-500">Recorded decision: {decided}</p>
+            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
+              Recorded decision: {decided}
+            </p>
           )}
         </>
       )}

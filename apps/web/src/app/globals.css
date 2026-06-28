@@ -2,18 +2,72 @@
 @tailwind components;
 @tailwind utilities;
 
+/* --- Import Inter font --- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 :root {
   color-scheme: light;
 }
 
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
+  font-feature-settings: 'cv11', 'ss01';
 }
 
 /* Prevent horizontal overflow on mobile */
 html, body {
   overflow-x: hidden;
   max-width: 100vw;
+}
+
+/* --- Focus ring utility --- */
+*:focus-visible {
+  @apply outline-none ring-2 ring-brand-500 ring-offset-2;
+}
+
+/* --- Form inputs global styling --- */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="date"],
+input[type="tel"],
+input[type="number"],
+input[type="search"],
+select,
+textarea {
+  @apply rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900
+    placeholder:text-slate-400
+    transition-colors duration-150
+    hover:border-slate-400
+    focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none;
+}
+
+/* --- Scrollbar styling --- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-300;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
+
+/* --- Selection color --- */
+::selection {
+  @apply bg-brand-100 text-brand-900;
+}
+
+/* --- Smooth transitions for interactive elements --- */
+a, button {
+  @apply transition-colors duration-150;
 }
 
 /* Ensure minimum touch target size on mobile */
@@ -28,5 +82,12 @@ html, body {
 
   input, textarea {
     font-size: 16px; /* Prevents iOS zoom on focus */
+  }
+}
+
+/* --- Utility classes --- */
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
   }
 }

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-slate-200 bg-white p-4 shadow-sm ${className}`}>
+    <div className={`rounded-xl border border-slate-200/80 bg-white p-5 shadow-card transition-shadow duration-200 hover:shadow-card-hover ${className}`}>
       {children}
     </div>
   );
@@ -12,18 +12,30 @@ export function Button({
   children,
   className = '',
   variant = 'primary',
+  size = 'default',
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: 'primary' | 'secondary' | 'danger';
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
+  size?: 'sm' | 'default' | 'lg';
 }) {
-  const styles = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700',
-    secondary: 'bg-slate-100 text-slate-800 hover:bg-slate-200',
-    danger: 'bg-red-600 text-white hover:bg-red-700',
+  const baseStyles = 'inline-flex items-center justify-center font-medium transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2';
+
+  const variantStyles = {
+    primary: 'bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800 focus-visible:ring-brand-500 shadow-sm hover:shadow',
+    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:border-slate-400 active:bg-slate-100 focus-visible:ring-brand-500 shadow-sm',
+    danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800 focus-visible:ring-red-500 shadow-sm hover:shadow',
+    ghost: 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:bg-slate-200 focus-visible:ring-brand-500',
   }[variant];
+
+  const sizeStyles = {
+    sm: 'rounded-lg px-3 py-1.5 text-xs gap-1.5',
+    default: 'rounded-lg px-4 py-2.5 text-sm gap-2',
+    lg: 'rounded-xl px-6 py-3 text-base gap-2.5',
+  }[size];
+
   return (
     <button
-      className={`rounded-md px-3 py-2 text-sm font-medium transition disabled:opacity-50 ${styles} ${className}`}
+      className={`${baseStyles} ${variantStyles} ${sizeStyles} ${className}`}
       {...props}
     >
       {children}
@@ -32,16 +44,16 @@ export function Button({
 }
 
 const CONFIDENCE_STYLES: Record<string, string> = {
-  high: 'bg-green-100 text-green-800',
-  medium: 'bg-amber-100 text-amber-800',
-  low: 'bg-red-100 text-red-800',
+  high: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
+  medium: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
+  low: 'bg-red-50 text-red-700 ring-1 ring-red-200',
 };
 
 export function ConfidenceBadge({ band, value }: { band: string; value: number }) {
   return (
     <span
-      className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${
-        CONFIDENCE_STYLES[band] ?? 'bg-slate-100 text-slate-700'
+      className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${
+        CONFIDENCE_STYLES[band] ?? 'bg-slate-50 text-slate-600 ring-1 ring-slate-200'
       }`}
     >
       {(value * 100).toFixed(0)}%
@@ -50,10 +62,10 @@ export function ConfidenceBadge({ band, value }: { band: string; value: number }
 }
 
 const SEVERITY_STYLES: Record<string, string> = {
-  hard_block: 'border-red-700 bg-red-50 text-red-900',
+  hard_block: 'border-red-600 bg-red-50 text-red-900',
   critical: 'border-red-500 bg-red-50 text-red-800',
   warning: 'border-amber-500 bg-amber-50 text-amber-900',
-  info: 'border-blue-500 bg-blue-50 text-blue-900',
+  info: 'border-brand-500 bg-brand-50 text-brand-900',
 };
 
 export function SafetyFlagCard({
@@ -66,9 +78,9 @@ export function SafetyFlagCard({
   summary: string;
 }) {
   return (
-    <div className={`rounded-md border-l-4 p-3 text-sm ${SEVERITY_STYLES[severity] ?? ''}`}>
-      <span className="mr-2 font-semibold uppercase tracking-wide">
-        {isHardBlock ? 'HARD BLOCK' : severity}
+    <div className={`rounded-lg border-l-4 p-4 text-sm ${SEVERITY_STYLES[severity] ?? ''}`}>
+      <span className="mr-2 text-xs font-bold uppercase tracking-wider">
+        {isHardBlock ? 'HARD BLOCK' : severity.replace(/_/g, ' ')}
       </span>
       {summary}
     </div>

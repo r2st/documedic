@@ -6,11 +6,11 @@ import type { IntakeQuestion } from '@/lib/types';
 import { Button, Card } from '@/components/ui';
 
 const TYPE_STYLE: Record<string, string> = {
-  red_flag: 'bg-red-100 text-red-800',
-  relevant_negative: 'bg-blue-100 text-blue-800',
-  clarifying: 'bg-slate-100 text-slate-700',
-  history: 'bg-slate-100 text-slate-700',
-  exam: 'bg-green-100 text-green-800',
+  red_flag: 'bg-red-50 text-red-700 ring-1 ring-red-200',
+  relevant_negative: 'bg-blue-50 text-blue-700 ring-1 ring-blue-200',
+  clarifying: 'bg-slate-50 text-slate-600 ring-1 ring-slate-200',
+  history: 'bg-slate-50 text-slate-600 ring-1 ring-slate-200',
+  exam: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
 };
 
 /**
@@ -49,40 +49,48 @@ export function IntakeFlow({
   }
 
   return (
-    <Card>
-      <h2 className="mb-1 text-lg font-semibold">Clarifying questions</h2>
-      <p className="mb-3 text-sm text-slate-500">
+    <Card className="animate-slide-up">
+      <div className="mb-4 flex items-center gap-2">
+        <svg className="h-5 w-5 text-brand-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+        </svg>
+        <h2 className="text-lg font-semibold text-slate-900">Clarifying questions</h2>
+      </div>
+      <p className="mb-5 text-sm text-slate-500">
         The triage agent asks the questions that most change the differential. Answer what you can —
         relevant negatives are valuable.
       </p>
-      <div className="space-y-4">
-        {questions.map((q) => (
-          <div key={q.id}>
-            <div className="mb-1 flex flex-wrap items-start gap-2">
+      <div className="space-y-5">
+        {questions.map((q, index) => (
+          <div key={q.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+            <div className="mb-2 flex flex-wrap items-start gap-2">
+              <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-bold text-brand-700">
+                {index + 1}
+              </span>
               <span
-                className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
-                  TYPE_STYLE[q.question_type] ?? 'bg-slate-100 text-slate-700'
+                className={`flex-shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${
+                  TYPE_STYLE[q.question_type] ?? 'bg-slate-50 text-slate-600 ring-1 ring-slate-200'
                 }`}
               >
-                {q.question_type.replace('_', ' ')}
+                {q.question_type.replace(/_/g, ' ')}
               </span>
-              <span className="text-sm font-medium text-slate-800">{q.question_text}</span>
             </div>
-            {q.rationale && <p className="mb-1 text-xs italic text-slate-400">{q.rationale}</p>}
+            <p className="mb-2 text-sm font-medium text-slate-800">{q.question_text}</p>
+            {q.rationale && <p className="mb-2 text-xs italic text-slate-400">{q.rationale}</p>}
             <input
               value={answers[q.id] ?? ''}
               onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
               placeholder="Your answer (e.g. no / yes, 3 days / 38.5°C)"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="w-full"
             />
           </div>
         ))}
       </div>
-      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+      <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
         <Button onClick={() => void submit()} disabled={submitting}>
           {submitting ? 'Submitting…' : 'Submit answers'}
         </Button>
-        <Button variant="secondary" onClick={onComplete} disabled={submitting}>
+        <Button variant="ghost" onClick={onComplete} disabled={submitting}>
           Skip — proceed to reasoning
         </Button>
       </div>

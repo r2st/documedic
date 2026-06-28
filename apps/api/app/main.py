@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -101,6 +102,32 @@ def create_app() -> FastAPI:
             status_code=exc.status_code,
             content={"code": exc.code, "message": exc.message},
         )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        _request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Convert UUID path-parameter validation errors to 404 Not Found.
+
+        FastAPI returns 422 when a path parameter like ``patient_id`` cannot be
+        parsed as ``uuid.UUID`` (e.g. the client sends ``/patients/3``).  For
+        resource-lookup endpoints this is confusing — the user expects a 404.
+        All other validation errors (query params, request body) keep the
+        standard 422 response.
+        """
+        for error in exc.errors():
+            loc = error.get("loc", ())
+            err_type = error.get("type", "")
+            if "path" in loc and "uuid" in err_type:
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "code": "not_found",
+                        "message": "The requested resource was not found.",
+                    },
+                )
+        # Default 422 for non-UUID validation errors (body, query, etc.)
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
     app.include_router(health.router)
     for module in (

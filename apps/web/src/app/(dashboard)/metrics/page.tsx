@@ -5,12 +5,52 @@ import { api, ApiError } from '@/lib/api';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
 import { Button, Card } from '@/components/ui';
 
+const METRIC_COLORS: Record<string, string> = {
+  Sessions: 'border-t-brand-500',
+  'Hard blocks': 'border-t-red-500',
+  "Can't-miss flags": 'border-t-amber-500',
+  'Awaiting review': 'border-t-purple-500',
+  'Verifier disagreement': 'border-t-orange-500',
+  'Degraded rate': 'border-t-slate-400',
+  'Citation faithfulness': 'border-t-emerald-500',
+  'Open safety reports': 'border-t-rose-500',
+};
+
 function Metric({ label, value }: { label: string; value: string | number }) {
+  const borderColor = METRIC_COLORS[label] || 'border-t-brand-500';
   return (
-    <Card className="text-center">
-      <p className="text-2xl font-bold text-slate-900">{value}</p>
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+    <Card className={`border-t-4 ${borderColor} text-center`}>
+      <p className="text-3xl font-bold tracking-tight text-slate-900">{value}</p>
+      <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">{label}</p>
     </Card>
+  );
+}
+
+function SeverityBadge({ severity }: { severity: string }) {
+  const styles: Record<string, string> = {
+    sentinel_event: 'bg-red-100 text-red-800 ring-1 ring-inset ring-red-200',
+    serious: 'bg-orange-100 text-orange-800 ring-1 ring-inset ring-orange-200',
+    non_serious: 'bg-yellow-100 text-yellow-800 ring-1 ring-inset ring-yellow-200',
+    near_miss: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200',
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[severity] || styles.near_miss}`}>
+      {severity.replace(/_/g, ' ')}
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    open: 'bg-blue-100 text-blue-700 ring-1 ring-inset ring-blue-200',
+    investigating: 'bg-amber-100 text-amber-700 ring-1 ring-inset ring-amber-200',
+    resolved: 'bg-green-100 text-green-700 ring-1 ring-inset ring-green-200',
+    closed: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] || styles.open}`}>
+      {status}
+    </span>
   );
 }
 
@@ -91,9 +131,9 @@ export default function MetricsPage() {
     v == null ? '—' : `${(v * 100).toFixed(0)}%`;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-xl font-bold">Performance & validation</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Performance & validation</h1>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button
             variant="secondary"
@@ -109,36 +149,54 @@ export default function MetricsPage() {
       </div>
 
       {loadError && (
-        <p className="rounded bg-red-50 p-2 text-sm text-red-700">{loadError}</p>
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
+          <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          <span>{loadError}</span>
+        </div>
       )}
 
       {actionError && (
-        <p className="rounded bg-red-50 p-2 text-sm text-red-700">{actionError}</p>
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
+          <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          <span>{actionError}</span>
+        </div>
       )}
 
       {actionSuccess && (
-        <p className="rounded bg-green-50 p-2 text-sm text-green-700">{actionSuccess}</p>
+        <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
+          <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>{actionSuccess}</span>
+        </div>
       )}
 
       {pilot?.pilot_mode && (
-        <div className="rounded-md border border-purple-300 bg-purple-50 p-2 text-sm text-purple-900">
-          Monitored pilot active — {pilot.message}
+        <div className="flex items-start gap-2 rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-900">
+          <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+          </svg>
+          <span>Monitored pilot active — {pilot.message}</span>
         </div>
       )}
 
       {initialLoading && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Card key={i} className="text-center">
-              <div className="mx-auto mb-2 h-7 w-16 animate-pulse rounded bg-slate-200" />
-              <div className="mx-auto h-3 w-20 animate-pulse rounded bg-slate-100" />
+            <Card key={i} className="border-t-4 border-t-slate-200 text-center">
+              <div className="mx-auto mb-2 h-8 w-20 animate-pulse rounded-md bg-slate-200" />
+              <div className="mx-auto h-3 w-24 animate-pulse rounded bg-slate-100" />
             </Card>
           ))}
         </div>
       )}
 
       {metrics && (
-        <>
+        <div className="animate-fade-in">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Metric label="Sessions" value={metrics.total_sessions} />
             <Metric label="Hard blocks" value={metrics.hard_blocks_total} />
@@ -149,34 +207,38 @@ export default function MetricsPage() {
             <Metric label="Citation faithfulness" value={pct(metrics.mean_citation_faithfulness)} />
             <Metric label="Open safety reports" value={metrics.open_safety_reports} />
           </div>
-          <Card>
-            <p className="mb-1 text-sm font-semibold">Autonomy tier distribution</p>
-            <div className="flex flex-wrap gap-3 text-sm">
+
+          <Card className="mt-4">
+            <p className="mb-2 text-sm font-semibold text-slate-900">Autonomy tier distribution</p>
+            <div className="flex flex-wrap gap-2 text-sm">
               {Object.entries(metrics.autonomy_tier_distribution).map(([tier, n]) => (
-                <span key={tier} className="rounded bg-slate-100 px-2 py-1">
-                  {tier.replace(/_/g, ' ')}: <b>{n}</b>
+                <span
+                  key={tier}
+                  className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
+                >
+                  {tier.replace(/_/g, ' ')}: <b className="ml-1">{n}</b>
                 </span>
               ))}
               {Object.keys(metrics.autonomy_tier_distribution).length === 0 && (
-                <span className="text-slate-400">No completed sessions yet.</span>
+                <span className="text-sm text-slate-400">No completed sessions yet.</span>
               )}
             </div>
           </Card>
-        </>
+        </div>
       )}
 
       {run && (
-        <Card>
-          <p className="mb-2 text-sm font-semibold">
+        <Card className="animate-slide-up">
+          <p className="mb-3 text-sm font-semibold text-slate-900">
             Latest validation run — {run.vignette_count} vignettes
           </p>
           <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
             {Object.entries(run.metrics)
               .filter(([, v]) => typeof v === 'number')
               .map(([k, v]) => (
-                <div key={k} className="rounded bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">{k.replace(/_/g, ' ')}</p>
-                  <p className="font-semibold">
+                <div key={k} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
+                  <p className="text-xs font-medium text-slate-500">{k.replace(/_/g, ' ')}</p>
+                  <p className="mt-0.5 text-lg font-semibold text-slate-900">
                     {typeof v === 'number' && v <= 1 ? pct(v as number) : String(v)}
                   </p>
                 </div>
@@ -189,14 +251,18 @@ export default function MetricsPage() {
 
       {reports.length > 0 && (
         <Card>
-          <p className="mb-2 text-sm font-semibold">Safety reports</p>
+          <p className="mb-3 text-sm font-semibold text-slate-900">Safety reports</p>
           <ul className="divide-y divide-slate-100 text-sm">
             {reports.map((r) => (
-              <li key={r.id} className="flex flex-col gap-1 py-1.5 sm:flex-row sm:items-center sm:justify-between">
-                <span className="min-w-0 break-words">
-                  <span className="font-medium">{r.severity}</span> · {r.category} — {r.description}
-                </span>
-                <span className="flex-shrink-0 text-xs text-slate-400">{r.status}</span>
+              <li key={r.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <SeverityBadge severity={r.severity} />
+                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {r.category.replace(/_/g, ' ')}
+                  </span>
+                  <span className="min-w-0 break-words text-slate-700">{r.description}</span>
+                </div>
+                <StatusBadge status={r.status} />
               </li>
             ))}
           </ul>
@@ -236,40 +302,72 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
 
   return (
     <Card>
-      <p className="mb-2 text-sm font-semibold">File a safety report</p>
-      <form onSubmit={submit} className="space-y-2">
-        {error && <p className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-        {success && <p className="rounded bg-green-50 p-2 text-sm text-green-700">{success}</p>}
-        <div className="flex flex-wrap gap-2">
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-          >
-            <option value="incorrect_suggestion">Incorrect suggestion</option>
-            <option value="missed_diagnosis">Missed diagnosis</option>
-            <option value="safety_check_failure">Safety-check failure</option>
-            <option value="usability">Usability</option>
-            <option value="other">Other</option>
-          </select>
-          <select
-            value={severity}
-            onChange={(e) => setSeverity(e.target.value)}
-            className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-          >
-            <option value="near_miss">Near miss</option>
-            <option value="non_serious">Non-serious</option>
-            <option value="serious">Serious</option>
-            <option value="sentinel_event">Sentinel event</option>
-          </select>
+      <p className="mb-4 text-sm font-semibold text-slate-900">File a safety report</p>
+      <form onSubmit={submit} className="space-y-4">
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
+            <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <span>{error}</span>
+          </div>
+        )}
+        {success && (
+          <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
+            <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{success}</span>
+          </div>
+        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="report-category" className="mb-1.5 block text-sm font-medium text-slate-700">
+              Category
+            </label>
+            <select
+              id="report-category"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full"
+            >
+              <option value="incorrect_suggestion">Incorrect suggestion</option>
+              <option value="missed_diagnosis">Missed diagnosis</option>
+              <option value="safety_check_failure">Safety-check failure</option>
+              <option value="usability">Usability</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="report-severity" className="mb-1.5 block text-sm font-medium text-slate-700">
+              Severity
+            </label>
+            <select
+              id="report-severity"
+              value={severity}
+              onChange={(e) => setSeverity(e.target.value)}
+              className="w-full"
+            >
+              <option value="near_miss">Near miss</option>
+              <option value="non_serious">Non-serious</option>
+              <option value="serious">Serious</option>
+              <option value="sentinel_event">Sentinel event</option>
+            </select>
+          </div>
         </div>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Describe what happened (no patient identifiers)."
-          rows={2}
-          className="w-full rounded-md border border-slate-300 p-2 text-sm"
-        />
+        <div>
+          <label htmlFor="report-description" className="mb-1.5 block text-sm font-medium text-slate-700">
+            Description
+          </label>
+          <textarea
+            id="report-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Describe what happened (no patient identifiers)."
+            rows={3}
+            className="w-full"
+          />
+        </div>
         <Button type="submit" disabled={!description.trim() || submitting}>
           {submitting ? 'Submitting...' : 'Submit report'}
         </Button>
