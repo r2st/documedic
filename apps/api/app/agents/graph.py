@@ -26,6 +26,7 @@ from app.agents import (
     verifier,
 )
 from app.agents.context import ReasoningContext
+from app.agents.llm import using_simulated_llm
 from app.agents.state import CaseState, HardBlock
 
 # Order in which the Reasoning Theatre should show the agent lanes.
@@ -44,6 +45,8 @@ AGENT_SEQUENCE = [
 
 async def run_triage_round(state: CaseState, ctx: ReasoningContext) -> None:
     """One intake round. Caller persists questions and collects answers before the next call."""
+    if using_simulated_llm():
+        state.demo_mode = True
     await triage_intake.run(state, ctx)
 
 
@@ -86,7 +89,9 @@ async def run_reasoning(state: CaseState, ctx: ReasoningContext) -> dict[str, An
         → guideline_rag → drug_safety_check → verifier
         → [conditional] synthesis | conservative_resolution → synthesis
     """
-    await ctx.emit("reasoning_start", {"sequence": AGENT_SEQUENCE})
+    if using_simulated_llm():
+        state.demo_mode = True
+    await ctx.emit("reasoning_start", {"sequence": AGENT_SEQUENCE, "demo_mode": state.demo_mode})
 
     await hypothesis_panel.run(state, ctx)
     await cant_miss_sentinel.run(state, ctx)
@@ -109,6 +114,7 @@ async def run_reasoning(state: CaseState, ctx: ReasoningContext) -> dict[str, An
             "autonomy_tier": state.autonomy_tier,
             "verifier_status": state.verifier_status,
             "degraded": state.degraded,
+            "demo_mode": state.demo_mode,
             "suggestion_count": len(output["suggestions"]),
         },
     )

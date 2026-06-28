@@ -7,6 +7,9 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("BCRYPT_ROUNDS", "4")  # fast hashing in tests
+# Keep the default test suite on the DETERMINISTIC offline fallback (not the simulated demo
+# net), so assertions are reproducible. The demo path has its own dedicated tests that opt in.
+os.environ.setdefault("LLM_DEMO_FALLBACK", "false")
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient

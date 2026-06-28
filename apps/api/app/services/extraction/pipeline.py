@@ -101,10 +101,21 @@ class ExtractionPipeline:
             text = self._maybe_plain(file_bytes)
 
         if not text.strip():
-            # Nothing legible — return empty result flagged for manual confirmation.
+            # Nothing legible. Final safety net: simulated sample data in demo mode so the
+            # ingestion flow always has something to show; otherwise flag for manual confirmation.
+            if claude_client.demo_active():
+                entities, doc_type = claude_client.demo_extract()
+                return ExtractionResultInternal(
+                    entities, doc_type, ocr_used, claude_client.demo_model_label()
+                )
             return ExtractionResultInternal([], None, ocr_used, None)
 
         entities = parse_text(text)
+        if not entities and claude_client.demo_active():
+            entities, doc_type = claude_client.demo_extract()
+            return ExtractionResultInternal(
+                entities, doc_type, ocr_used, claude_client.demo_model_label()
+            )
         doc_type = self._infer_doc_type(entities)
         return ExtractionResultInternal(entities, doc_type, ocr_used, None)
 

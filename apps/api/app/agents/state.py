@@ -165,6 +165,7 @@ class CaseState:
     case_id: str = ""
     online: bool = True
     degraded: bool = False  # True when LLM unavailable and deterministic fallback used
+    demo_mode: bool = False  # True when output is built from simulated "[DEMO MODE]" data
 
     def add_trace(self, agent: str, summary: str, detail: dict[str, Any] | None = None) -> None:
         self.agent_trace.append(TraceEntry(agent=agent, summary=summary, detail=detail or {}))
@@ -188,6 +189,7 @@ class CaseState:
             "presenting_complaint": self.presenting_complaint,
             "online": self.online,
             "degraded": self.degraded,
+            "demo_mode": self.demo_mode,
             "intake_complete": self.intake_complete,
             "info_gain_score": self.info_gain_score,
             "intake_rounds": self.intake_rounds,

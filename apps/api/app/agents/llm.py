@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents import demo_data
 from app.config import settings
 
 
@@ -42,8 +43,24 @@ def available_providers() -> list[str]:
     return [p for p in _provider_order() if _key_for(p)]
 
 
+def demo_fallback_enabled() -> bool:
+    """Whether the simulated-response safety net is allowed to kick in."""
+    return settings.llm_demo_fallback
+
+
+def using_simulated_llm() -> bool:
+    """True when the engine is CURRENTLY serving simulated demo data.
+
+    This is the case when no provider key is configured and the demo fallback is enabled, so
+    every ``complete_json`` call returns simulated output. (When keys exist but all calls fail
+    mid-run, individual responses carry a ``_demo`` marker instead.)
+    """
+    return demo_fallback_enabled() and not available_providers()
+
+
 def is_available() -> bool:
-    return bool(available_providers())
+    """True when the engine can produce LLM-style output — a real provider OR the demo net."""
+    return bool(available_providers()) or demo_fallback_enabled()
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -115,6 +132,9 @@ class LLMClient:
         """
         providers = available_providers()
         if not providers:
+            # No provider configured: serve simulated data if the demo net is on, else degrade.
+            if demo_fallback_enabled():
+                return demo_data.simulated_response(system, user)
             raise LLMUnavailable("No LLM provider API key configured")
 
         last_err: Exception | None = None
@@ -124,4 +144,7 @@ class LLMClient:
                     return _extract_json(self._complete(provider, system, user))
                 except Exception as exc:  # noqa: BLE001 — surfaced to caller as LLMUnavailable
                     last_err = exc
+        # Every configured provider failed. Final safety net: simulated demo data if enabled.
+        if demo_fallback_enabled():
+            return demo_data.simulated_response(system, user)
         raise LLMUnavailable(str(last_err))

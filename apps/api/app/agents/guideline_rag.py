@@ -9,7 +9,9 @@ options whose cited section_ids were actually retrieved) is computed and stored.
 
 from __future__ import annotations
 
+from app.agents import demo_data
 from app.agents.context import ReasoningContext
+from app.agents.llm import using_simulated_llm
 from app.agents.prompts import GUIDELINE_RAG
 from app.agents.state import CaseState, GuidelineChunkRef, ManagementOption
 from app.agents.util import call_llm
@@ -62,9 +64,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
                 text = (opt.get("text") or "").strip()
                 if not text:
                     continue
-                cited = [
-                    refs[sid] for sid in opt.get("citation_section_ids", []) if sid in refs
-                ]
+                cited = [refs[sid] for sid in opt.get("citation_section_ids", []) if sid in refs]
                 options.append(
                     ManagementOption(
                         text=text,
@@ -87,6 +87,30 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
                     sufficient_support=True,
                 )
             )
+
+    # Demo safety net: when running on simulated data with no guideline corpus available,
+    # still surface illustrative, clearly-marked management options so the UI renders fully.
+    if not options and using_simulated_llm():
+        state.demo_mode = True
+        scn = demo_data.select_scenario(_query(state))
+        demo_ref = GuidelineChunkRef(
+            section_id="DEMO-STW-0",
+            source="demo",
+            document_title=f"{demo_data.DEMO_TAG} Illustrative guideline excerpt",
+            heading="Simulated management guidance",
+            snippet=(
+                f"{demo_data.DEMO_TAG} Sample content shown because no guideline "
+                "corpus is available."
+            ),
+            score=1.0,
+            corpus_version="demo",
+            page_range=None,
+        )
+        for text in scn.management:
+            options.append(
+                ManagementOption(text=text, citations=[demo_ref], sufficient_support=True)
+            )
+        insufficient = False
 
     state.management_options.extend(options)
     state.citation_faithfulness = _faithfulness(options, retrieved_ids)

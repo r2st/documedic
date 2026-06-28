@@ -16,7 +16,8 @@ from __future__ import annotations
 import base64
 import json
 
-from app.agents.llm import available_providers
+from app.agents import demo_data
+from app.agents.llm import available_providers, demo_fallback_enabled
 from app.config import settings
 from app.services.extraction.text_parser import ParsedEntity, ParsedField
 
@@ -51,6 +52,20 @@ _MEDIA_TYPES = {
 
 def is_available() -> bool:
     return bool(available_providers())
+
+
+def demo_active() -> bool:
+    """True when no vision provider is configured but the demo fallback should serve samples."""
+    return demo_fallback_enabled() and not available_providers()
+
+
+def demo_model_label() -> str:
+    return f"{demo_data.DEMO_TAG} simulated-extraction"
+
+
+def demo_extract() -> tuple[list[ParsedEntity], str | None]:
+    """Return simulated sample extraction (clearly marked) when no LLM is available."""
+    return _to_entities(demo_data.extraction_payload())
 
 
 def _to_entities(payload: dict) -> tuple[list[ParsedEntity], str | None]:
@@ -89,7 +104,9 @@ def _extract_openai(file_bytes: bytes, file_type: str) -> str:
     from openai import OpenAI
 
     client = OpenAI(api_key=settings.openai_api_key)
-    data_url = f"data:{_MEDIA_TYPES[file_type]};base64,{base64.b64encode(file_bytes).decode('ascii')}"
+    data_url = (
+        f"data:{_MEDIA_TYPES[file_type]};base64,{base64.b64encode(file_bytes).decode('ascii')}"
+    )
     completion = client.chat.completions.create(
         model=settings.openai_model,
         max_tokens=settings.openai_max_tokens,

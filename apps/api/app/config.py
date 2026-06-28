@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # when llm_fallback_enabled is true AND an Anthropic key is present.
     llm_provider: Literal["openai", "anthropic"] = "openai"
     llm_fallback_enabled: bool = True
+    # Final safety net: when NO LLM provider can be reached (no key / offline / every
+    # provider call failed), serve realistic simulated "[DEMO MODE]" clinical responses
+    # instead of raising, so the product is always demonstrable. Default on.
+    llm_demo_fallback: bool = True
 
     # --- OpenAI (primary LLM) ---
     openai_api_key: str = ""

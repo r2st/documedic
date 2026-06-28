@@ -21,18 +21,72 @@ SPECIALISTS = {
 
 # Deterministic fallback: complaint/condition keyword -> (specialty, diagnosis, icd, band).
 _FALLBACK_MAP: list[tuple[tuple[str, ...], str, str, str | None, str]] = [
-    (("chest pain", "angina", "exertional"), "cardiology", "Stable/unstable angina", "I20", "moderate"),
+    (
+        ("chest pain", "angina", "exertional"),
+        "cardiology",
+        "Stable/unstable angina",
+        "I20",
+        "moderate",
+    ),
     (("palpitation", "irregular"), "cardiology", "Cardiac arrhythmia", "I49", "low"),
     (("breathless", "dyspnea", "edema", "swelling"), "cardiology", "Heart failure", "I50", "low"),
-    (("fever", "cough", "sputum"), "infectious_disease", "Community-acquired pneumonia", "J18", "moderate"),
-    (("fever", "burning urine", "dysuria"), "infectious_disease", "Urinary tract infection", "N39.0", "moderate"),
-    (("fever", "rigors", "headache"), "infectious_disease", "Acute febrile illness", "R50", "moderate"),
-    (("diarrhea", "loose", "vomiting"), "infectious_disease", "Acute gastroenteritis", "A09", "moderate"),
-    (("polyuria", "polydipsia", "weight loss", "diabetes"), "internal_medicine", "Type 2 diabetes mellitus", "E11", "moderate"),
-    (("headache", "bp", "hypertension", "dizziness"), "internal_medicine", "Hypertension", "I10", "low"),
-    (("joint pain", "swelling", "stiffness"), "internal_medicine", "Inflammatory arthritis", "M06", "low"),
+    (
+        ("fever", "cough", "sputum"),
+        "infectious_disease",
+        "Community-acquired pneumonia",
+        "J18",
+        "moderate",
+    ),
+    (
+        ("fever", "burning urine", "dysuria"),
+        "infectious_disease",
+        "Urinary tract infection",
+        "N39.0",
+        "moderate",
+    ),
+    (
+        ("fever", "rigors", "headache"),
+        "infectious_disease",
+        "Acute febrile illness",
+        "R50",
+        "moderate",
+    ),
+    (
+        ("diarrhea", "loose", "vomiting"),
+        "infectious_disease",
+        "Acute gastroenteritis",
+        "A09",
+        "moderate",
+    ),
+    (
+        ("polyuria", "polydipsia", "weight loss", "diabetes"),
+        "internal_medicine",
+        "Type 2 diabetes mellitus",
+        "E11",
+        "moderate",
+    ),
+    (
+        ("headache", "bp", "hypertension", "dizziness"),
+        "internal_medicine",
+        "Hypertension",
+        "I10",
+        "low",
+    ),
+    (
+        ("joint pain", "swelling", "stiffness"),
+        "internal_medicine",
+        "Inflammatory arthritis",
+        "M06",
+        "low",
+    ),
     (("fatigue", "tired", "weakness", "pallor"), "primary_care", "Anaemia", "D64", "low"),
-    (("cough", "weight loss", "night sweat"), "infectious_disease", "Pulmonary tuberculosis", "A15", "moderate"),
+    (
+        ("cough", "weight loss", "night sweat"),
+        "infectious_disease",
+        "Pulmonary tuberculosis",
+        "A15",
+        "moderate",
+    ),
 ]
 
 
@@ -77,7 +131,8 @@ async def _run_specialist(
 ) -> list[Hypothesis]:
     result = await call_llm(
         ctx,
-        HYPOTHESIS_PANEL.format(specialty=name),
+        # .replace (not .format): the prompt embeds a literal JSON schema with { } braces.
+        HYPOTHESIS_PANEL.replace("{specialty}", name),
         f"Presenting complaint: {state.presenting_complaint}\n\nPatient record:\n{summary}\n\n"
         f"Intake answers: {[{'q': q.text, 'a': q.answer} for q in state.intake_questions]}",
     )

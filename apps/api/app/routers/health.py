@@ -6,15 +6,33 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.llm import available_providers, demo_fallback_enabled, using_simulated_llm
 from app.config import settings
 from app.db.session import get_db
 
 router = APIRouter(tags=["health"])
 
 
+def _llm_mode() -> str:
+    """How clinical reasoning is currently powered: live | demo | offline."""
+    if available_providers():
+        return "live"
+    if using_simulated_llm():
+        return "demo"
+    return "offline"
+
+
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "env": settings.app_env, "demo_mode": settings.demo_mode}
+    mode = _llm_mode()
+    return {
+        "status": "ok",
+        "env": settings.app_env,
+        "demo_mode": settings.demo_mode,
+        "llm_mode": mode,
+        # True when clinical output is built from simulated "[DEMO MODE]" sample data.
+        "llm_simulated": mode == "demo",
+    }
 
 
 @router.get("/health/live")
@@ -39,5 +57,8 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
         "database": "ok" if db_ok else "error",
         "llm_configured": settings.llm_configured,
         "llm_provider": settings.llm_provider,
+        "llm_mode": _llm_mode(),
+        "llm_demo_fallback": demo_fallback_enabled(),
+        "llm_simulated": using_simulated_llm(),
         "storage_backend": settings.storage_backend,
     }

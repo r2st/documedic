@@ -23,6 +23,8 @@ known-first-party = ["app", "tests"]
 "app/agents/prompts.py" = ["E501"]
 # Deterministic fallback diagnosis table — aligned single-line tuples read better.
 "app/agents/hypothesis_panel.py" = ["E501"]
+# Simulated DEMO MODE clinical sample data — long illustrative sentences read better inline.
+"app/agents/demo_data.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
