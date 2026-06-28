@@ -15,18 +15,40 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
 
   useEffect(() => {
     void (async () => {
-      setPatient(await api.getPatient(id));
-      setRecord(await api.getRecord(id));
-      setAudit((await api.auditTrail(id)).items);
-      setChainValid((await api.verifyAudit(id)).chain_valid);
+      const [patientData, recordData, auditData, verifyData] = await Promise.all([
+        api.getPatient(id),
+        api.getRecord(id),
+        api.auditTrail(id),
+        api.verifyAudit(id),
+      ]);
+      setPatient(patientData);
+      setRecord(recordData);
+      setAudit(auditData.items);
+      setChainValid(verifyData.chain_valid);
     })();
   }, [id]);
 
-  if (!patient) return <p className="text-slate-500">Loading…</p>;
+  if (!patient) return (
+    <div className="space-y-5">
+      <div>
+        <div className="mb-2 h-4 w-24 animate-pulse rounded bg-slate-200" />
+        <div className="mb-1 h-6 w-48 animate-pulse rounded bg-slate-200" />
+        <div className="h-4 w-32 animate-pulse rounded bg-slate-100" />
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i}>
+            <div className="mb-2 h-5 w-24 animate-pulse rounded bg-slate-200" />
+            <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Link href="/patients" className="text-sm text-blue-600 hover:underline">
             ← All patients
@@ -36,7 +58,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
             {patient.sex ?? 'unknown'} · {patient.date_of_birth ?? 'DOB unknown'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Link href={`/patients/${id}/upload`}>
             <Button variant="secondary">Upload document</Button>
           </Link>
@@ -74,11 +96,11 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
         </div>
         <ul className="divide-y divide-slate-100 text-sm">
           {audit.map((e) => (
-            <li key={e.id} className="flex justify-between py-1.5">
-              <span className="font-mono text-xs text-slate-700">
+            <li key={e.id} className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:items-center sm:justify-between">
+              <span className="min-w-0 break-all font-mono text-xs text-slate-700">
                 #{e.sequence} {e.action}
               </span>
-              <span className="text-xs text-slate-400">
+              <span className="flex-shrink-0 text-xs text-slate-400">
                 {new Date(e.created_at).toLocaleString()}
               </span>
             </li>

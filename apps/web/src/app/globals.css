@@ -9,3 +9,24 @@
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
+
+/* Prevent horizontal overflow on mobile */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Ensure minimum touch target size on mobile */
+@media (max-width: 767px) {
+  button, a, select, [role="button"] {
+    min-height: 44px;
+  }
+
+  select {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+  }
+
+  input, textarea {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+  }
+}

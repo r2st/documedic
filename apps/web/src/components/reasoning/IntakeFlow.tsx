@@ -58,9 +58,9 @@ export function IntakeFlow({
       <div className="space-y-4">
         {questions.map((q) => (
           <div key={q.id}>
-            <div className="mb-1 flex items-center gap-2">
+            <div className="mb-1 flex flex-wrap items-start gap-2">
               <span
-                className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                   TYPE_STYLE[q.question_type] ?? 'bg-slate-100 text-slate-700'
                 }`}
               >
@@ -78,7 +78,7 @@ export function IntakeFlow({
           </div>
         ))}
       </div>
-      <div className="mt-4 flex gap-2">
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
         <Button onClick={() => void submit()} disabled={submitting}>
           {submitting ? 'Submitting…' : 'Submit answers'}
         </Button>

@@ -10,10 +10,15 @@ export default function PatientsPage() {
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load(q?: string) {
-    const res = await api.listPatients(q);
-    setPatients(res.items);
+    try {
+      const res = await api.listPatients(q);
+      setPatients(res.items);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -47,7 +52,20 @@ export default function PatientsPage() {
         </Button>
       </form>
 
-      {patients.length === 0 ? (
+      {loading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="mb-2 h-5 w-32 animate-pulse rounded bg-slate-200" />
+                  <div className="h-4 w-48 animate-pulse rounded bg-slate-100" />
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : patients.length === 0 ? (
         <p className="py-8 text-center text-sm text-slate-500">No patients yet.</p>
       ) : (
         <ul className="space-y-2">
@@ -111,11 +129,11 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
           onChange={(e) => setFullName(e.target.value)}
           className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
         />
-        <div className="flex gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <select
             value={sex}
             onChange={(e) => setSex(e.target.value)}
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="unknown">Sex: unknown</option>
             <option value="male">Male</option>
@@ -126,13 +144,13 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             type="date"
             value={dob}
             onChange={(e) => setDob(e.target.value)}
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           />
           <input
             placeholder="Phone"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           />
         </div>
         <label className="flex items-center gap-2 text-sm">

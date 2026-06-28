@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.db.session import dispose_engine
+from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
 from app.middleware import RequestContextMiddleware
 from app.routers import (
@@ -25,11 +26,49 @@ from app.routers import (
     validation,
 )
 
+logger = logging.getLogger(__name__)
+
 API_PREFIX = "/api/v1"
+
+
+async def _seed_drug_data() -> None:
+    """Seed drug vocabulary, interactions, and contraindications if empty.
+
+    Idempotent — the underlying seed functions skip rows that already exist.
+    Runs only the deterministic drug-safety data (not guidelines, which require
+    Qdrant and can be slow).  Failures are logged but never crash the app.
+    """
+    from app.db.seed import (
+        seed_contraindications,
+        seed_drug_vocabulary,
+        seed_interactions,
+    )
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        try:
+            counts = {
+                "drug_vocabulary": await seed_drug_vocabulary(db),
+                "drug_interactions": await seed_interactions(db),
+                "contraindications": await seed_contraindications(db),
+            }
+            await db.commit()
+            if any(counts.values()):
+                logger.info("Drug data seeded on startup: %s", counts)
+            else:
+                logger.debug("Drug data already present — nothing to seed.")
+        except Exception:
+            await db.rollback()
+            logger.warning(
+                "Drug data seeding failed on startup — safety checks may be "
+                "incomplete until seed data is loaded manually.",
+                exc_info=True,
+            )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _seed_drug_data()
     yield
     await dispose_engine()
 

@@ -45,12 +45,12 @@ export default function GuidelinesPage() {
       <div className="space-y-2">
         {results.map((c, i) => (
           <Card key={i}>
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <p className="min-w-0 break-words text-sm font-semibold">
                 <span className="uppercase text-blue-700">{c.source}</span> · {c.document_title}
               </p>
               {c.score != null && (
-                <span className="text-xs text-slate-400">
+                <span className="flex-shrink-0 text-xs text-slate-400">
                   relevance {(c.score * 100).toFixed(0)}%
                 </span>
               )}

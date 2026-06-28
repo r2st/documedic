@@ -90,7 +90,7 @@ export default function EncounterPage() {
 
       {phase === 'results' && sessionId && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold">Results</h2>
             <span className="text-xs text-slate-400">
               The clinician is the decision-maker. These are decision-support outputs only.

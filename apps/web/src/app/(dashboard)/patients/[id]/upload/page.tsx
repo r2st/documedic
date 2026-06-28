@@ -124,7 +124,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
               </li>
             ))}
           </ul>
-          <div className="mt-4 flex gap-2">
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
             <Button onClick={approve} disabled={busy}>
               {busy ? 'Saving…' : 'Confirm & merge into record'}
             </Button>

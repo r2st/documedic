@@ -56,7 +56,15 @@ export function useReasoningStream() {
           /* keep-alive comment or empty */
         }
         setState((s) => reduce(s, type, data));
-        if (type === 'reasoning_complete' || type === 'done') {
+        if (type === 'reasoning_complete') {
+          // Mark reasoning as logically complete in the theatre UI, but do NOT
+          // close the stream or fetch suggestions yet — the server hasn't
+          // committed them to the DB at this point.
+          setState((s) => ({ ...s, lanes: s.lanes.map((l) => ({ ...l, status: 'done' })) }));
+        }
+        if (type === 'done') {
+          // The 'done' event fires AFTER the server has persisted and committed
+          // suggestions, so it is safe to fetch them now.
           stop();
           setState((s) => ({ ...s, running: false, done: true }));
           onComplete?.();

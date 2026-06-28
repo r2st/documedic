@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
 import { Button, Card } from '@/components/ui';
 
@@ -20,22 +20,68 @@ export default function MetricsPage() {
   const [run, setRun] = useState<ValidationRun | null>(null);
   const [reports, setReports] = useState<SafetyReport[]>([]);
   const [running, setRunning] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  function clearFeedback() {
+    setActionError(null);
+    setActionSuccess(null);
+  }
+
+  async function downloadDossier() {
+    clearFeedback();
+    setDownloading(true);
+    try {
+      await api.downloadSamdDossier('markdown');
+      setActionSuccess('Dossier download started.');
+    } catch (err) {
+      setActionError(
+        err instanceof ApiError ? err.message : 'Failed to download dossier. Please try again.',
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function refresh() {
-    setMetrics(await api.performanceMetrics());
-    setReports(await api.listSafetyReports());
+    setLoadError(null);
+    try {
+      const [metricsData, reportsData] = await Promise.all([
+        api.performanceMetrics(),
+        api.listSafetyReports(),
+      ]);
+      setMetrics(metricsData);
+      setReports(reportsData);
+    } catch (err) {
+      setLoadError(
+        err instanceof ApiError ? err.message : 'Failed to load metrics. Please try again.',
+      );
+    } finally {
+      setInitialLoading(false);
+    }
   }
 
   useEffect(() => {
     void refresh();
-    void api.pilotStatus().then(setPilot);
+    void api.pilotStatus().then(setPilot).catch(() => {
+      /* pilot status is non-critical; ignore */
+    });
   }, []);
 
   async function runValidation() {
+    clearFeedback();
     setRunning(true);
     try {
       setRun(await api.runValidation());
       await refresh();
+      setActionSuccess('Validation harness completed successfully.');
+    } catch (err) {
+      setActionError(
+        err instanceof ApiError ? err.message : 'Validation harness failed. Please try again.',
+      );
     } finally {
       setRunning(false);
     }
@@ -46,21 +92,48 @@ export default function MetricsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-bold">Performance & validation</h1>
-        <div className="flex gap-2">
-          <a href={api.samdDossierUrl('markdown')} target="_blank" rel="noreferrer">
-            <Button variant="secondary">Download CDSCO dossier</Button>
-          </a>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button
+            variant="secondary"
+            onClick={() => void downloadDossier()}
+            disabled={downloading}
+          >
+            {downloading ? 'Downloading…' : 'Download CDSCO dossier'}
+          </Button>
           <Button onClick={() => void runValidation()} disabled={running}>
             {running ? 'Running…' : 'Run validation harness'}
           </Button>
         </div>
       </div>
 
+      {loadError && (
+        <p className="rounded bg-red-50 p-2 text-sm text-red-700">{loadError}</p>
+      )}
+
+      {actionError && (
+        <p className="rounded bg-red-50 p-2 text-sm text-red-700">{actionError}</p>
+      )}
+
+      {actionSuccess && (
+        <p className="rounded bg-green-50 p-2 text-sm text-green-700">{actionSuccess}</p>
+      )}
+
       {pilot?.pilot_mode && (
         <div className="rounded-md border border-purple-300 bg-purple-50 p-2 text-sm text-purple-900">
           Monitored pilot active — {pilot.message}
+        </div>
+      )}
+
+      {initialLoading && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Card key={i} className="text-center">
+              <div className="mx-auto mb-2 h-7 w-16 animate-pulse rounded bg-slate-200" />
+              <div className="mx-auto h-3 w-20 animate-pulse rounded bg-slate-100" />
+            </Card>
+          ))}
         </div>
       )}
 
@@ -119,11 +192,11 @@ export default function MetricsPage() {
           <p className="mb-2 text-sm font-semibold">Safety reports</p>
           <ul className="divide-y divide-slate-100 text-sm">
             {reports.map((r) => (
-              <li key={r.id} className="flex justify-between py-1.5">
-                <span>
+              <li key={r.id} className="flex flex-col gap-1 py-1.5 sm:flex-row sm:items-center sm:justify-between">
+                <span className="min-w-0 break-words">
                   <span className="font-medium">{r.severity}</span> · {r.category} — {r.description}
                 </span>
-                <span className="text-xs text-slate-400">{r.status}</span>
+                <span className="flex-shrink-0 text-xs text-slate-400">{r.status}</span>
               </li>
             ))}
           </ul>
@@ -137,19 +210,36 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
   const [category, setCategory] = useState('incorrect_suggestion');
   const [severity, setSeverity] = useState('near_miss');
   const [description, setDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!description.trim()) return;
-    await api.fileSafetyReport({ category, severity, description });
-    setDescription('');
-    onFiled();
+    setError(null);
+    setSuccess(null);
+    setSubmitting(true);
+    try {
+      await api.fileSafetyReport({ category, severity, description });
+      setDescription('');
+      setSuccess('Safety report filed successfully.');
+      onFiled();
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : 'Failed to file safety report. Please try again.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
     <Card>
       <p className="mb-2 text-sm font-semibold">File a safety report</p>
       <form onSubmit={submit} className="space-y-2">
+        {error && <p className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}
+        {success && <p className="rounded bg-green-50 p-2 text-sm text-green-700">{success}</p>}
         <div className="flex flex-wrap gap-2">
           <select
             value={category}
@@ -180,8 +270,8 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
           rows={2}
           className="w-full rounded-md border border-slate-300 p-2 text-sm"
         />
-        <Button type="submit" disabled={!description.trim()}>
-          Submit report
+        <Button type="submit" disabled={!description.trim() || submitting}>
+          {submitting ? 'Submitting...' : 'Submit report'}
         </Button>
       </form>
     </Card>

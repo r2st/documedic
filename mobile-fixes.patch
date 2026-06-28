@@ -1,0 +1,774 @@
+From 89f2e6ef0e2ed651a2de70673fdddc26cfe7481f Mon Sep 17 00:00:00 2001
+From: Suman <sumaninster7@gmail.com>
+Date: Sun, 28 Jun 2026 09:30:04 +0000
+Subject: [PATCH] fix: mobile responsiveness, performance optimization, and UX
+ improvements
+
+- Add mobile hamburger menu with collapsible nav panel (fixes sign out overflow)
+- Parallelize API calls on metrics page and patient detail page
+- Add loading skeletons for patients list, patient detail, and metrics page
+- Add loading.tsx for instant route transition feedback
+- Fix create patient form layout on mobile (stack fields vertically)
+- Fix patient detail action buttons wrapping on mobile
+- Fix metrics page header buttons stacking on mobile
+- Fix audit trail, safety reports, guideline results for mobile
+- Fix encounter results header and suggestion card buttons for mobile
+- Add CSS for minimum touch targets (44px) on mobile
+- Prevent iOS zoom on input focus (16px font-size)
+- Add overflow-x: hidden to prevent horizontal scroll
+- Add preconnect/dns-prefetch for API domain
+- Add proper viewport meta tag via Next.js Viewport export
+- Enable Next.js compress and static asset caching headers
+- Improve loading spinners (animated spinner instead of plain text)
+---
+ apps/web/next.config.js                       |  13 ++
+ .../src/app/(dashboard)/guidelines/page.tsx   |   6 +-
+ apps/web/src/app/(dashboard)/layout.tsx       | 131 +++++++++++++++---
+ apps/web/src/app/(dashboard)/loading.tsx      |  10 ++
+ apps/web/src/app/(dashboard)/metrics/page.tsx | 124 ++++++++++++++---
+ .../patients/[id]/encounter/page.tsx          |   2 +-
+ .../app/(dashboard)/patients/[id]/page.tsx    |  42 ++++--
+ .../(dashboard)/patients/[id]/upload/page.tsx |   2 +-
+ .../web/src/app/(dashboard)/patients/page.tsx |  32 ++++-
+ apps/web/src/app/globals.css                  |  21 +++
+ apps/web/src/app/layout.tsx                   |  21 ++-
+ apps/web/src/app/page.tsx                     |   9 +-
+ .../src/components/reasoning/IntakeFlow.tsx   |   6 +-
+ .../components/reasoning/SuggestionCard.tsx   |   2 +-
+ 14 files changed, 357 insertions(+), 64 deletions(-)
+ create mode 100644 apps/web/src/app/(dashboard)/loading.tsx
+
+diff --git a/apps/web/next.config.js b/apps/web/next.config.js
+index 3c53590..5993259 100644
+--- a/apps/web/next.config.js
++++ b/apps/web/next.config.js
+@@ -1,6 +1,12 @@
+ /** @type {import('next').NextConfig} */
+ const nextConfig = {
+   reactStrictMode: true,
++  // Enable gzip/brotli compression
++  compress: true,
++  // Power bundle splitting — more granular chunks for better caching
++  experimental: {
++    optimizePackageImports: ['@/components', '@/lib'],
++  },
+   async headers() {
+     return [
+       {
+@@ -11,6 +17,13 @@ const nextConfig = {
+           { key: 'Referrer-Policy', value: 'no-referrer' },
+         ],
+       },
++      // Cache static assets aggressively
++      {
++        source: '/_next/static/:path*',
++        headers: [
++          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
++        ],
++      },
+     ];
+   },
+ };
+diff --git a/apps/web/src/app/(dashboard)/guidelines/page.tsx b/apps/web/src/app/(dashboard)/guidelines/page.tsx
+index 88da730..b4b1099 100644
+--- a/apps/web/src/app/(dashboard)/guidelines/page.tsx
++++ b/apps/web/src/app/(dashboard)/guidelines/page.tsx
+@@ -45,12 +45,12 @@ export default function GuidelinesPage() {
+       <div className="space-y-2">
+         {results.map((c, i) => (
+           <Card key={i}>
+-            <div className="flex items-center justify-between">
+-              <p className="text-sm font-semibold">
++            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
++              <p className="min-w-0 break-words text-sm font-semibold">
+                 <span className="uppercase text-blue-700">{c.source}</span> · {c.document_title}
+               </p>
+               {c.score != null && (
+-                <span className="text-xs text-slate-400">
++                <span className="flex-shrink-0 text-xs text-slate-400">
+                   relevance {(c.score * 100).toFixed(0)}%
+                 </span>
+               )}
+diff --git a/apps/web/src/app/(dashboard)/layout.tsx b/apps/web/src/app/(dashboard)/layout.tsx
+index 28be22d..a6f42e0 100644
+--- a/apps/web/src/app/(dashboard)/layout.tsx
++++ b/apps/web/src/app/(dashboard)/layout.tsx
+@@ -1,5 +1,6 @@
+ 'use client';
+ 
++import { useState } from 'react';
+ import Link from 'next/link';
+ import { useRequireAuth, useAuth } from '@/lib/auth';
+ import { Button } from '@/components/ui';
+@@ -7,34 +8,126 @@ import { Button } from '@/components/ui';
+ export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+   const { account, loading } = useRequireAuth();
+   const { logout } = useAuth();
++  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+ 
+   if (loading || !account) {
+-    return <main className="grid min-h-screen place-items-center text-slate-500">Loading…</main>;
++    return (
++      <main className="grid min-h-screen place-items-center">
++        <div className="text-center">
++          <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
++          <p className="text-sm text-slate-500">Loading…</p>
++        </div>
++      </main>
++    );
+   }
+ 
++  const closeMobileMenu = () => setMobileMenuOpen(false);
++
+   return (
+     <div className="min-h-screen">
+-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
+-        <Link href="/patients" className="text-lg font-bold text-slate-900">
+-          Aether Clinician
+-        </Link>
+-        <div className="flex items-center gap-3 text-sm">
+-          <Link href="/patients" className="text-slate-600 hover:text-slate-900">
+-            Patients
+-          </Link>
+-          <Link href="/guidelines" className="text-slate-600 hover:text-slate-900">
+-            Guidelines
+-          </Link>
+-          <Link href="/metrics" className="text-slate-600 hover:text-slate-900">
+-            Metrics
++      <header className="border-b border-slate-200 bg-white">
++        <div className="flex items-center justify-between px-4 py-3 md:px-6">
++          <Link href="/patients" className="text-lg font-bold text-slate-900">
++            Aether Clinician
+           </Link>
+-          <span className="text-slate-500">{account.display_name ?? account.email}</span>
+-          <Button variant="secondary" onClick={() => logout()}>
+-            Sign out
+-          </Button>
++
++          {/* Desktop navigation */}
++          <div className="hidden items-center gap-3 text-sm md:flex">
++            <Link href="/patients" className="text-slate-600 hover:text-slate-900">
++              Patients
++            </Link>
++            <Link href="/guidelines" className="text-slate-600 hover:text-slate-900">
++              Guidelines
++            </Link>
++            <Link href="/metrics" className="text-slate-600 hover:text-slate-900">
++              Metrics
++            </Link>
++            <span className="text-slate-500">{account.display_name ?? account.email}</span>
++            <Button variant="secondary" onClick={() => logout()}>
++              Sign out
++            </Button>
++          </div>
++
++          {/* Mobile hamburger button */}
++          <button
++            type="button"
++            className="inline-flex items-center justify-center rounded-md p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900 md:hidden"
++            onClick={() => setMobileMenuOpen((prev) => !prev)}
++            aria-expanded={mobileMenuOpen}
++            aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
++          >
++            {mobileMenuOpen ? (
++              <svg
++                className="h-6 w-6"
++                fill="none"
++                viewBox="0 0 24 24"
++                strokeWidth={1.5}
++                stroke="currentColor"
++              >
++                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
++              </svg>
++            ) : (
++              <svg
++                className="h-6 w-6"
++                fill="none"
++                viewBox="0 0 24 24"
++                strokeWidth={1.5}
++                stroke="currentColor"
++              >
++                <path
++                  strokeLinecap="round"
++                  strokeLinejoin="round"
++                  d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5"
++                />
++              </svg>
++            )}
++          </button>
+         </div>
++
++        {/* Mobile menu panel */}
++        {mobileMenuOpen && (
++          <div className="border-t border-slate-200 bg-white shadow-lg md:hidden">
++            <nav className="flex flex-col gap-1 px-4 py-3">
++              <Link
++                href="/patients"
++                className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
++                onClick={closeMobileMenu}
++              >
++                Patients
++              </Link>
++              <Link
++                href="/guidelines"
++                className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
++                onClick={closeMobileMenu}
++              >
++                Guidelines
++              </Link>
++              <Link
++                href="/metrics"
++                className="rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
++                onClick={closeMobileMenu}
++              >
++                Metrics
++              </Link>
++            </nav>
++            <div className="border-t border-slate-100 px-4 py-3">
++              <p className="mb-2 px-3 text-sm text-slate-500">
++                {account.display_name ?? account.email}
++              </p>
++              <Button
++                variant="secondary"
++                onClick={() => {
++                  closeMobileMenu();
++                  logout();
++                }}
++              >
++                Sign out
++              </Button>
++            </div>
++          </div>
++        )}
+       </header>
+-      <main className="mx-auto max-w-5xl px-6 py-6">{children}</main>
++      <main className="mx-auto max-w-5xl px-4 py-4 md:px-6 md:py-6">{children}</main>
+     </div>
+   );
+ }
+diff --git a/apps/web/src/app/(dashboard)/loading.tsx b/apps/web/src/app/(dashboard)/loading.tsx
+new file mode 100644
+index 0000000..0143cde
+--- /dev/null
++++ b/apps/web/src/app/(dashboard)/loading.tsx
+@@ -0,0 +1,10 @@
++export default function DashboardLoading() {
++  return (
++    <div className="flex items-center justify-center py-20">
++      <div className="text-center">
++        <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
++        <p className="text-sm text-slate-500">Loading…</p>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/web/src/app/(dashboard)/metrics/page.tsx b/apps/web/src/app/(dashboard)/metrics/page.tsx
+index 6abfcac..d046acd 100644
+--- a/apps/web/src/app/(dashboard)/metrics/page.tsx
++++ b/apps/web/src/app/(dashboard)/metrics/page.tsx
+@@ -1,7 +1,7 @@
+ 'use client';
+ 
+ import { useEffect, useState } from 'react';
+-import { api } from '@/lib/api';
++import { api, ApiError } from '@/lib/api';
+ import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
+ import { Button, Card } from '@/components/ui';
+ 
+@@ -20,22 +20,68 @@ export default function MetricsPage() {
+   const [run, setRun] = useState<ValidationRun | null>(null);
+   const [reports, setReports] = useState<SafetyReport[]>([]);
+   const [running, setRunning] = useState(false);
++  const [downloading, setDownloading] = useState(false);
++  const [actionError, setActionError] = useState<string | null>(null);
++  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
++  const [loadError, setLoadError] = useState<string | null>(null);
++  const [initialLoading, setInitialLoading] = useState(true);
++
++  function clearFeedback() {
++    setActionError(null);
++    setActionSuccess(null);
++  }
++
++  async function downloadDossier() {
++    clearFeedback();
++    setDownloading(true);
++    try {
++      await api.downloadSamdDossier('markdown');
++      setActionSuccess('Dossier download started.');
++    } catch (err) {
++      setActionError(
++        err instanceof ApiError ? err.message : 'Failed to download dossier. Please try again.',
++      );
++    } finally {
++      setDownloading(false);
++    }
++  }
+ 
+   async function refresh() {
+-    setMetrics(await api.performanceMetrics());
+-    setReports(await api.listSafetyReports());
++    setLoadError(null);
++    try {
++      const [metricsData, reportsData] = await Promise.all([
++        api.performanceMetrics(),
++        api.listSafetyReports(),
++      ]);
++      setMetrics(metricsData);
++      setReports(reportsData);
++    } catch (err) {
++      setLoadError(
++        err instanceof ApiError ? err.message : 'Failed to load metrics. Please try again.',
++      );
++    } finally {
++      setInitialLoading(false);
++    }
+   }
+ 
+   useEffect(() => {
+     void refresh();
+-    void api.pilotStatus().then(setPilot);
++    void api.pilotStatus().then(setPilot).catch(() => {
++      /* pilot status is non-critical; ignore */
++    });
+   }, []);
+ 
+   async function runValidation() {
++    clearFeedback();
+     setRunning(true);
+     try {
+       setRun(await api.runValidation());
+       await refresh();
++      setActionSuccess('Validation harness completed successfully.');
++    } catch (err) {
++      setActionError(
++        err instanceof ApiError ? err.message : 'Validation harness failed. Please try again.',
++      );
+     } finally {
+       setRunning(false);
+     }
+@@ -46,24 +92,51 @@ export default function MetricsPage() {
+ 
+   return (
+     <div className="space-y-5">
+-      <div className="flex items-center justify-between">
++      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+         <h1 className="text-xl font-bold">Performance & validation</h1>
+-        <div className="flex gap-2">
+-          <a href={api.samdDossierUrl('markdown')} target="_blank" rel="noreferrer">
+-            <Button variant="secondary">Download CDSCO dossier</Button>
+-          </a>
++        <div className="flex flex-col gap-2 sm:flex-row">
++          <Button
++            variant="secondary"
++            onClick={() => void downloadDossier()}
++            disabled={downloading}
++          >
++            {downloading ? 'Downloading…' : 'Download CDSCO dossier'}
++          </Button>
+           <Button onClick={() => void runValidation()} disabled={running}>
+             {running ? 'Running…' : 'Run validation harness'}
+           </Button>
+         </div>
+       </div>
+ 
++      {loadError && (
++        <p className="rounded bg-red-50 p-2 text-sm text-red-700">{loadError}</p>
++      )}
++
++      {actionError && (
++        <p className="rounded bg-red-50 p-2 text-sm text-red-700">{actionError}</p>
++      )}
++
++      {actionSuccess && (
++        <p className="rounded bg-green-50 p-2 text-sm text-green-700">{actionSuccess}</p>
++      )}
++
+       {pilot?.pilot_mode && (
+         <div className="rounded-md border border-purple-300 bg-purple-50 p-2 text-sm text-purple-900">
+           Monitored pilot active — {pilot.message}
+         </div>
+       )}
+ 
++      {initialLoading && (
++        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
++          {Array.from({ length: 8 }).map((_, i) => (
++            <Card key={i} className="text-center">
++              <div className="mx-auto mb-2 h-7 w-16 animate-pulse rounded bg-slate-200" />
++              <div className="mx-auto h-3 w-20 animate-pulse rounded bg-slate-100" />
++            </Card>
++          ))}
++        </div>
++      )}
++
+       {metrics && (
+         <>
+           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+@@ -119,11 +192,11 @@ export default function MetricsPage() {
+           <p className="mb-2 text-sm font-semibold">Safety reports</p>
+           <ul className="divide-y divide-slate-100 text-sm">
+             {reports.map((r) => (
+-              <li key={r.id} className="flex justify-between py-1.5">
+-                <span>
++              <li key={r.id} className="flex flex-col gap-1 py-1.5 sm:flex-row sm:items-center sm:justify-between">
++                <span className="min-w-0 break-words">
+                   <span className="font-medium">{r.severity}</span> · {r.category} — {r.description}
+                 </span>
+-                <span className="text-xs text-slate-400">{r.status}</span>
++                <span className="flex-shrink-0 text-xs text-slate-400">{r.status}</span>
+               </li>
+             ))}
+           </ul>
+@@ -137,19 +210,36 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
+   const [category, setCategory] = useState('incorrect_suggestion');
+   const [severity, setSeverity] = useState('near_miss');
+   const [description, setDescription] = useState('');
++  const [submitting, setSubmitting] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const [success, setSuccess] = useState<string | null>(null);
+ 
+   async function submit(e: React.FormEvent) {
+     e.preventDefault();
+     if (!description.trim()) return;
+-    await api.fileSafetyReport({ category, severity, description });
+-    setDescription('');
+-    onFiled();
++    setError(null);
++    setSuccess(null);
++    setSubmitting(true);
++    try {
++      await api.fileSafetyReport({ category, severity, description });
++      setDescription('');
++      setSuccess('Safety report filed successfully.');
++      onFiled();
++    } catch (err) {
++      setError(
++        err instanceof ApiError ? err.message : 'Failed to file safety report. Please try again.',
++      );
++    } finally {
++      setSubmitting(false);
++    }
+   }
+ 
+   return (
+     <Card>
+       <p className="mb-2 text-sm font-semibold">File a safety report</p>
+       <form onSubmit={submit} className="space-y-2">
++        {error && <p className="rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}
++        {success && <p className="rounded bg-green-50 p-2 text-sm text-green-700">{success}</p>}
+         <div className="flex flex-wrap gap-2">
+           <select
+             value={category}
+@@ -180,8 +270,8 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
+           rows={2}
+           className="w-full rounded-md border border-slate-300 p-2 text-sm"
+         />
+-        <Button type="submit" disabled={!description.trim()}>
+-          Submit report
++        <Button type="submit" disabled={!description.trim() || submitting}>
++          {submitting ? 'Submitting...' : 'Submit report'}
+         </Button>
+       </form>
+     </Card>
+diff --git a/apps/web/src/app/(dashboard)/patients/[id]/encounter/page.tsx b/apps/web/src/app/(dashboard)/patients/[id]/encounter/page.tsx
+index 8c9cc27..efb9003 100644
+--- a/apps/web/src/app/(dashboard)/patients/[id]/encounter/page.tsx
++++ b/apps/web/src/app/(dashboard)/patients/[id]/encounter/page.tsx
+@@ -90,7 +90,7 @@ export default function EncounterPage() {
+ 
+       {phase === 'results' && sessionId && (
+         <div className="space-y-3">
+-          <div className="flex items-center justify-between">
++          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+             <h2 className="text-lg font-semibold">Results</h2>
+             <span className="text-xs text-slate-400">
+               The clinician is the decision-maker. These are decision-support outputs only.
+diff --git a/apps/web/src/app/(dashboard)/patients/[id]/page.tsx b/apps/web/src/app/(dashboard)/patients/[id]/page.tsx
+index 638af99..d3732cd 100644
+--- a/apps/web/src/app/(dashboard)/patients/[id]/page.tsx
++++ b/apps/web/src/app/(dashboard)/patients/[id]/page.tsx
+@@ -15,18 +15,40 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
+ 
+   useEffect(() => {
+     void (async () => {
+-      setPatient(await api.getPatient(id));
+-      setRecord(await api.getRecord(id));
+-      setAudit((await api.auditTrail(id)).items);
+-      setChainValid((await api.verifyAudit(id)).chain_valid);
++      const [patientData, recordData, auditData, verifyData] = await Promise.all([
++        api.getPatient(id),
++        api.getRecord(id),
++        api.auditTrail(id),
++        api.verifyAudit(id),
++      ]);
++      setPatient(patientData);
++      setRecord(recordData);
++      setAudit(auditData.items);
++      setChainValid(verifyData.chain_valid);
+     })();
+   }, [id]);
+ 
+-  if (!patient) return <p className="text-slate-500">Loading…</p>;
++  if (!patient) return (
++    <div className="space-y-5">
++      <div>
++        <div className="mb-2 h-4 w-24 animate-pulse rounded bg-slate-200" />
++        <div className="mb-1 h-6 w-48 animate-pulse rounded bg-slate-200" />
++        <div className="h-4 w-32 animate-pulse rounded bg-slate-100" />
++      </div>
++      <div className="grid gap-4 md:grid-cols-2">
++        {Array.from({ length: 4 }).map((_, i) => (
++          <Card key={i}>
++            <div className="mb-2 h-5 w-24 animate-pulse rounded bg-slate-200" />
++            <div className="h-4 w-full animate-pulse rounded bg-slate-100" />
++          </Card>
++        ))}
++      </div>
++    </div>
++  );
+ 
+   return (
+     <div className="space-y-5">
+-      <div className="flex items-center justify-between">
++      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+         <div>
+           <Link href="/patients" className="text-sm text-blue-600 hover:underline">
+             ← All patients
+@@ -36,7 +58,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
+             {patient.sex ?? 'unknown'} · {patient.date_of_birth ?? 'DOB unknown'}
+           </p>
+         </div>
+-        <div className="flex gap-2">
++        <div className="flex flex-wrap gap-2">
+           <Link href={`/patients/${id}/upload`}>
+             <Button variant="secondary">Upload document</Button>
+           </Link>
+@@ -74,11 +96,11 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
+         </div>
+         <ul className="divide-y divide-slate-100 text-sm">
+           {audit.map((e) => (
+-            <li key={e.id} className="flex justify-between py-1.5">
+-              <span className="font-mono text-xs text-slate-700">
++            <li key={e.id} className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:items-center sm:justify-between">
++              <span className="min-w-0 break-all font-mono text-xs text-slate-700">
+                 #{e.sequence} {e.action}
+               </span>
+-              <span className="text-xs text-slate-400">
++              <span className="flex-shrink-0 text-xs text-slate-400">
+                 {new Date(e.created_at).toLocaleString()}
+               </span>
+             </li>
+diff --git a/apps/web/src/app/(dashboard)/patients/[id]/upload/page.tsx b/apps/web/src/app/(dashboard)/patients/[id]/upload/page.tsx
+index 10ae5de..fb8f15a 100644
+--- a/apps/web/src/app/(dashboard)/patients/[id]/upload/page.tsx
++++ b/apps/web/src/app/(dashboard)/patients/[id]/upload/page.tsx
+@@ -124,7 +124,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
+               </li>
+             ))}
+           </ul>
+-          <div className="mt-4 flex gap-2">
++          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+             <Button onClick={approve} disabled={busy}>
+               {busy ? 'Saving…' : 'Confirm & merge into record'}
+             </Button>
+diff --git a/apps/web/src/app/(dashboard)/patients/page.tsx b/apps/web/src/app/(dashboard)/patients/page.tsx
+index d771250..e8dad05 100644
+--- a/apps/web/src/app/(dashboard)/patients/page.tsx
++++ b/apps/web/src/app/(dashboard)/patients/page.tsx
+@@ -10,10 +10,15 @@ export default function PatientsPage() {
+   const [patients, setPatients] = useState<PatientSummary[]>([]);
+   const [search, setSearch] = useState('');
+   const [showForm, setShowForm] = useState(false);
++  const [loading, setLoading] = useState(true);
+ 
+   async function load(q?: string) {
+-    const res = await api.listPatients(q);
+-    setPatients(res.items);
++    try {
++      const res = await api.listPatients(q);
++      setPatients(res.items);
++    } finally {
++      setLoading(false);
++    }
+   }
+ 
+   useEffect(() => {
+@@ -47,7 +52,20 @@ export default function PatientsPage() {
+         </Button>
+       </form>
+ 
+-      {patients.length === 0 ? (
++      {loading ? (
++        <div className="space-y-2">
++          {Array.from({ length: 3 }).map((_, i) => (
++            <Card key={i}>
++              <div className="flex items-center justify-between">
++                <div>
++                  <div className="mb-2 h-5 w-32 animate-pulse rounded bg-slate-200" />
++                  <div className="h-4 w-48 animate-pulse rounded bg-slate-100" />
++                </div>
++              </div>
++            </Card>
++          ))}
++        </div>
++      ) : patients.length === 0 ? (
+         <p className="py-8 text-center text-sm text-slate-500">No patients yet.</p>
+       ) : (
+         <ul className="space-y-2">
+@@ -111,11 +129,11 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
+           onChange={(e) => setFullName(e.target.value)}
+           className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+         />
+-        <div className="flex gap-2">
++        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+           <select
+             value={sex}
+             onChange={(e) => setSex(e.target.value)}
+-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
++            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+           >
+             <option value="unknown">Sex: unknown</option>
+             <option value="male">Male</option>
+@@ -126,13 +144,13 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
+             type="date"
+             value={dob}
+             onChange={(e) => setDob(e.target.value)}
+-            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
++            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+           />
+           <input
+             placeholder="Phone"
+             value={phone}
+             onChange={(e) => setPhone(e.target.value)}
+-            className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
++            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+           />
+         </div>
+         <label className="flex items-center gap-2 text-sm">
+diff --git a/apps/web/src/app/globals.css b/apps/web/src/app/globals.css
+index d3bb44b..5df371a 100644
+--- a/apps/web/src/app/globals.css
++++ b/apps/web/src/app/globals.css
+@@ -9,3 +9,24 @@
+ body {
+   @apply bg-slate-50 text-slate-900 antialiased;
+ }
++
++/* Prevent horizontal overflow on mobile */
++html, body {
++  overflow-x: hidden;
++  max-width: 100vw;
++}
++
++/* Ensure minimum touch target size on mobile */
++@media (max-width: 767px) {
++  button, a, select, [role="button"] {
++    min-height: 44px;
++  }
++
++  select {
++    font-size: 16px; /* Prevents iOS zoom on focus */
++  }
++
++  input, textarea {
++    font-size: 16px; /* Prevents iOS zoom on focus */
++  }
++}
+diff --git a/apps/web/src/app/layout.tsx b/apps/web/src/app/layout.tsx
+index 9bd7ca3..9efcb6e 100644
+--- a/apps/web/src/app/layout.tsx
++++ b/apps/web/src/app/layout.tsx
+@@ -1,4 +1,4 @@
+-import type { Metadata } from 'next';
++import type { Metadata, Viewport } from 'next';
+ import './globals.css';
+ import { AuthProvider } from '@/lib/auth';
+ import { DemoBanner, OfflineBanner } from '@/components/Banners';
+@@ -8,9 +8,28 @@ export const metadata: Metadata = {
+   description: 'Clinician-facing diagnostic & management decision-support system',
+ };
+ 
++export const viewport: Viewport = {
++  width: 'device-width',
++  initialScale: 1,
++  maximumScale: 5,
++};
++
+ export default function RootLayout({ children }: { children: React.ReactNode }) {
++  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
++  const apiOrigin = (() => {
++    try { return new URL(apiUrl).origin; } catch { return ''; }
++  })();
++
+   return (
+     <html lang="en">
++      <head>
++        {apiOrigin && (
++          <>
++            <link rel="preconnect" href={apiOrigin} />
++            <link rel="dns-prefetch" href={apiOrigin} />
++          </>
++        )}
++      </head>
+       <body>
+         <DemoBanner />
+         <OfflineBanner />
+diff --git a/apps/web/src/app/page.tsx b/apps/web/src/app/page.tsx
+index 26aa796..3921b5c 100644
+--- a/apps/web/src/app/page.tsx
++++ b/apps/web/src/app/page.tsx
+@@ -13,5 +13,12 @@ export default function Home() {
+     router.replace(account ? '/patients' : '/login');
+   }, [account, loading, router]);
+ 
+-  return <main className="grid min-h-screen place-items-center text-slate-500">Loading…</main>;
++  return (
++    <main className="grid min-h-screen place-items-center">
++      <div className="text-center">
++        <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
++        <p className="text-sm text-slate-500">Loading…</p>
++      </div>
++    </main>
++  );
+ }
+diff --git a/apps/web/src/components/reasoning/IntakeFlow.tsx b/apps/web/src/components/reasoning/IntakeFlow.tsx
+index cef9497..a1bf317 100644
+--- a/apps/web/src/components/reasoning/IntakeFlow.tsx
++++ b/apps/web/src/components/reasoning/IntakeFlow.tsx
+@@ -58,9 +58,9 @@ export function IntakeFlow({
+       <div className="space-y-4">
+         {questions.map((q) => (
+           <div key={q.id}>
+-            <div className="mb-1 flex items-center gap-2">
++            <div className="mb-1 flex flex-wrap items-start gap-2">
+               <span
+-                className={`rounded px-1.5 py-0.5 text-xs font-medium ${
++                className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
+                   TYPE_STYLE[q.question_type] ?? 'bg-slate-100 text-slate-700'
+                 }`}
+               >
+@@ -78,7 +78,7 @@ export function IntakeFlow({
+           </div>
+         ))}
+       </div>
+-      <div className="mt-4 flex gap-2">
++      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+         <Button onClick={() => void submit()} disabled={submitting}>
+           {submitting ? 'Submitting…' : 'Submit answers'}
+         </Button>
+diff --git a/apps/web/src/components/reasoning/SuggestionCard.tsx b/apps/web/src/components/reasoning/SuggestionCard.tsx
+index 62f1d4f..ef5f92d 100644
+--- a/apps/web/src/components/reasoning/SuggestionCard.tsx
++++ b/apps/web/src/components/reasoning/SuggestionCard.tsx
+@@ -103,7 +103,7 @@ export function SuggestionCard({
+               className="w-full rounded border border-red-300 p-2 text-sm"
+               rows={2}
+             />
+-            <div className="flex gap-2">
++            <div className="flex flex-col gap-2 sm:flex-row">
+               <Button
+                 variant="danger"
+                 disabled={!overrideReason.trim()}
+-- 
+2.34.1
+

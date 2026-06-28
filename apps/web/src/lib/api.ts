@@ -251,4 +251,35 @@ export const api = {
   pilotStatus: () => request<{ pilot_mode: boolean; message: string }>(`/pilot/status`),
   samdDossierUrl: (format: 'json' | 'markdown' = 'markdown') =>
     `${PREFIX}/regulatory/samd-dossier?format=${format}`,
+
+  async downloadSamdDossier(format: 'json' | 'markdown' = 'markdown'): Promise<void> {
+    const headers: Record<string, string> = {};
+    const access = tokenStore.access;
+    if (access) headers['Authorization'] = `Bearer ${access}`;
+
+    const resp = await fetch(
+      `${PREFIX}/regulatory/samd-dossier?format=${format}`,
+      { headers },
+    );
+
+    if (resp.status === 401 && tokenStore.refresh) {
+      const refreshed = await tryRefresh();
+      if (refreshed) return this.downloadSamdDossier(format);
+    }
+
+    if (!resp.ok) {
+      throw new ApiError(resp.status, 'download_error', resp.statusText);
+    }
+
+    const blob = await resp.blob();
+    const ext = format === 'json' ? 'json' : 'md';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cdsco-samd-dossier.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
 };
