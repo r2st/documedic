@@ -42,3 +42,7 @@ nginx/ssl/
 *.pem
 *.key
 !**/script.py.mako
+
+# --- Secrets / keys (NEVER commit) ---
+keys
+keys/
