@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from app.agents.context import ReasoningContext
 from app.agents.prompts import HYPOTHESIS_PANEL
 from app.agents.state import CaseState, Evidence, Hypothesis
 from app.agents.tools import active_condition_names, summarize_snapshot
-from app.agents.util import call_llm, norm_band, text_blob
+from app.agents.util import as_text, call_llm, norm_band, text_blob
 
 AGENT = "hypothesis_panel"
 
@@ -140,7 +141,7 @@ async def _run_specialist(
         return []
     out: list[Hypothesis] = []
     for h in result.get("hypotheses", []):
-        name_ = (h.get("diagnosis_name") or "").strip()
+        name_ = as_text(h.get("diagnosis_name"))
         if not name_:
             continue
         out.append(
@@ -148,20 +149,31 @@ async def _run_specialist(
                 diagnosis_name=name_,
                 icd_code=h.get("icd_code"),
                 probability_band=norm_band(h.get("probability_band")),
-                evidence_for=[
-                    Evidence(e.get("text", ""), True, source_ref=e.get("source_ref"))
-                    for e in h.get("evidence_for", [])
-                    if e.get("text")
-                ],
-                evidence_against=[
-                    Evidence(e.get("text", ""), False, source_ref=e.get("source_ref"))
-                    for e in h.get("evidence_against", [])
-                    if e.get("text")
-                ],
-                rationale=h.get("rationale"),
+                evidence_for=_parse_evidence(h.get("evidence_for"), True),
+                evidence_against=_parse_evidence(h.get("evidence_against"), False),
+                rationale=as_text(h.get("rationale")) or None,
                 source_agent=key,
             )
         )
+    return out
+
+
+def _parse_evidence(items: Any, supports: bool) -> list[Evidence]:
+    """Parse evidence items defensively — tolerate a model returning non-string ``text``.
+
+    A weak model may shape an evidence item as ``{"evidence": ..., "probability": ...}`` instead
+    of ``{"text": ...}``; ``as_text`` flattens it so the item is shown rather than dropped or
+    crashing the UI. The ``source_ref`` is only kept when it is a plain string.
+    """
+    out: list[Evidence] = []
+    for e in items or []:
+        if isinstance(e, dict):
+            text = as_text(e.get("text") or e.get("evidence") or e.get("finding"))
+            ref = e.get("source_ref") if isinstance(e.get("source_ref"), str) else None
+        else:
+            text, ref = as_text(e), None
+        if text:
+            out.append(Evidence(text, supports, source_ref=ref))
     return out
 
 

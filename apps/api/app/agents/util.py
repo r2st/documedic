@@ -29,6 +29,31 @@ def norm_band(value: Any, default: str = "low") -> str:
     return band if band in _BANDS else default
 
 
+def as_text(value: Any) -> str:
+    """Flatten an LLM-provided value to a plain string.
+
+    Models that don't follow the requested schema sometimes return an object or list where a
+    string was asked for — e.g. a hypothesis ``rationale`` arriving as
+    ``{"evidence": ..., "probability": ...}``. Such a value would later be rendered directly as
+    a React child and white-screen the UI, so we coerce it to readable text here. Empty/None
+    yields "" so callers can treat it as "no value".
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        # Prefer a common free-text key; otherwise join the scalar values readably.
+        for key in ("text", "rationale", "summary", "reason", "explanation", "evidence", "detail"):
+            inner = value.get(key)
+            if isinstance(inner, str) and inner.strip():
+                return inner.strip()
+        return "; ".join(p for p in (as_text(v) for v in value.values()) if p)
+    if isinstance(value, (list | tuple)):
+        return "; ".join(p for p in (as_text(v) for v in value) if p)
+    return str(value)
+
+
 _NEGATIVE = {"no", "none", "nil", "denies", "negative", "n", "no.", "none.", "absent"}
 
 

@@ -12,6 +12,28 @@ interface EvidenceItem {
   source_ref?: string | null;
 }
 
+/**
+ * Coerce a value to a renderable string. Reasoning output is LLM-generated, and a
+ * non-conforming model can return an object/array where a string is expected (e.g. a
+ * rationale shaped `{evidence, probability}`). Rendering that object directly throws React
+ * error #31 and white-screens this clinical UI, so every LLM-sourced string is funneled
+ * through here as a last line of defense.
+ */
+function asText(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean).join('; ');
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    for (const k of ['text', 'rationale', 'summary', 'reason', 'explanation', 'evidence']) {
+      if (typeof o[k] === 'string' && o[k]) return o[k] as string;
+    }
+    return Object.values(o).map(asText).filter(Boolean).join('; ');
+  }
+  return '';
+}
+
 function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'against' }) {
   if (!items?.length) return null;
   const styles = kind === 'for'
@@ -27,9 +49,9 @@ function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'a
           <li key={i} className={`flex items-start gap-2 text-sm ${styles.text}`}>
             <span className={`mt-0.5 flex-shrink-0 ${styles.icon}`}>{styles.marker}</span>
             <span>
-              {e.text}
+              {asText(e.text)}
               {e.source_ref ? (
-                <span className="ml-1 text-xs text-slate-400">({e.source_ref})</span>
+                <span className="ml-1 text-xs text-slate-400">({asText(e.source_ref)})</span>
               ) : null}
             </span>
           </li>
@@ -41,10 +63,14 @@ function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'a
 
 function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
   // Anti-automation-bias: ALWAYS visible, never collapsed by default.
-  const disconfirming = (critique.disconfirming_evidence as string[]) ?? [];
-  const alternatives = (critique.alternative_explanations as string[]) ?? [];
-  const baseRate = critique.base_rate_caveat as string | undefined;
-  const summary = critique.summary as string | undefined;
+  const disconfirming = ((critique.disconfirming_evidence as unknown[]) ?? [])
+    .map(asText)
+    .filter(Boolean);
+  const alternatives = ((critique.alternative_explanations as unknown[]) ?? [])
+    .map(asText)
+    .filter(Boolean);
+  const baseRate = asText(critique.base_rate_caveat);
+  const summary = asText(critique.summary);
   return (
     <div className="mt-4 rounded-xl border-l-4 border-purple-500 bg-purple-50 p-4">
       <div className="mb-2 flex items-center gap-2">
@@ -104,7 +130,7 @@ export function SuggestionCard({
           </svg>
           <p className="text-sm font-bold uppercase tracking-wide text-red-800">Hard block — cannot proceed</p>
         </div>
-        <p className="text-sm text-red-900">{s.body}</p>
+        <p className="text-sm text-red-900">{asText(s.body)}</p>
         {decided ? (
           <p className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-xs font-medium text-red-800">
             Recorded decision: {decided}
@@ -187,8 +213,10 @@ export function SuggestionCard({
             <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
               Assessment to consider
             </p>
-            <p className="text-base font-semibold text-slate-900">{s.title}</p>
-            {s.body && <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{s.body}</p>}
+            <p className="text-base font-semibold text-slate-900">{asText(s.title)}</p>
+            {asText(s.body) && (
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{asText(s.body)}</p>
+            )}
           </div>
 
           {hasDevil && <DevilsAdvocate critique={s.devils_advocate} />}

@@ -143,7 +143,7 @@ export function ReasoningTheatre({
           <ul className="space-y-1.5 pl-8">
             {cantMiss.map((c, i) => (
               <li key={i} className="text-sm text-orange-900">
-                <span className="font-semibold">{c.diagnosis_name}</span> — {c.why}
+                <span className="font-semibold">{String(c.diagnosis_name ?? '')}</span> — {String(c.why ?? '')}
               </li>
             ))}
           </ul>
@@ -178,7 +178,7 @@ export function ReasoningTheatre({
           <p className="mt-2 text-sm text-slate-600">Status: {verifier.status}</p>
           {(verifier.case_caveats ?? []).map((c, i) => (
             <p key={i} className="mt-1.5 text-xs italic text-slate-500">
-              • {c}
+              • {String(c ?? '')}
             </p>
           ))}
         </Card>

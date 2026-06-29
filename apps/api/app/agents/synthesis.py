@@ -12,6 +12,7 @@ from typing import Any
 
 from app.agents.context import ReasoningContext
 from app.agents.state import CaseState
+from app.agents.util import as_text
 
 AGENT = "synthesis"
 
@@ -44,8 +45,10 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
                 "output_type": "cant_miss" if h.cant_miss_flag else "differential",
                 "autonomy_tier": tier,
                 "confidence_band": h.probability_band,
-                "title": h.diagnosis_name,
-                "body": h.rationale,
+                "title": as_text(h.diagnosis_name),
+                # Coerce to text: ``body`` is rendered as a string in the UI, so a non-string
+                # rationale from a non-conforming model must never reach the client.
+                "body": as_text(h.rationale) or None,
                 "cant_miss_flag": h.cant_miss_flag,
                 "evidence": {
                     # Evidence intentionally listed first; the conclusion is the title.
@@ -116,7 +119,7 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
                 else "flag_for_review",
                 "confidence_band": None,
                 "title": "Guideline-supported management option",
-                "body": opt.text,
+                "body": as_text(opt.text) or None,
                 "evidence": {"sufficient_support": opt.sufficient_support},
                 "verifier_verdict": {},
                 "devils_advocate": {},
@@ -132,7 +135,7 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
                 "autonomy_tier": "flag_for_review",
                 "confidence_band": None,
                 "title": "Drug-safety hard block",
-                "body": block.summary,
+                "body": as_text(block.summary) or None,
                 "is_hard_block": True,
                 "evidence": block.details,
                 "verifier_verdict": {},
