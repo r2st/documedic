@@ -1,9 +1,10 @@
 """LLM client for the reasoning agents (architecture §7.1).
 
 Provider-agnostic wrapper that returns parsed JSON for structured agent output. The
-fallback chain is OpenAI (GPT, primary) -> Anthropic Claude -> OpenRouter -> simulated
-demo data (see ``settings.llm_provider`` / ``settings.llm_fallback_enabled`` /
-``settings.llm_openrouter_fallback`` / ``settings.llm_demo_fallback``). Each provider SDK
+configured primary provider (``settings.llm_provider``: openai, anthropic, or openrouter)
+is tried first, then the remaining providers as fallbacks, then simulated demo data — see
+``_provider_order`` and ``settings.llm_fallback_enabled`` /
+``settings.llm_openrouter_fallback`` / ``settings.llm_demo_fallback``. Each provider SDK
 is imported lazily and only used when its API key is configured. When no provider is
 available (no key / offline / error) callers fall back to deterministic reasoning, and
 the case is marked ``degraded`` — the system never silently produces output.
@@ -27,12 +28,23 @@ class LLMUnavailable(RuntimeError):
 
 
 def _provider_order() -> list[str]:
-    """Fallback order: primary, then the other openai/anthropic, then OpenRouter."""
+    """Provider priority order: the configured primary first, then the rest as fallbacks.
+
+    The list is deduplicated so a provider named as the primary is never retried again as
+    a fallback. Examples (with both fallback flags on):
+      - llm_provider=openai     -> ["openai", "anthropic", "openrouter"]
+      - llm_provider=anthropic  -> ["anthropic", "openai", "openrouter"]
+      - llm_provider=openrouter -> ["openrouter", "openai", "anthropic"]
+    With OpenRouter primary the slow OpenAI/Anthropic retries only happen if OpenRouter
+    itself fails, so the common path returns without that latency.
+    """
     primary = settings.llm_provider
     order = [primary]
     if settings.llm_fallback_enabled:
-        order.append("anthropic" if primary == "openai" else "openai")
-    if settings.llm_openrouter_fallback:
+        for provider in ("openai", "anthropic"):
+            if provider not in order:
+                order.append(provider)
+    if settings.llm_openrouter_fallback and "openrouter" not in order:
         order.append("openrouter")
     return order
 
@@ -137,9 +149,9 @@ def _complete_openrouter(system: str, user: str, model: str, max_tokens: int) ->
 class LLMClient:
     """Synchronous, provider-agnostic client (called from a worker thread by the orchestrator).
 
-    Tries each configured provider in priority order (OpenAI primary, then Anthropic, then
-    OpenRouter), so a transient failure or missing key on one degrades to the next rather
-    than to the deterministic path.
+    Tries each configured provider in priority order (the ``settings.llm_provider`` primary
+    first, then the remaining providers — see ``_provider_order``), so a transient failure or
+    missing key on one degrades to the next rather than to the deterministic path.
     """
 
     def __init__(self, model: str | None = None, max_tokens: int | None = None) -> None:

@@ -30,6 +30,22 @@ def test_openrouter_is_last_in_provider_order(monkeypatch):
     assert _provider_order() == ["openai", "anthropic", "openrouter"]
 
 
+def test_openrouter_primary_is_first_in_provider_order(monkeypatch):
+    # With llm_provider=openrouter, OpenRouter leads and openai/anthropic trail as
+    # fallbacks (deduplicated, no repeated openrouter entry).
+    monkeypatch.setattr(settings, "llm_provider", "openrouter")
+    monkeypatch.setattr(settings, "llm_fallback_enabled", True)
+    monkeypatch.setattr(settings, "llm_openrouter_fallback", True)
+    assert _provider_order() == ["openrouter", "openai", "anthropic"]
+
+
+def test_anthropic_primary_order_unchanged(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "llm_fallback_enabled", True)
+    monkeypatch.setattr(settings, "llm_openrouter_fallback", True)
+    assert _provider_order() == ["anthropic", "openai", "openrouter"]
+
+
 def test_openrouter_omitted_when_disabled(monkeypatch):
     monkeypatch.setattr(settings, "llm_fallback_enabled", True)
     monkeypatch.setattr(settings, "llm_openrouter_fallback", False)

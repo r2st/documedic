@@ -30,13 +30,15 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # --- LLM provider selection ---
-    # Fallback chain: OpenAI (primary) -> Anthropic -> OpenRouter -> simulated demo.
-    # OpenAI is the primary provider. Anthropic is a configurable fallback used only
-    # when llm_fallback_enabled is true AND an Anthropic key is present.
-    llm_provider: Literal["openai", "anthropic"] = "openai"
+    # The configured primary provider is tried first; the remaining providers act as
+    # fallbacks (deduplicated) — see app.agents.llm._provider_order. Any of openai,
+    # anthropic, or openrouter may be the primary. With llm_provider=openrouter the
+    # chain is OpenRouter -> OpenAI -> Anthropic -> simulated demo, which avoids the
+    # latency of failed OpenAI/Anthropic retries when OpenRouter is the intended path.
+    llm_provider: Literal["openai", "anthropic", "openrouter"] = "openai"
     llm_fallback_enabled: bool = True
-    # OpenRouter is an additional fallback tier tried after the openai/anthropic pair,
-    # gated by llm_openrouter_fallback AND an OpenRouter key being present.
+    # When true (and an OpenRouter key is present), OpenRouter is included in the chain —
+    # as the primary when llm_provider=openrouter, otherwise as a trailing fallback tier.
     llm_openrouter_fallback: bool = True
     # Final safety net: when NO LLM provider can be reached (no key / offline / every
     # provider call failed), serve realistic simulated "[DEMO MODE]" clinical responses
