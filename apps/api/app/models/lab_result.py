@@ -34,12 +34,18 @@ class LabResult(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         ),
         # Matches the longitudinal-record and lab-safety sorts; labs accumulate per document
         # ingested, so this is the set that grows fastest for a long-running patient.
+        #
+        # Both readers sort with NULLS LAST (sample_date is nullable), and a DESC index in
+        # PostgreSQL is NULLS FIRST unless told otherwise -- so the null ordering has to be
+        # spelled out for the index to satisfy the ORDER BY. SQLite's parser rejects
+        # NULLS LAST inside a CREATE INDEX at any version, so this one is emitted for
+        # PostgreSQL only; the test/dev SQLite database simply goes without it.
         Index(
             "ix_lab_results_patient_sample_date",
             "patient_id",
             text("sample_date DESC NULLS LAST"),
             "marker_name",
-        ),
+        ).ddl_if(dialect="postgresql"),
     )
 
     patient_id: Mapped[uuid.UUID] = mapped_column(
