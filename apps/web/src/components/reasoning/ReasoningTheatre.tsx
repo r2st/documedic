@@ -27,7 +27,7 @@ export function ReasoningTheatre({
   const { state, start, stop } = useReasoningStream();
 
   useEffect(() => {
-    start(sessionId, onComplete);
+    void start(sessionId, onComplete);
     return () => stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);

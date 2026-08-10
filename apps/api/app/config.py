@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     # abandoned/idle session and rejected on its next use, even though its absolute
     # jwt_refresh_ttl_days expiry hasn't passed yet.
     session_idle_timeout_minutes: int = 30
+    # EventSource cannot set an Authorization header, so the SSE stream authenticates from a
+    # query parameter. That parameter lands in proxy access logs and browser history, so it
+    # carries a narrowly scoped, very short-lived token instead of the real access token.
+    stream_token_ttl_seconds: int = 60
 
     # --- Brute-force protection (login) ---
     # Counted from the append-only audit log (auth_login_failed), so the control survives a

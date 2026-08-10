@@ -41,6 +41,13 @@ class SubmitAnswersRequest(BaseModel):
     answers: list[IntakeAnswerIn] = Field(..., max_length=50)
 
 
+class StreamTokenOut(BaseModel):
+    """Short-lived, session-scoped credential for the SSE query string."""
+
+    token: str
+    expires_in: int = Field(..., description="Seconds until the stream token expires")
+
+
 class ReasoningSessionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

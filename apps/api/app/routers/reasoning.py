@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decode_token
+from app.config import settings
+from app.core.security import create_stream_token, decode_token
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.exceptions import TokenError
@@ -23,6 +24,7 @@ from app.schemas.reasoning import (
     ReasoningResultOut,
     ReasoningSessionOut,
     StartReasoningRequest,
+    StreamTokenOut,
     SubmitAnswersRequest,
 )
 from app.services.reasoning_service import ReasoningService
@@ -101,16 +103,34 @@ async def run_reasoning(
     )
 
 
-async def _account_from_query_or_header(request: Request, db: AsyncSession) -> Account:
-    """SSE auth: browsers' EventSource can't set headers, so accept ?token= as a fallback."""
+async def _account_from_query_or_header(
+    request: Request, db: AsyncSession, session_id: uuid.UUID
+) -> Account:
+    """SSE auth.
+
+    A normal ``Authorization: Bearer <access>`` header is accepted as usual. Browsers'
+    EventSource cannot set headers, so ``?token=`` is also accepted — but only for a
+    ``stream``-type token bound to this exact session, minted seconds earlier by
+    ``POST /reasoning/{session_id}/stream-token``. A real access token in the query string
+    would be recorded verbatim by proxy access logs and browser history.
+    """
     auth = request.headers.get("Authorization", "")
-    token = auth.split(" ", 1)[1].strip() if auth.startswith("Bearer ") else None
-    token = token or request.query_params.get("token")
-    if not token:
+    header_token = auth.split(" ", 1)[1].strip() if auth.startswith("Bearer ") else None
+    query_token = request.query_params.get("token")
+
+    if header_token:
+        payload = decode_token(header_token)
+        if payload.get("type") != "access":
+            raise TokenError("Wrong token type")
+    elif query_token:
+        payload = decode_token(query_token)
+        if payload.get("type") != "stream":
+            raise TokenError("Wrong token type")
+        if payload.get("sid") != str(session_id):
+            raise TokenError("Stream token is not valid for this session")
+    else:
         raise TokenError("Missing access token")
-    payload = decode_token(token)
-    if payload.get("type") != "access":
-        raise TokenError("Wrong token type")
+
     try:
         account_id = uuid.UUID(payload["sub"])
     except (KeyError, ValueError) as exc:
@@ -121,6 +141,24 @@ async def _account_from_query_or_header(request: Request, db: AsyncSession) -> A
     return account
 
 
+@router.post("/reasoning/{session_id}/stream-token", response_model=StreamTokenOut)
+async def mint_stream_token(
+    session_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> StreamTokenOut:
+    """Mint a short-lived token the browser can put in the SSE query string.
+
+    Authenticated with the normal bearer header, and only for a session this account owns,
+    so the token that ends up in logs grants nothing but this one stream.
+    """
+    await ReasoningService(db).get_session(account.id, session_id)
+    return StreamTokenOut(
+        token=create_stream_token(account.id, session_id),
+        expires_in=settings.stream_token_ttl_seconds,
+    )
+
+
 @router.get("/reasoning/{session_id}/stream")
 async def stream_reasoning(
     session_id: uuid.UUID,
@@ -128,7 +166,7 @@ async def stream_reasoning(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """Run the pipeline and stream Reasoning Theatre events over Server-Sent Events."""
-    account = await _account_from_query_or_header(request, db)
+    account = await _account_from_query_or_header(request, db, session_id)
     service = ReasoningService(db)
     await service.get_session(account.id, session_id)
 

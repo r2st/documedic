@@ -35,17 +35,34 @@ const INITIAL: StreamState = {
 export function useReasoningStream() {
   const [state, setState] = useState<StreamState>(INITIAL);
   const sourceRef = useRef<EventSource | null>(null);
+  // Guards the await between start() and opening the EventSource: a stop() in that window
+  // must not leave an orphaned stream running.
+  const cancelledRef = useRef(false);
 
   const stop = useCallback(() => {
+    cancelledRef.current = true;
     sourceRef.current?.close();
     sourceRef.current = null;
   }, []);
 
   const start = useCallback(
-    (sessionId: string, onComplete?: () => void) => {
+    async (sessionId: string, onComplete?: () => void) => {
       stop();
+      cancelledRef.current = false;
       setState({ ...INITIAL, running: true });
-      const es = new EventSource(api.reasoningStreamUrl(sessionId));
+
+      // One round trip to mint the session-scoped stream token before opening the socket.
+      let url: string;
+      try {
+        url = await api.reasoningStreamUrl(sessionId);
+      } catch {
+        setState((s) => ({ ...s, running: false, error: 'Could not open the reasoning stream' }));
+        return;
+      }
+      // A stop() between the await and here means this stream was cancelled; don't open it.
+      if (cancelledRef.current) return;
+
+      const es = new EventSource(url);
       sourceRef.current = es;
 
       const handle = (type: string, raw: string) => {

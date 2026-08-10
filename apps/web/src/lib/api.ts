@@ -245,9 +245,21 @@ export const api = {
       `/reasoning/${sessionId}/suggestions/${suggestionId}/decision`,
       { method: 'POST', body: JSON.stringify({ decision, reason: reason ?? null }) },
     ),
-  // Server-Sent Events URL for the live Reasoning Theatre (token in query for EventSource).
-  reasoningStreamUrl: (sessionId: string) =>
-    `${PREFIX}/reasoning/${sessionId}/stream?token=${tokenStore.access ?? ''}`,
+  /**
+   * Server-Sent Events URL for the live Reasoning Theatre.
+   *
+   * EventSource cannot set an Authorization header, so the credential has to travel in the
+   * query string — where proxy access logs and browser history keep it. The access token
+   * therefore never goes in the URL: this mints a session-scoped token that expires in
+   * about a minute and is rejected by every other endpoint.
+   */
+  async reasoningStreamUrl(sessionId: string): Promise<string> {
+    const { token } = await request<{ token: string; expires_in: number }>(
+      `/reasoning/${sessionId}/stream-token`,
+      { method: 'POST' },
+    );
+    return `${PREFIX}/reasoning/${sessionId}/stream?token=${encodeURIComponent(token)}`;
+  },
 
   // --- Guidelines (Phase 3) ---
   searchGuidelines: (q: string) =>

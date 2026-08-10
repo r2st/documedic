@@ -54,6 +54,27 @@ def create_access_token(account_id: str | uuid.UUID, *, extra: dict | None = Non
     return jwt.encode(payload, settings.app_secret_key, algorithm=settings.jwt_algorithm)
 
 
+def create_stream_token(account_id: str | uuid.UUID, session_id: str | uuid.UUID) -> str:
+    """Narrowly scoped token for the SSE endpoint.
+
+    EventSource cannot send an Authorization header, so the token travels in the query
+    string — where nginx's default log format records it and the browser keeps it in
+    history. This token is therefore useless for anything else: it is bound to one
+    reasoning session (``sid``), carries its own ``type``, and expires in
+    ``settings.stream_token_ttl_seconds``. The real access token never enters a URL.
+    """
+    now = _now()
+    payload: dict[str, Any] = {
+        "sub": str(account_id),
+        "sid": str(session_id),
+        "type": "stream",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=settings.stream_token_ttl_seconds)).timestamp()),
+        "jti": uuid.uuid4().hex,
+    }
+    return jwt.encode(payload, settings.app_secret_key, algorithm=settings.jwt_algorithm)
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """Decode and verify a JWT. Raises TokenError on any failure."""
     try:

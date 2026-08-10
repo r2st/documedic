@@ -257,15 +257,34 @@ describe('endpoint contracts', () => {
     });
   });
 
-  it('builds an EventSource URL carrying the access token', () => {
-    seedTokens('stream-token');
-    expect(api.reasoningStreamUrl('sess-1')).toBe(
-      `${PREFIX}/reasoning/sess-1/stream?token=stream-token`,
+  it('mints a session-scoped stream token rather than putting the access token in the URL', async () => {
+    seedTokens('real-access-token', 'r1');
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ token: 'scoped.stream.jwt', expires_in: 60 }),
     );
+
+    const url = await api.reasoningStreamUrl('sess-1');
+
+    // The mint request is authenticated with the bearer header, not the query string.
+    expect(callAt().url).toBe(`${PREFIX}/reasoning/sess-1/stream-token`);
+    expect(callAt().method).toBe('POST');
+    expect(callAt().headers.get('Authorization')).toBe('Bearer real-access-token');
+
+    expect(url).toBe(`${PREFIX}/reasoning/sess-1/stream?token=scoped.stream.jwt`);
+    expect(url).not.toContain('real-access-token');
   });
 
-  it('builds an EventSource URL with an empty token when signed out', () => {
-    expect(api.reasoningStreamUrl('sess-1')).toBe(`${PREFIX}/reasoning/sess-1/stream?token=`);
+  it('percent-encodes the minted token so an odd JWT cannot break the URL', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ token: 'a+b/c=d&e', expires_in: 60 }),
+    );
+    const url = await api.reasoningStreamUrl('sess-1');
+    expect(url).toBe(`${PREFIX}/reasoning/sess-1/stream?token=a%2Bb%2Fc%3Dd%26e`);
+  });
+
+  it('propagates a failure to mint rather than returning an unauthenticated URL', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ code: 'not_found' }, 404));
+    await expect(api.reasoningStreamUrl('sess-1')).rejects.toBeInstanceOf(ApiError);
   });
 
   it('builds the SaMD dossier URL for the requested format', () => {
