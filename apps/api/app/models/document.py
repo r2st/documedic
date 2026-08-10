@@ -11,9 +11,11 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +48,8 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "('pending', 'processing', 'completed', 'failed', 'needs_confirmation')",
             name="ck_documents_extraction_status",
         ),
+        # Matches the per-patient document list, which is sorted newest-first.
+        Index("ix_documents_patient_created", "patient_id", text("created_at DESC")),
     )
 
     patient_id: Mapped[uuid.UUID] = mapped_column(

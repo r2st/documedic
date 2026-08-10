@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID, EncryptedDate, EncryptedString
@@ -27,6 +27,15 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "patients"
     __table_args__ = (
         CheckConstraint("sex IN ('male', 'female', 'other', 'unknown')", name="ck_patients_sex"),
+        # The patient list -- the most-hit endpoint -- reads
+        # WHERE account_id = ? AND is_deleted = false ORDER BY updated_at DESC LIMIT/OFFSET.
+        # Partial on the soft-delete flag so the index carries only live rows.
+        Index(
+            "ix_patients_account_updated_live",
+            "account_id",
+            text("updated_at DESC"),
+            postgresql_where=text("is_deleted = false"),
+        ),
     )
 
     account_id: Mapped[uuid.UUID] = mapped_column(

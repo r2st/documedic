@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID, JSONBType
@@ -35,6 +35,9 @@ class ClinicalSuggestion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             f"autonomy_tier IN ({', '.join(repr(t) for t in _TIERS)})",
             name="ck_clinical_suggestions_tier",
         ),
+        # Matches the per-session suggestion read. Small per session, but the table is
+        # append-only across every reasoning run in the system.
+        Index("ix_clinical_suggestions_session_created", "session_id", "created_at"),
     )
 
     session_id: Mapped[uuid.UUID] = mapped_column(

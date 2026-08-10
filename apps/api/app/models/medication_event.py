@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID, JSONBType
@@ -22,6 +22,13 @@ class MedicationEvent(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base
         CheckConstraint(
             "event_type IN ('start', 'stop', 'change', 'continue', 'one_time')",
             name="ck_medication_events_event_type",
+        ),
+        # Matches the longitudinal-record sort (current medications first, then most recent).
+        Index(
+            "ix_medication_events_patient_current_date",
+            "patient_id",
+            text("is_current DESC"),
+            text("event_date DESC"),
         ),
     )
 

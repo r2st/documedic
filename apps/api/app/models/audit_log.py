@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID, JSONBType
@@ -56,6 +56,12 @@ class AuditLog(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     """
 
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        # The per-patient audit view reads WHERE patient_id = ? ORDER BY sequence DESC with a
+        # LIMIT. This table is append-only and never pruned, so it becomes the largest in the
+        # system; carrying the sort column in the index keeps that read from degrading.
+        Index("ix_audit_logs_patient_sequence", "patient_id", text("sequence DESC")),
+    )
 
     # Monotonic per-table sequence used to order the hash chain deterministically.
     # Assigned by the audit service (max+1) under a row lock, not DB autoincrement,

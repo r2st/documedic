@@ -11,8 +11,10 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +31,14 @@ class LabResult(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "abnormality_direction IS NULL OR abnormality_direction IN "
             "('high', 'low', 'critical_high', 'critical_low')",
             name="ck_lab_results_abnormality_direction",
+        ),
+        # Matches the longitudinal-record and lab-safety sorts; labs accumulate per document
+        # ingested, so this is the set that grows fastest for a long-running patient.
+        Index(
+            "ix_lab_results_patient_sample_date",
+            "patient_id",
+            text("sample_date DESC NULLS LAST"),
+            "marker_name",
         ),
     )
 
