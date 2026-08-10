@@ -35,8 +35,6 @@ from app.services.reasoning_service import ReasoningService, SuggestionNotFoundE
 from app.services.safety_service import SafetyService
 from tests.conftest import create_patient
 
-pytestmark = pytest.mark.asyncio
-
 
 async def _account(db) -> Account:
     account = Account(email=f"err-{uuid.uuid4().hex}@example.com", password_hash="x")

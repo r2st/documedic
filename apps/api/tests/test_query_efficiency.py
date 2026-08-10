@@ -33,8 +33,6 @@ from app.services.pathway_service import PathwayService
 from app.services.safety_service import SafetyService
 from tests.conftest import create_patient
 
-pytestmark = pytest.mark.asyncio
-
 
 @contextmanager
 def counting_queries(engine):
@@ -356,7 +354,9 @@ async def _seed_record(db, patient_id: uuid.UUID, account_id: uuid.UUID, n: int)
     await db.commit()
 
 
-@pytest.mark.parametrize(("label", "template"), _SCALING_ENDPOINTS, ids=[e[0] for e in _SCALING_ENDPOINTS])
+@pytest.mark.parametrize(
+    ("label", "template"), _SCALING_ENDPOINTS, ids=[e[0] for e in _SCALING_ENDPOINTS]
+)
 async def test_read_endpoint_query_count_is_flat_in_record_size(
     db, auth_client, engine, label, template
 ):
@@ -384,9 +384,16 @@ async def test_read_endpoint_query_count_is_flat_in_record_size(
     )
 
 
-async def test_mapped_pathways_batch_citations_across_every_matched_condition(db, auth_client, engine):
+async def test_mapped_pathways_batch_citations_across_every_matched_condition(
+    db, auth_client, engine
+):
     """Four matched pathways must cost the same as one — citations are fetched in one query."""
-    mapped = ["Hypertension", "Type 2 Diabetes Mellitus", "Dyslipidemia", "Community-Acquired Pneumonia"]
+    mapped = [
+        "Hypertension",
+        "Type 2 Diabetes Mellitus",
+        "Dyslipidemia",
+        "Community-Acquired Pneumonia",
+    ]
 
     counts = []
     for n in (1, 4):
@@ -423,10 +430,16 @@ async def test_merge_entities_query_count_is_independent_of_entity_count(db, aut
         out: list[dict] = []
         for i in range(n):
             out.append(
-                {"entity_type": "medication", "fields": {"generic_name": f"Drug{i}", "dose": f"{i}mg"}}
+                {
+                    "entity_type": "medication",
+                    "fields": {"generic_name": f"Drug{i}", "dose": f"{i}mg"},
+                }
             )
             out.append(
-                {"entity_type": "lab_result", "fields": {"marker_name": f"M{i}", "value_numeric": i}}
+                {
+                    "entity_type": "lab_result",
+                    "fields": {"marker_name": f"M{i}", "value_numeric": i},
+                }
             )
             out.append({"entity_type": "condition", "fields": {"condition_name": f"C{i}"}})
             out.append({"entity_type": "allergy", "fields": {"allergen_name": f"A{i}"}})

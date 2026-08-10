@@ -128,8 +128,8 @@ async def ingest(
     """Upsert the corpus into ``guideline_chunks``. Returns the number of new chunks."""
     version = corpus_version or settings.guideline_corpus_version
     existing = {
-        (source, section_id)
-        for (source, section_id) in (
+        tuple(row)
+        for row in (
             await db.execute(
                 select(GuidelineChunk.source, GuidelineChunk.section_id).where(
                     GuidelineChunk.corpus_version == version
@@ -192,7 +192,7 @@ def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]
     )
 
 
-async def _main() -> None:
+async def _main() -> None:  # pragma: no cover — `python -m app.services.guideline_ingest`
     sm = get_sessionmaker()
     async with sm() as db:
         added = await ingest(db, push_qdrant=True)

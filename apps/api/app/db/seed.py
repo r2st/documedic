@@ -67,8 +67,8 @@ async def seed_interactions(db: AsyncSession) -> int:
 
 async def seed_contraindications(db: AsyncSession) -> int:
     existing = {
-        (drug_reference_id, condition_name)
-        for (drug_reference_id, condition_name) in (
+        tuple(row)
+        for row in (
             await db.execute(
                 select(Contraindication.drug_reference_id, Contraindication.condition_name)
             )
@@ -103,12 +103,12 @@ async def seed_all(db: AsyncSession) -> dict[str, int]:
     return counts
 
 
-async def _main() -> None:
+async def _main() -> None:  # pragma: no cover — `python -m app.db.seed` entrypoint
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as db:
         counts = await seed_all(db)
     print("Seeded:", counts)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     asyncio.run(_main())

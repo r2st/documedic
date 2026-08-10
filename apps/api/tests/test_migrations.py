@@ -102,7 +102,7 @@ def test_revision_chain_is_declared(path: Path):
     assigned = {
         target.id
         for node in ast.walk(tree)
-        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        if isinstance(node, ast.Assign | ast.AnnAssign)
         for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
         if isinstance(target, ast.Name)
     }
