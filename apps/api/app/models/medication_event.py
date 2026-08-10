@@ -32,9 +32,9 @@ class MedicationEvent(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base
         ),
     )
 
-    patient_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("patients.id"), nullable=False, index=True
-    )
+    # No single-column index: ix_medication_events_patient_current_date leads with patient_id.
+    # See migration 0009.
+    patient_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("patients.id"), nullable=False)
     encounter_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("encounters.id"), nullable=True
     )

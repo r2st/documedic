@@ -31,7 +31,9 @@ class GuidelineChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
     )
 
-    corpus_version: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # No single-column index: uq_guideline_chunks_section leads with corpus_version, which is
+    # how every retrieval filters. See migration 0009.
+    corpus_version: Mapped[str] = mapped_column(String(30), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
     document_title: Mapped[str] = mapped_column(Text, nullable=False)
     section_id: Mapped[str] = mapped_column(String(100), nullable=False)

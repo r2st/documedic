@@ -51,7 +51,9 @@ class DrugInteraction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
     )
 
-    drug_a_reference_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    # No single-column index: uq_drug_interactions_pair leads with drug_a_reference_id.
+    # See migration 0009.
+    drug_a_reference_id: Mapped[str] = mapped_column(String(100), nullable=False)
     drug_b_reference_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     severity: Mapped[str] = mapped_column(String(30), nullable=False)
     interaction_type: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -40,8 +40,10 @@ class ClinicalSuggestion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         Index("ix_clinical_suggestions_session_created", "session_id", "created_at"),
     )
 
+    # No single-column index: ix_clinical_suggestions_session_created leads with session_id.
+    # See migration 0009.
     session_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("reasoning_sessions.id"), nullable=False, index=True
+        GUID(), ForeignKey("reasoning_sessions.id"), nullable=False
     )
     patient_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("patients.id"), nullable=False, index=True

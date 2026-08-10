@@ -52,9 +52,9 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_documents_patient_created", "patient_id", text("created_at DESC")),
     )
 
-    patient_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("patients.id"), nullable=False, index=True
-    )
+    # No single-column index: ix_documents_patient_created leads with patient_id.
+    # See migration 0009.
+    patient_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("patients.id"), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("accounts.id"), nullable=False)
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     file_type: Mapped[str] = mapped_column(String(50), nullable=False)

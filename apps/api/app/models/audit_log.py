@@ -70,12 +70,17 @@ class AuditLog(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("accounts.id"), nullable=True
     )
+    # No single-column index: ix_audit_logs_patient_sequence leads with patient_id and so
+    # answers every lookup a plain (patient_id) index could. See migration 0009.
     patient_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("patients.id"), nullable=True, index=True
+        GUID(), ForeignKey("patients.id"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
     payload: Mapped[dict] = mapped_column(JSONBType, nullable=False, default=dict)
     prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    record_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Deliberately unindexed. Verification recomputes each hash from the row it already holds
+    # (app.core.audit_hash) and never searches by hash, so an index here only cost writes on
+    # the busiest table in the system. See migration 0009.
+    record_hash: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -38,9 +38,10 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         ),
     )
 
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("accounts.id"), nullable=False, index=True
-    )
+    # No single-column index: ix_patients_account_updated_live leads with account_id. It is
+    # partial, so it only covers queries carrying `is_deleted = false` -- every account-scoped
+    # patient query in the codebase does. See migration 0009.
+    account_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("accounts.id"), nullable=False)
     full_name: Mapped[str] = mapped_column(EncryptedString(), nullable=False)
     date_of_birth: Mapped[date | None] = mapped_column(EncryptedDate(), nullable=True)
     sex: Mapped[str | None] = mapped_column(String(20), nullable=True)

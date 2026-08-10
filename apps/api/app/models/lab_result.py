@@ -46,11 +46,21 @@ class LabResult(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             text("sample_date DESC NULLS LAST"),
             "marker_name",
         ).ddl_if(dialect="postgresql"),
+        # SQLite sibling of the above, minus the NULLS LAST its parser rejects. It exists so
+        # that dropping the redundant single-column ix_lab_results_patient_id (migration 0009)
+        # does not leave the dev/test database with patient_id unindexed altogether -- the
+        # PostgreSQL-only index above is what covers that lookup in production.
+        Index(
+            "ix_lab_results_patient_sample_date",
+            "patient_id",
+            text("sample_date DESC"),
+            "marker_name",
+        ).ddl_if(dialect="sqlite"),
     )
 
-    patient_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("patients.id"), nullable=False, index=True
-    )
+    # No single-column index: the composite above leads with patient_id on both dialects.
+    # See migration 0009.
+    patient_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("patients.id"), nullable=False)
     encounter_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("encounters.id"), nullable=True
     )
