@@ -30,6 +30,30 @@ from app.models.patient import Patient
 from app.services.drug_resolver import DrugResolver
 
 
+def _resolvable_names(entities: list[dict]) -> list[str]:
+    """Every drug name in a merge payload that will be looked up in the vocabulary.
+
+    Mirrors what ``_merge_medication`` and ``_merge_allergy`` resolve — medications by brand
+    (falling back to generic), drug allergies by allergen name — so the prefetch covers
+    exactly the lookups the merge is about to make and nothing more.
+    """
+    names: list[str] = []
+    for entity in entities:
+        fields = entity.get("fields", {})
+        if entity.get("entity_type") == "medication":
+            name = fields.get("brand_name_raw") or fields.get("generic_name")
+            if isinstance(name, str):
+                names.append(name)
+        elif (
+            entity.get("entity_type") == "allergy"
+            and (fields.get("allergen_type") or "drug") == "drug"
+        ):
+            name = fields.get("allergen_name")
+            if isinstance(name, str):
+                names.append(name)
+    return names
+
+
 def _to_decimal(value: object) -> Decimal | None:
     if value is None:
         return None
@@ -62,6 +86,10 @@ class GraphService:
         # condition twice no longer creates two rows — autoflush is off, so the earlier
         # db.add() would not have been visible to a follow-up SELECT.
         seen = await self._existing_keys(patient)
+        # Every medication and drug-allergy line resolves a name against the vocabulary. Doing
+        # that lazily costs one exact-match query per line, so a 30-line prescription pays 30
+        # round-trips; one prefetch collapses them into a single query.
+        await self.resolver.prefetch(_resolvable_names(entities))
 
         for entity in entities:
             etype = entity.get("entity_type")

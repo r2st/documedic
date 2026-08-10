@@ -205,9 +205,9 @@ async def test_vocabulary_is_loaded_in_a_single_batched_query(db, engine):
         ]
 
     by_id = [s for s in vocab_selects if "drug_vocabulary.id IN" in s.replace("\n", " ")]
-    assert (
-        len(by_id) == 1
-    ), f"expected exactly one batched vocabulary-by-id query, got {len(by_id)}: {by_id}"
+    assert len(by_id) == 1, (
+        f"expected exactly one batched vocabulary-by-id query, got {len(by_id)}: {by_id}"
+    )
 
 
 async def test_patient_pathways_query_count_is_flat_in_condition_count(db, engine):
@@ -276,9 +276,9 @@ async def test_unmapped_conditions_cost_no_guideline_queries(db, engine):
         "Some Unmapped Condition",
     ]
     guideline_queries = [s for s in counter["statements"] if "guideline_chunks" in s.lower()]
-    assert (
-        not guideline_queries
-    ), f"no pathway matched, so the guideline corpus should not be queried: {guideline_queries}"
+    assert not guideline_queries, (
+        f"no pathway matched, so the guideline corpus should not be queried: {guideline_queries}"
+    )
 
 
 # ------------------------------------------------------------------------------------------
@@ -527,9 +527,9 @@ async def test_reference_rules_loaded_do_not_grow_with_the_corpus(db):
         f"{len(before.interaction_rules)} to {len(after.interaction_rules)} — the safety "
         "context is loading the whole table again"
     )
-    assert len(after.contraindication_rules) == len(
-        before.contraindication_rules
-    ), "unrelated contraindication rows are being loaded into the patient's safety context"
+    assert len(after.contraindication_rules) == len(before.contraindication_rules), (
+        "unrelated contraindication rows are being loaded into the patient's safety context"
+    )
 
 
 async def test_only_rules_touching_the_drugs_in_play_are_loaded(db):
@@ -550,9 +550,9 @@ async def test_only_rules_touching_the_drugs_in_play_are_loaded(db):
             f"{rule.drug_b_reference_id}) that cannot fire for these drugs"
         )
     for ci in ctx.contraindication_rules:
-        assert (
-            ci.drug_reference_id in in_play
-        ), f"loaded a contraindication for {ci.drug_reference_id}, which is not in play"
+        assert ci.drug_reference_id in in_play, (
+            f"loaded a contraindication for {ci.drug_reference_id}, which is not in play"
+        )
 
 
 async def test_the_proposed_drugs_own_rules_are_still_loaded(db):
@@ -591,6 +591,114 @@ async def test_a_single_medication_costs_no_interaction_query(db, engine):
 
     touched = [s for s in counter["statements"] if "drug_interactions" in s]
     assert touched == [], f"queried drug_interactions for a single-drug patient: {touched}"
+
+
+# ---------------------------------------------------- drug-vocabulary scaling
+# The vocabulary is the third reference table, and the one the earlier scoping work did not
+# reach. It is also the one that grows fastest: interactions and contraindications are curated
+# pairs, but the vocabulary is every Indian brand name in the market — tens of thousands of
+# rows — and it is read for every medication and every allergy of every safety check.
+
+
+async def _add_vocabulary_rows(db, count: int) -> None:
+    """Insert `count` drugs no test patient is ever on, to stand in for corpus growth."""
+    for i in range(count):
+        db.add(
+            DrugVocabulary(
+                brand_name=f"NoiseBrand{i:05d}",
+                generic_name=f"NoiseGeneric{i:05d}",
+                reference_id=f"NOISE-VOCAB-{i:05d}",
+                drug_class="synthetic",
+                source="test",
+            )
+        )
+    await db.flush()
+
+
+async def _vocabulary_rows_read(db, account, patient) -> int:
+    """Vocabulary rows one ``active_flags`` call materialises.
+
+    Counting statements is not enough here: the regression this guards is a *single* query
+    that returns the entire corpus, which is indistinguishable from a targeted one in a
+    statement count. Row counts are not available either — DBAPI ``cursor.rowcount`` is -1 for
+    SELECTs on SQLite, so a counter built on it silently measures zero and passes whatever
+    happens. The session's identity map is the reliable measure: every row the ORM hydrates
+    lands in it, so its DrugVocabulary population after a cold start is exactly what the
+    request pulled out of that table.
+    """
+    service = SafetyService(db)
+    db.expunge_all()
+    await service.active_flags(account_id=account.id, patient_id=patient.id)
+    return sum(1 for obj in db.identity_map.values() if isinstance(obj, DrugVocabulary))
+
+
+async def test_a_safety_check_does_not_read_the_whole_drug_vocabulary(db, engine):
+    """1000+ unrelated drugs must not change what one patient's safety check reads.
+
+    This is the assertion the round-14 reference-data scoping did not cover. Growing the
+    vocabulary from 50 to 1050 rows previously grew every safety check by 1000 hydrated ORM
+    objects, because resolution answered even exact reference-id lookups out of a
+    full-corpus in-memory index.
+    """
+    _account, patient = await _account_and_patient(db)
+    for generic in ("Metformin", "Warfarin", "Atorvastatin"):
+        await _add_current_med(db, patient, generic)
+
+    before = await _vocabulary_rows_read(db, _account, patient)
+    await _add_vocabulary_rows(db, 1000)
+    after = await _vocabulary_rows_read(db, _account, patient)
+
+    assert after == before, (
+        f"one safety check read {before} vocabulary rows on a 50-drug corpus and {after} "
+        f"after 1000 unrelated drugs were added — resolution is loading the whole vocabulary, "
+        f"so the hot safety path scales with market coverage instead of with the patient"
+    )
+
+
+async def test_active_flags_query_count_is_flat_in_medication_count_at_corpus_scale(db, engine):
+    """Reference-id resolution must be batched, not one query per current medication."""
+    _account, patient = await _account_and_patient(db)
+    await _add_vocabulary_rows(db, 1000)
+    await _add_current_med(db, patient, "Metformin")
+    await _add_current_med(db, patient, "Atorvastatin")
+    baseline = await _flags_select_count(db, engine, _account, patient)
+
+    for generic in ("Amlodipine", "Warfarin", "Paracetamol"):
+        await _add_current_med(db, patient, generic)
+    with_five = await _flags_select_count(db, engine, _account, patient)
+
+    assert with_five == baseline, (
+        f"active_flags went from {baseline} to {with_five} SELECTs when current medications "
+        "went from 2 to 5 — the per-drug vocabulary lookup is not batched"
+    )
+
+
+async def test_merging_a_long_prescription_does_not_read_the_whole_vocabulary_per_line(db, engine):
+    """Ingestion resolves a name per line; at corpus scale that must stay one query."""
+    from app.services.graph_service import GraphService
+
+    _account, patient = await _account_and_patient(db)
+    await _add_vocabulary_rows(db, 1000)
+    await db.commit()
+
+    entities = [
+        {"entity_type": "medication", "fields": {"brand_name_raw": name, "dose": "500mg"}}
+        for name in ("Crocin", "Glycomet", "Ecosprin", "Metformin", "Atorvastatin")
+    ] + [{"entity_type": "allergy", "fields": {"allergen_name": "Penicillin"}}]
+
+    db.expunge_all()
+    with counting_queries(engine) as counter:
+        await GraphService(db).merge_entities(patient=patient, document=None, entities=entities)
+
+    vocabulary_reads = [
+        s
+        for s in counter["statements"]
+        if "FROM drug_vocabulary" in s and s.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(vocabulary_reads) <= 2, (
+        f"merging 6 lines cost {len(vocabulary_reads)} vocabulary reads; the batched prefetch "
+        f"should make it one (plus at most one fuzzy corpus load): {vocabulary_reads}"
+    )
 
 
 async def test_a_patient_on_no_medications_touches_neither_reference_table(db, engine):

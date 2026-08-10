@@ -134,6 +134,11 @@ class SafetyService:
     async def _current_meds(
         self, med_rows: list[MedicationEvent], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
     ) -> list[DrugRef]:
+        # Rows with no vocabulary link fall through to name resolution below. Resolving them
+        # one at a time is a query per unlinked medication; prefetching makes it one for all.
+        await self.resolver.prefetch(
+            med.generic_name for med in med_rows if not med.drug_vocabulary_id
+        )
         out: list[DrugRef] = []
         for med in med_rows:
             vocab = vocab_by_id.get(med.drug_vocabulary_id) if med.drug_vocabulary_id else None
@@ -162,6 +167,11 @@ class SafetyService:
     async def _allergies(
         self, allergy_rows: list[Allergy], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
     ) -> list[PatientAllergy]:
+        await self.resolver.prefetch(
+            a.allergen_name
+            for a in allergy_rows
+            if a.drug_vocabulary_id is None and a.allergen_type == "drug"
+        )
         out: list[PatientAllergy] = []
         for a in allergy_rows:
             ref_id, drug_class = None, None
@@ -411,13 +421,17 @@ class SafetyService:
 
         No ``proposed_reference_id`` is passed: every drug evaluated here is already a current
         medication, so the reference-data scope is exactly the current-medication set.
+
+        The vocabulary rows for all current medications are fetched in one batched query
+        rather than one per drug, so the query count stays flat as the medication list grows.
         """
         await self._patient(account_id, patient_id)
         ctx = await self._build_context(patient_id)
         out: list[tuple[DrugVocabulary, list[SafetyFlag]]] = []
         seen_refs = {m.reference_id for m in ctx.current_meds}
+        vocab_by_ref = await self.resolver.resolve_reference_ids(seen_refs)
         for ref in sorted(seen_refs):
-            vocab = await self.resolver.resolve_reference_id(ref)
+            vocab = vocab_by_ref.get(ref)
             if vocab is None:
                 continue
             sub_ctx = replace(

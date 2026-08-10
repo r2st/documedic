@@ -54,15 +54,22 @@ async def test_resolver_declines_a_missing_or_blank_drug_name(db):
     assert await resolver.resolve("    ") is None
 
 
-async def test_resolver_returns_none_when_the_vocabulary_is_empty(db, monkeypatch):
-    """An unseeded vocabulary must yield no match rather than a fuzzy match against nothing."""
+async def test_resolver_returns_none_when_the_vocabulary_is_empty(db):
+    """An unseeded vocabulary must yield no match rather than a fuzzy match against nothing.
+
+    Empties the table rather than stubbing an internal, because resolution reaches the
+    database by two different routes (a targeted exact query and the fuzzy corpus load) and a
+    stub on one of them would leave the other answering from seed data.
+    """
+    from sqlalchemy import delete
+
+    await db.execute(delete(DrugVocabulary))
+    await db.flush()
+
     resolver = DrugResolver(db)
-
-    async def _no_rows() -> list[DrugVocabulary]:
-        return []
-
-    monkeypatch.setattr(resolver, "_all", _no_rows)
     assert await resolver.resolve("Crocin") is None
+    assert await resolver.resolve("Paracetamol") is None
+    assert await resolver.resolve_reference_id("PCM-500") is None
 
 
 async def test_resolver_matches_a_reference_id_exactly_and_in_preference_to_a_name(db):
@@ -137,26 +144,138 @@ async def test_resolver_is_first_row_wins_when_two_rows_share_a_name(db):
     assert (await resolver.resolve(name)).reference_id == first
 
 
-async def test_resolver_reads_the_vocabulary_once_however_many_lookups_it_serves(db, engine):
-    """The index is built once per resolver; lookups after that cost no SQL at all.
+def _vocabulary_reads(counter) -> list[str]:
+    return [s for s in counter["statements"] if "drug_vocabulary" in s]
 
-    Resolution runs for every medication and every allergy of every safety check, so a
-    per-lookup vocabulary read is a per-drug round-trip in production.
+
+def _corpus_reads(counter) -> list[str]:
+    """Reads that pull the *whole* active vocabulary, i.e. with no name/id predicate.
+
+    That is the read whose cost grows with the corpus rather than with the patient, so it is
+    the one worth counting separately from targeted lookups.
+    """
+    return [
+        s
+        for s in _vocabulary_reads(counter)
+        if "lower(" not in s.lower() and "reference_id IN" not in s and "reference_id =" not in s
+    ]
+
+
+async def test_a_repeated_lookup_costs_no_sql(db, engine):
+    """Resolution runs for every medication and every allergy of every safety check, and the
+    same drug recurs across them, so a repeated lookup must be served from the memo."""
+    from tests.test_query_efficiency import counting_queries
+
+    resolver = DrugResolver(db)
+    for name in ("Paracetamol", "Metformin", "Glycomett", "not-a-drug-at-all"):
+        await resolver.resolve(name)
+    await resolver.resolve_reference_id("ref-does-not-exist")
+
+    with counting_queries(engine) as counter:
+        for name in ("Paracetamol", "Metformin", "Glycomett", "not-a-drug-at-all"):
+            await resolver.resolve(name)
+        await resolver.resolve_reference_id("ref-does-not-exist")
+
+    reads = _vocabulary_reads(counter)
+    assert reads == [], f"repeating five warm lookups cost {len(reads)} vocabulary reads"
+
+
+async def test_an_exact_lookup_never_reads_the_whole_corpus(db, engine):
+    """Exact matches are equality lookups on indexed columns.
+
+    Answering them by loading every active drug makes the hot safety path scale with the size
+    of the brand corpus — tens of thousands of rows in this product's market — instead of with
+    the patient. This is the assertion that keeps that load off the exact path.
     """
     from tests.test_query_efficiency import counting_queries
 
     resolver = DrugResolver(db)
-    await resolver.resolve("Paracetamol")  # warm the index
+    with counting_queries(engine) as counter:
+        by_generic = await resolver.resolve("Paracetamol")
+        by_brand = await resolver.resolve("Crocin")
+        by_ref = await resolver.resolve_reference_id(by_generic.reference_id)
+
+    assert by_generic is not None and by_generic.match_type == "exact_generic"
+    assert by_brand is not None and by_brand.match_type == "exact_brand"
+    assert by_ref is not None
+    loads = _corpus_reads(counter)
+    assert loads == [], f"three exact lookups loaded the whole vocabulary {len(loads)} time(s)"
+
+
+async def test_the_corpus_is_loaded_at_most_once_even_for_many_fuzzy_lookups(db, engine):
+    """Fuzzy matching genuinely needs every candidate name in memory — but only once."""
+    from tests.test_query_efficiency import counting_queries
+
+    resolver = DrugResolver(db)
+    with counting_queries(engine) as counter:
+        for name in ("Glycomett", "Crocinn", "Metformim", "not-a-drug-at-all", "zzzz"):
+            await resolver.resolve(name)
+
+    loads = _corpus_reads(counter)
+    assert len(loads) == 1, f"five fuzzy lookups loaded the corpus {len(loads)} times"
+
+
+async def test_prefetch_resolves_a_whole_batch_of_names_in_one_query(db, engine):
+    """A prescription's worth of names must cost one exact-match query, not one each."""
+    from tests.test_query_efficiency import counting_queries
+
+    names = ["Paracetamol", "Metformin", "Aspirin", "Crocin", "Atorvastatin", "Amlodipine"]
+
+    resolver = DrugResolver(db)
+    with counting_queries(engine) as counter:
+        await resolver.prefetch(names)
+        resolved = [await resolver.resolve(name) for name in names]
+
+    assert all(r is not None for r in resolved), resolved
+    reads = _vocabulary_reads(counter)
+    assert len(reads) == 1, f"prefetch + {len(names)} lookups cost {len(reads)} reads: {reads}"
+
+
+async def test_prefetch_caches_the_misses_too(db, engine):
+    """Names with no exact match must not each re-issue their own exact-match query.
+
+    Extraction routinely yields names the vocabulary does not carry. If only the hits were
+    memoised, a document full of unrecognised drugs would reintroduce exactly the per-line
+    N+1 the prefetch exists to remove.
+    """
+    from tests.test_query_efficiency import counting_queries
+
+    names = [f"NotADrug{i}" for i in range(8)]
+
+    resolver = DrugResolver(db)
+    await resolver.prefetch(names)
+    await resolver.resolve(names[0])  # first miss loads the corpus for the fuzzy tier
 
     with counting_queries(engine) as counter:
-        for name in ("Metformin", "Aspirin", "Crocin", "Glycomett", "not-a-drug-at-all"):
+        for name in names[1:]:
             await resolver.resolve(name)
-        await resolver.resolve_reference_id("ref-does-not-exist")
 
-    vocabulary_reads = [s for s in counter["statements"] if "drug_vocabulary" in s]
-    assert (
-        vocabulary_reads == []
-    ), f"six lookups against a warm resolver cost {len(vocabulary_reads)} vocabulary reads"
+    reads = _vocabulary_reads(counter)
+    assert reads == [], f"seven prefetched misses still cost {len(reads)} reads: {reads}"
+
+
+async def test_prefetch_does_not_change_what_a_name_resolves_to(db, engine):
+    """The batch path is an optimisation, so it must agree with the lazy path exactly —
+    including the collision case, where precedence decides between two candidate rows."""
+    collision = f"zz{uuid.uuid4().hex[:8]}"
+    ref_brand = f"ref-{uuid.uuid4().hex}"
+    db.add(DrugVocabulary(brand_name=collision, generic_name="Amoxicillin", reference_id=ref_brand))
+    db.add(DrugVocabulary(generic_name=collision, reference_id=f"ref-{uuid.uuid4().hex}"))
+    await db.flush()
+
+    names = ["Paracetamol", "Crocin", collision, "Glycomett", "not-a-drug-at-all"]
+
+    lazy = [await DrugResolver(db).resolve(name) for name in names]
+
+    prefetched_resolver = DrugResolver(db)
+    await prefetched_resolver.prefetch(names)
+    batched = [await prefetched_resolver.resolve(name) for name in names]
+
+    assert batched == lazy, f"prefetch changed resolution: {batched} != {lazy}"
+    # And the collision still resolves by precedence, not by which row the batch saw first.
+    assert batched[2] is not None
+    assert batched[2].match_type == "exact_brand"
+    assert batched[2].reference_id == ref_brand
 
 
 # --------------------------------------------------------------- deterministic lab safety
