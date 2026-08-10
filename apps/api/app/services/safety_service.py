@@ -24,7 +24,7 @@ from app.core.safety import (
     evaluate_drug_safety,
     has_hard_block,
 )
-from app.exceptions import NotFoundError, PatientNotFoundError, ValidationError
+from app.exceptions import NotFoundError, ValidationError
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
@@ -44,17 +44,20 @@ class SafetyService:
         self.resolver = DrugResolver(db)
 
     async def _patient(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
-        result = await self.db.execute(
-            select(Patient).where(
-                Patient.id == patient_id,
-                Patient.account_id == account_id,
-                Patient.is_deleted.is_(False),
-            )
-        )
-        patient = result.scalar_one_or_none()
-        if patient is None:
-            raise PatientNotFoundError()
-        return patient
+        """Fetch a patient the caller owns, or raise PatientNotFoundError.
+
+        Delegates rather than repeating the predicate. This is an authorization check -- it is
+        what stops one account reading another's records -- and it was previously copy-pasted
+        into four services. Any future change to what "a patient this caller may read" means
+        (an extra tenancy dimension, an account-status check) has to land in one place or it
+        lands in three and misses the fourth.
+
+        Imported inside the method: PatientService imports from this module's siblings, so a
+        module-level import would close a cycle. Same pattern as DocumentService._get_patient.
+        """
+        from app.services.patient_service import PatientService
+
+        return await PatientService(self.db).get(account_id, patient_id)
 
     async def _build_context(
         self, patient_id: uuid.UUID, *, exclude_reference_id: str | None = None

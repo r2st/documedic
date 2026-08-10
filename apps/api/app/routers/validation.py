@@ -78,12 +78,12 @@ async def pilot_status(account: Account = Depends(get_current_account)) -> dict:
     }
 
 
-@router.get("/regulatory/samd-dossier")
+@router.get("/regulatory/samd-dossier", response_model=None)
 async def samd_dossier(
     format: str = Query(default="json", pattern="^(json|markdown)$"),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
-):
+) -> PlainTextResponse | dict:
     service = RegulatoryService(db)
     await service.record_generation(account.id)
     if format == "markdown":

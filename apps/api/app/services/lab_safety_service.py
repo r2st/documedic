@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.lab_safety import CriticalLabFlag, evaluate_critical_value
-from app.exceptions import PatientNotFoundError
 from app.models.lab_result import LabResult
 from app.models.patient import Patient
 from app.services.audit_service import AuditService
@@ -26,17 +25,20 @@ class LabSafetyService:
         self.audit = AuditService(db)
 
     async def _patient(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
-        result = await self.db.execute(
-            select(Patient).where(
-                Patient.id == patient_id,
-                Patient.account_id == account_id,
-                Patient.is_deleted.is_(False),
-            )
-        )
-        patient = result.scalar_one_or_none()
-        if patient is None:
-            raise PatientNotFoundError()
-        return patient
+        """Fetch a patient the caller owns, or raise PatientNotFoundError.
+
+        Delegates rather than repeating the predicate. This is an authorization check -- it is
+        what stops one account reading another's records -- and it was previously copy-pasted
+        into four services. Any future change to what "a patient this caller may read" means
+        (an extra tenancy dimension, an account-status check) has to land in one place or it
+        lands in three and misses the fourth.
+
+        Imported inside the method: PatientService imports from this module's siblings, so a
+        module-level import would close a cycle. Same pattern as DocumentService._get_patient.
+        """
+        from app.services.patient_service import PatientService
+
+        return await PatientService(self.db).get(account_id, patient_id)
 
     async def check_patient_labs(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID, audit: bool = True

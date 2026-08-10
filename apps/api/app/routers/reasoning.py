@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import AsyncGenerator, Sequence
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,8 @@ from app.core.security import create_stream_token, decode_token
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.exceptions import TokenError
+from app.models.intake import IntakeQuestion
+from app.models.reasoning_session import ReasoningSession
 from app.models.user import Account
 from app.schemas.reasoning import (
     ClinicalSuggestionOut,
@@ -32,7 +35,7 @@ from app.services.reasoning_service import ReasoningService
 router = APIRouter(tags=["reasoning"])
 
 
-def _intake_state(session, pending) -> IntakeStateOut:
+def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) -> IntakeStateOut:
     return IntakeStateOut(
         session=ReasoningSessionOut.model_validate(session),
         pending_questions=[IntakeQuestionOut.model_validate(q) for q in pending],
@@ -170,7 +173,7 @@ async def stream_reasoning(
     service = ReasoningService(db)
     await service.get_session(account.id, session_id)
 
-    async def event_source():
+    async def event_source() -> AsyncGenerator[str, None]:
         yield ": reasoning theatre stream open\n\n"
         async for event, data in service.stream(account.id, session_id):
             yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"

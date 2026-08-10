@@ -6,8 +6,10 @@ derived markers (eGFR via CKD-EPI 2021) when the inputs are available.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -121,7 +123,13 @@ class GraphService:
         }
 
     async def _merge_medication(
-        self, patient, source_doc_id, fields, region, confidence, seen: set
+        self,
+        patient: Patient,
+        source_doc_id: uuid.UUID | None,
+        fields: dict[str, Any],
+        region: dict[str, Any] | None,
+        confidence: dict[str, Any],
+        seen: set,
     ) -> bool:
         brand = fields.get("brand_name_raw") or fields.get("generic_name")
         resolved = await self.resolver.resolve(brand)
@@ -156,7 +164,12 @@ class GraphService:
         return True
 
     async def _merge_lab(
-        self, patient, source_doc_id, fields, region, confidence
+        self,
+        patient: Patient,
+        source_doc_id: uuid.UUID | None,
+        fields: dict[str, Any],
+        region: dict[str, Any] | None,
+        confidence: dict[str, Any],
     ) -> LabResult | None:
         marker = fields.get("marker_name")
         if not marker:
@@ -199,7 +212,13 @@ class GraphService:
         return lab
 
     def _merge_condition(
-        self, patient, source_doc_id, fields, region, confidence, seen: set
+        self,
+        patient: Patient,
+        source_doc_id: uuid.UUID | None,
+        fields: dict[str, Any],
+        region: dict[str, Any] | None,
+        confidence: dict[str, Any],
+        seen: set,
     ) -> bool:
         name = fields.get("condition_name")
         if not name:
@@ -223,7 +242,13 @@ class GraphService:
         return True
 
     async def _merge_allergy(
-        self, patient, source_doc_id, fields, region, confidence, seen: set
+        self,
+        patient: Patient,
+        source_doc_id: uuid.UUID | None,
+        fields: dict[str, Any],
+        region: dict[str, Any] | None,
+        confidence: dict[str, Any],
+        seen: set,
     ) -> bool:
         name = fields.get("allergen_name")
         if not name:

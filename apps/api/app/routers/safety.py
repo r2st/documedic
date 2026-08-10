@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.safety import has_hard_block
+from app.core.safety import SafetyFlag, has_hard_block
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
@@ -24,7 +24,7 @@ from app.services.safety_service import SafetyService
 router = APIRouter(prefix="/patients/{patient_id}/drug-safety", tags=["drug-safety"])
 
 
-def _flag_to_response(flag, check_id: uuid.UUID | None = None) -> SafetyFlagResponse:
+def _flag_to_response(flag: SafetyFlag, check_id: uuid.UUID | None = None) -> SafetyFlagResponse:
     return SafetyFlagResponse(
         id=check_id,
         check_type=flag.check_type,
@@ -38,7 +38,7 @@ def _flag_to_response(flag, check_id: uuid.UUID | None = None) -> SafetyFlagResp
     )
 
 
-def _uuid(value):
+def _uuid(value: object) -> uuid.UUID | None:
     try:
         return uuid.UUID(str(value)) if value else None
     except (ValueError, TypeError):

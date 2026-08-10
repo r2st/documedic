@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -95,7 +96,7 @@ async def _seed_drug_data() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Before anything touches patient data: refuse to serve production traffic with a
     # development-grade secret, debug mode on, or a wildcard CORS policy.
     assert_production_config()

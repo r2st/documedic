@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,11 +18,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import graph
-from app.agents.context import ReasoningContext
+from app.agents.context import EventEmitter, ReasoningContext, Retriever, SafetyEvaluator
 from app.agents.llm import LLMClient, is_available
 from app.agents.state import CaseState, IntakeQuestionState
 from app.config import settings
-from app.exceptions import NotFoundError, PatientNotFoundError, ValidationError
+from app.exceptions import NotFoundError, ValidationError
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.patient import Patient
@@ -53,17 +54,20 @@ class ReasoningService:
 
     # ----------------------------------------------------------------- helpers
     async def _patient(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
-        result = await self.db.execute(
-            select(Patient).where(
-                Patient.id == patient_id,
-                Patient.account_id == account_id,
-                Patient.is_deleted.is_(False),
-            )
-        )
-        patient = result.scalar_one_or_none()
-        if patient is None:
-            raise PatientNotFoundError()
-        return patient
+        """Fetch a patient the caller owns, or raise PatientNotFoundError.
+
+        Delegates rather than repeating the predicate. This is an authorization check -- it is
+        what stops one account reading another's records -- and it was previously copy-pasted
+        into four services. Any future change to what "a patient this caller may read" means
+        (an extra tenancy dimension, an account-status check) has to land in one place or it
+        lands in three and misses the fourth.
+
+        Imported inside the method: PatientService imports from this module's siblings, so a
+        module-level import would close a cycle. Same pattern as DocumentService._get_patient.
+        """
+        from app.services.patient_service import PatientService
+
+        return await PatientService(self.db).get(account_id, patient_id)
 
     async def _session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> ReasoningSession:
         result = await self.db.execute(
@@ -82,7 +86,9 @@ class ReasoningService:
         record = await self.records.assemble(patient_id)
         return record.model_dump(mode="json")
 
-    async def _safety_evaluator(self, account_id: uuid.UUID, patient_id: uuid.UUID):
+    async def _safety_evaluator(
+        self, account_id: uuid.UUID, patient_id: uuid.UUID
+    ) -> SafetyEvaluator:
         """Precompute the patient's active safety flags into a constant evaluator callable."""
         results = await SafetyService(self.db).active_flags(
             account_id=account_id, patient_id=patient_id
@@ -109,7 +115,7 @@ class ReasoningService:
         self,
         account_id: uuid.UUID,
         patient_id: uuid.UUID,
-        emit=None,
+        emit: EventEmitter | None = None,
     ) -> ReasoningContext:
         ctx = ReasoningContext(
             llm=LLMClient(),
@@ -125,7 +131,7 @@ class ReasoningService:
             ctx.emit = emit
         return ctx
 
-    async def _make_retriever(self):
+    async def _make_retriever(self) -> Retriever:
         # Pull the whole active corpus once; score in-memory (the agent's retriever is sync and
         # has no DB/event-loop access).
         from app.services.guideline_service import lexical_score
@@ -291,7 +297,7 @@ class ReasoningService:
 
     # --------------------------------------------------------------- pipeline
     async def run(
-        self, account_id: uuid.UUID, session_id: uuid.UUID, emit=None
+        self, account_id: uuid.UUID, session_id: uuid.UUID, emit: EventEmitter | None = None
     ) -> tuple[ReasoningSession, list[ClinicalSuggestion]]:
         session = await self._session(account_id, session_id)
         # When the LLM is unavailable the pipeline still runs deterministically (degraded mode):
@@ -400,7 +406,9 @@ class ReasoningService:
             )
         return rows
 
-    async def stream(self, account_id: uuid.UUID, session_id: uuid.UUID):
+    async def stream(
+        self, account_id: uuid.UUID, session_id: uuid.UUID
+    ) -> AsyncGenerator[tuple[str, dict], None]:
         """Async generator of (event, data) tuples for SSE, running the pipeline live."""
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()

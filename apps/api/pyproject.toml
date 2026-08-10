@@ -31,7 +31,9 @@ python_version = "3.12"
 plugins = ["pydantic.mypy"]
 ignore_missing_imports = true
 warn_unused_ignores = true
-disallow_untyped_defs = false
+# CLAUDE.md specifies mypy strict mode. This was off, which let 17 defs across 8 files go
+# unannotated; those are annotated now, so it is on to keep them that way.
+disallow_untyped_defs = true
 
 [tool.coverage.run]
 # SQLAlchemy async executes inside greenlets; without this, service-layer lines that

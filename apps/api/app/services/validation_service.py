@@ -20,6 +20,7 @@ from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
+from app.models.reasoning_session import ReasoningSession
 from app.models.validation import ValidationRun
 from app.services.audit_service import AuditService
 from app.services.reasoning_service import ReasoningService
@@ -128,7 +129,7 @@ class ValidationService:
         await self.db.flush()
         return patient
 
-    def _score(self, vignette: dict, session, suggestions: list) -> dict:
+    def _score(self, vignette: dict, session: ReasoningSession, suggestions: list) -> dict:
         diffs = [s for s in suggestions if s.output_type in ("differential", "cant_miss")]
         titles = [s.title.lower() for s in diffs]
         expected = [e.lower() for e in vignette.get("expected_diagnoses", [])]
