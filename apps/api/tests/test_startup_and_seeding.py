@@ -66,7 +66,7 @@ async def test_seeded_vocabulary_maps_indian_brands_to_generics(db):
 async def test_seed_failure_is_logged_and_never_crashes_startup(monkeypatch, caplog, sessionmaker):
     """A seeding failure degrades safety coverage but must not stop the API from booting —
     it has to be visible in the log instead."""
-    monkeypatch.setattr("app.db.session.get_sessionmaker", lambda: sessionmaker)
+    monkeypatch.setattr("app.main.get_sessionmaker", lambda: sessionmaker)
 
     async def boom(_db):
         raise RuntimeError("seed table missing")
@@ -81,7 +81,7 @@ async def test_seed_failure_is_logged_and_never_crashes_startup(monkeypatch, cap
 
 @pytest.mark.asyncio
 async def test_seed_data_runs_and_commits_on_a_fresh_database(monkeypatch, caplog, sessionmaker):
-    monkeypatch.setattr("app.db.session.get_sessionmaker", lambda: sessionmaker)
+    monkeypatch.setattr("app.main.get_sessionmaker", lambda: sessionmaker)
     with caplog.at_level("DEBUG"):
         await _seed_drug_data()  # already seeded by the fixture — the no-op branch
     assert not any(rec.levelname == "ERROR" for rec in caplog.records)
@@ -103,15 +103,16 @@ async def test_lifespan_refuses_to_start_with_an_insecure_production_config(monk
 
 @pytest.mark.asyncio
 async def test_lifespan_starts_in_development(monkeypatch, sessionmaker):
-    monkeypatch.setattr("app.db.session.get_sessionmaker", lambda: sessionmaker)
-    monkeypatch.setattr("app.main.dispose_engine", _noop)
+    """``app.main`` binds ``get_sessionmaker`` at import time, so the patch target must be
+    ``app.main.get_sessionmaker`` -- patching ``app.db.session.get_sessionmaker`` leaves the
+    real factory in play, which builds the process-global engine against the real
+    ``DATABASE_URL`` and leaks it (bound to this test's event loop) into every later test.
+    ``dispose_engine`` is deliberately left unpatched: it is a no-op when no global engine
+    exists, and is the only thing that clears one if it does."""
+    monkeypatch.setattr("app.main.get_sessionmaker", lambda: sessionmaker)
 
     async with lifespan(create_app()):
         pass  # no exception is the assertion
-
-
-async def _noop() -> None:
-    return None
 
 
 def test_every_router_is_mounted_under_the_versioned_prefix():
