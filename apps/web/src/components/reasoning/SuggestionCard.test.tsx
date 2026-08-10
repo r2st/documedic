@@ -216,4 +216,101 @@ describe('SuggestionCard', () => {
     render(<SuggestionCard suggestion={suggestion({ citations: [] })} sessionId="sess-1" />);
     expect(screen.queryByText('Guideline citations (grounding)')).not.toBeInTheDocument();
   });
+
+  it('flattens an array of malformed LLM output into readable text', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          body: ['Consolidation on imaging', '', 'Raised inflammatory markers'] as unknown as string,
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    // Empty members are dropped rather than leaving a dangling separator.
+    expect(
+      screen.getByText('Consolidation on imaging; Raised inflammatory markers'),
+    ).toBeInTheDocument();
+  });
+
+  it('stringifies a primitive that arrived where prose was expected', () => {
+    render(<SuggestionCard suggestion={suggestion({ body: true as unknown as string })} sessionId="sess-1" />);
+    expect(screen.getByText('true')).toBeInTheDocument();
+  });
+
+  it('falls back to the values of an object with none of the recognised text keys', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          body: { finding: 'Crackles at the left base', severity: 'moderate' } as unknown as string,
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('Crackles at the left base; moderate')).toBeInTheDocument();
+  });
+
+  it('renders nothing rather than crashing when a value is of an unrenderable type', () => {
+    render(
+      <SuggestionCard
+        // A function is the one typeof asText cannot coerce -- it must degrade to empty,
+        // never reach React as-is.
+        suggestion={suggestion({ body: (() => 'nope') as unknown as string })}
+        sessionId="sess-1"
+      />,
+    );
+    // The card still renders its title; the unrenderable body is simply dropped.
+    expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+    expect(screen.queryByText(/nope/)).not.toBeInTheDocument();
+  });
+
+  it('attributes an evidence item to its source reference when one is given', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          evidence: {
+            evidence_for: [{ text: 'CRP 180 mg/L', source_ref: 'lab:2026-01-02' }],
+            evidence_against: [],
+          },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('(lab:2026-01-02)')).toBeInTheDocument();
+  });
+
+  it('renders the evidence block when only against-evidence is present', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          evidence: { evidence_for: [], evidence_against: [{ text: 'Afebrile throughout' }] },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('Evidence against')).toBeInTheDocument();
+    expect(screen.queryByText('Evidence supporting')).not.toBeInTheDocument();
+  });
+
+  it('survives an evidence payload missing both arrays entirely', () => {
+    render(<SuggestionCard suggestion={suggestion({ evidence: {} })} sessionId="sess-1" />);
+    expect(screen.queryByText('Evidence supporting')).not.toBeInTheDocument();
+    expect(screen.queryByText('Evidence against')).not.toBeInTheDocument();
+    // The conclusion still renders -- absent evidence must not blank the card.
+    expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
+  });
+
+  it("surfaces the can't-miss badge so a time-critical diagnosis is never buried", () => {
+    render(<SuggestionCard suggestion={suggestion({ cant_miss_flag: true })} sessionId="sess-1" />);
+    expect(screen.getByText(/can'?t.?miss/i)).toBeInTheDocument();
+  });
+
+  it('omits the probability band badge when the model returned no confidence', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ confidence_band: null as unknown as 'moderate' })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
+  });
 });

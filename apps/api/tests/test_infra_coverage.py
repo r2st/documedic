@@ -225,6 +225,53 @@ async def test_dispose_engine_is_a_no_op_when_no_engine_was_created(monkeypatch)
     await db_session.dispose_engine()  # must not raise
 
 
+class _FakeEngineForMemoisation:
+    def __init__(self) -> None:
+        self.disposed = False
+
+    async def dispose(self) -> None:
+        self.disposed = True
+
+
+async def test_get_engine_memoises_a_single_engine_per_process(monkeypatch):
+    """The engine is built lazily and cached in a module global. That memoisation is the
+    reason a leaked engine poisons every later event loop, so pin the behaviour down."""
+    built: list[_FakeEngineForMemoisation] = []
+
+    def _fake_make_engine():
+        engine = _FakeEngineForMemoisation()
+        built.append(engine)
+        return engine
+
+    monkeypatch.setattr(db_session, "_make_engine", _fake_make_engine)
+    monkeypatch.setattr(db_session, "_engine", None)
+
+    first = db_session.get_engine()
+    second = db_session.get_engine()
+
+    assert first is second, "get_engine() must reuse the cached engine, not rebuild it"
+    assert len(built) == 1
+
+    await db_session.dispose_engine()
+    assert first.disposed is True
+    assert db_session.get_engine() is not first, "dispose must let the next call rebuild"
+    await db_session.dispose_engine()
+
+
+async def test_get_sessionmaker_memoises_and_is_rebuilt_after_dispose(monkeypatch):
+    monkeypatch.setattr(db_session, "_make_engine", _FakeEngineForMemoisation)
+    monkeypatch.setattr(db_session, "_engine", None)
+    monkeypatch.setattr(db_session, "_sessionmaker", None)
+
+    first = db_session.get_sessionmaker()
+    assert db_session.get_sessionmaker() is first
+
+    await db_session.dispose_engine()
+    assert db_session._sessionmaker is None
+    assert db_session.get_sessionmaker() is not first
+    await db_session.dispose_engine()
+
+
 # --------------------------------------------------------------- audit chain locking
 
 

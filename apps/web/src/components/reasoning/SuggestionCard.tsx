@@ -35,7 +35,7 @@ function asText(value: unknown): string {
 }
 
 function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'against' }) {
-  if (!items?.length) return null;
+  if (!items.length) return null;
   const styles = kind === 'for'
     ? { text: 'text-emerald-800', bg: 'bg-emerald-50', icon: 'text-emerald-500', marker: '✓', label: 'supporting' }
     : { text: 'text-red-800', bg: 'bg-red-50', icon: 'text-red-500', marker: '✗', label: 'against' };

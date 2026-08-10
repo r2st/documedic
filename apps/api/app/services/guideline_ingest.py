@@ -200,5 +200,5 @@ async def _main() -> None:  # pragma: no cover — `python -m app.services.guide
     print(f"Ingested {added} guideline chunks (corpus {settings.guideline_corpus_version}).")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover — module entrypoint
     asyncio.run(_main())

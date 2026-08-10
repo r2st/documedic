@@ -121,6 +121,75 @@ describe('buildTimeline', () => {
     );
     expect(entries[0].title).toBe('Derived marker');
   });
+
+  it('tolerates a record whose event collections are absent entirely', () => {
+    // The API omits empty collections rather than sending [], so every loop has to survive
+    // an undefined source without throwing.
+    expect(buildTimeline({ patient_id: 'p1' } as LongitudinalRecord)).toEqual([]);
+  });
+
+  it('synthesises a key for every event type when the row carries no id', () => {
+    const entries = buildTimeline(
+      record({
+        medications: [{ generic_name: 'Metformin', event_date: '2024-01-10' }],
+        lab_results: [{ marker_name: 'HbA1c', sample_date: '2024-01-11' }],
+        conditions: [{ condition_name: 'T2DM', onset_date: '2024-01-12' }],
+        derived_markers: [{ marker_name: 'eGFR', computed_at: '2024-01-13' }],
+      }),
+    );
+    expect(entries).toHaveLength(4);
+    const ids = entries.map((e) => e.id);
+    expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(4);
+  });
+
+  it('falls back to the raw Indian brand name when no generic has been resolved yet', () => {
+    // Vocabulary resolution can lag ingestion; the timeline must still name the drug.
+    const entries = buildTimeline(
+      record({ medications: [{ id: 'm1', brand_name_raw: 'Crocin', event_date: '2024-01-10' }] }),
+    );
+    expect(entries[0].title).toBe('Crocin');
+  });
+
+  it('labels a medication with neither generic nor brand name as unknown', () => {
+    const entries = buildTimeline(record({ medications: [{ id: 'm1', event_date: '2024-01-10' }] }));
+    expect(entries[0].title).toBe('Unknown medication');
+    expect(entries[0].detail).toBeNull();
+  });
+
+  it('falls back to generic titles for an unnamed lab and an unnamed condition', () => {
+    const entries = buildTimeline(
+      record({
+        lab_results: [{ id: 'l1', sample_date: '2024-02-01' }],
+        conditions: [{ id: 'c1', onset_date: '2024-01-01' }],
+      }),
+    );
+    expect(entries.find((e) => e.kind === 'lab_result')?.title).toBe('Lab result');
+    expect(entries.find((e) => e.kind === 'condition')?.title).toBe('Condition');
+  });
+
+  it('omits the unit and the abnormal marker from a lab detail when neither applies', () => {
+    const entries = buildTimeline(
+      record({
+        lab_results: [
+          { id: 'l1', marker_name: 'Sodium', sample_date: '2024-02-01', value_numeric: 138, is_abnormal: false },
+        ],
+      }),
+    );
+    expect(entries[0].detail).toBe('138');
+  });
+
+  it('keeps both entries in a stable order when two events share a date', () => {
+    const entries = buildTimeline(
+      record({
+        conditions: [
+          { id: 'c1', condition_name: 'Hypertension', onset_date: '2024-01-01' },
+          { id: 'c2', condition_name: 'T2DM', onset_date: '2024-01-01' },
+        ],
+      }),
+    );
+    expect(entries.map((e) => e.id)).toEqual(['c1', 'c2']);
+  });
 });
 
 describe('Timeline component', () => {
@@ -172,6 +241,18 @@ describe('Timeline component', () => {
     );
     expect(screen.getByText('eGFR')).toBeInTheDocument();
     expect(screen.getByText(/48 mL\/min/)).toBeInTheDocument();
+  });
+
+  it('renders the kind label alone when an event has no detail to append', () => {
+    render(
+      <Timeline
+        record={record({
+          conditions: [{ id: 'c1', condition_name: 'Hypertension', onset_date: '2024-01-01' }],
+        })}
+      />,
+    );
+    // No ` · <detail>` suffix -- the label must stand on its own rather than trailing a separator.
+    expect(screen.getByText('Condition noted')).toBeInTheDocument();
   });
 
   it('falls back to the raw string when a date cannot be parsed', () => {
