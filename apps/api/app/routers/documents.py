@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 import uuid
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import Response
@@ -32,6 +35,31 @@ _MIME_BY_TYPE = {
 
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Anything outside this set is dropped from the ASCII fallback filename. Notably excludes the
+# double quote and the semicolon (which would end/extend the Content-Disposition parameter) and
+# CR/LF (header splitting).
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._ -]")
+
+
+def _content_disposition(file_name: str, disposition: str) -> str:
+    """Build an RFC 6266 Content-Disposition for a clinician-supplied file name.
+
+    Two things make naive f-string interpolation unsafe here. ``file_name`` comes straight
+    off the upload, and HTTP header values are latin-1 encoded by Starlette -- so a
+    Devanagari/Tamil/Bengali name (entirely normal for scanned prescriptions in this
+    product's market) raises UnicodeEncodeError and the document becomes permanently
+    undownloadable. A name containing a double quote or semicolon can also close the quoted
+    string early and inject further disposition parameters.
+
+    So: an aggressively sanitised ASCII ``filename`` for old clients, plus the lossless
+    RFC 5987 ``filename*`` that every current browser prefers.
+    """
+    ascii_name = unicodedata.normalize("NFKD", file_name).encode("ascii", "ignore").decode("ascii")
+    ascii_name = _UNSAFE_FILENAME_CHARS.sub("_", ascii_name).strip(" .")
+    # Transliteration can erase a name entirely (e.g. a wholly Devanagari one).
+    ascii_name = ascii_name or "document"
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(file_name, safe='')}"
 
 
 async def _read_capped(file: UploadFile, limit: int) -> bytes:
@@ -126,8 +154,14 @@ async def download_file(
     service = DocumentService(db)
     document = await service.get(account.id, patient_id, doc_id)
     data = service.storage.read(document.storage_path)
+    # Images may render inline (they are inert, and the type is magic-byte verified). A
+    # user-uploaded PDF is not: the browser's PDF viewer executes embedded JavaScript, and
+    # rendering it inline would run that script against this API's own origin, where the
+    # session's tokens live. PDFs are therefore always handed over as a download.
+    is_image = document.file_type.startswith("image/")
+    disposition = "inline" if is_image else "attachment"
     return Response(
         content=data,
         media_type=_MIME_BY_TYPE.get(document.file_type, "application/octet-stream"),
-        headers={"Content-Disposition": f'inline; filename="{document.file_name}"'},
+        headers={"Content-Disposition": _content_disposition(document.file_name, disposition)},
     )
