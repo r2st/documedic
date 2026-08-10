@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import text
 
@@ -166,13 +168,20 @@ async def test_reading_a_patient_record_is_audited(auth_client):
 
 
 @pytest.mark.asyncio
-async def test_downloading_a_document_is_audited_with_its_filename(auth_client):
-    """Downloading hands over the original scan, so the retrieval itself is recorded."""
+async def test_downloading_a_document_is_audited_without_its_filename(auth_client):
+    """Downloading hands over the original scan, so the retrieval itself is recorded.
+
+    The entry identifies the document by id, not by name. Scan filenames are usually built
+    from the patient's name ("ramesh_kumar_cbc_2026.pdf") and ``audit_logs.payload`` is stored
+    unencrypted, so copying the name in would put a direct identifier into a table that is
+    immutable and never pruned -- for no gain, since entity_id already resolves to the document
+    row that holds the name.
+    """
     patient = await create_patient(auth_client)
     doc = (
         await auth_client.post(
             f"/api/v1/patients/{patient['id']}/documents",
-            files={"file": ("rx.pdf", PRESCRIPTION, "application/pdf")},
+            files={"file": ("ramesh_kumar_rx.pdf", PRESCRIPTION, "application/pdf")},
         )
     ).json()
 
@@ -182,8 +191,13 @@ async def test_downloading_a_document_is_audited_with_its_filename(auth_client):
     audit = (await auth_client.get(f"/api/v1/patients/{patient['id']}/audit")).json()
     downloads = [e for e in audit["items"] if e["action"] == "document_downloaded"]
     assert len(downloads) == 1
+    # Still fully attributable: who, which document, what kind of file.
     assert downloads[0]["entity_id"] == doc["id"]
-    assert downloads[0]["payload"]["file_name"] == "rx.pdf"
+    assert downloads[0]["payload"] == {"file_type": "pdf"}
+
+    # And the name appears nowhere in the trail, on any action.
+    serialised = json.dumps(audit["items"])
+    assert "ramesh_kumar" not in serialised, serialised
 
 
 @pytest.mark.asyncio

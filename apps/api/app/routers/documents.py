@@ -169,7 +169,11 @@ async def download_file(
         patient_id=patient_id,
         entity_type="document",
         entity_id=doc_id,
-        payload={"file_name": document.file_name, "file_type": document.file_type},
+        # file_type only, not file_name -- scan filenames usually carry the patient's name and
+        # audit_logs.payload is stored unencrypted. entity_id identifies the document; its name
+        # lives on the document row, so recording it here adds nothing but a copy of a direct
+        # identifier in a table that is immutable and never pruned.
+        payload={"file_type": document.file_type},
     )
     await db.commit()
     return Response(

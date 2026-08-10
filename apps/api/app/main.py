@@ -33,6 +33,31 @@ logger = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 
+# Keys of a Pydantic error dict that are safe to return to the client. Everything outside this
+# set is dropped by _safe_validation_errors.
+_SAFE_ERROR_KEYS = ("type", "loc", "msg")
+
+
+def _safe_validation_errors(exc: RequestValidationError) -> list[dict]:
+    """Project Pydantic's validation errors down to type/loc/msg, dropping the rejected input.
+
+    Pydantic puts the value it rejected in ``error["input"]``, and FastAPI's default handler
+    returns that verbatim. For a *field-level* failure that is one field's value; but for a
+    ``missing`` error -- the most common kind -- the input is the **entire submitted body**.
+    A patient create that forgets ``full_name`` therefore echoed back phone, address_text and
+    the free-text ``notes`` field (clinical history) in the 422 response, where it reaches the
+    client, any frontend error reporting, and every proxy access log on the way.
+
+    Those columns are encrypted at rest precisely because they are DPDP-sensitive, so handing
+    them back in plaintext over an error path undoes that. Nothing needs them: ``loc`` names
+    the offending field and ``msg`` states the constraint, which is all a client can act on.
+
+    ``ctx`` goes too. It carries constraint metadata (``ctx["expected"]``, already repeated in
+    ``msg``) but for a validator that raises a bare ValueError it also holds the raw exception
+    instance, whose string form is author-controlled and could quote the value.
+    """
+    return [{key: error[key] for key in _SAFE_ERROR_KEYS if key in error} for error in exc.errors()]
+
 
 async def _seed_drug_data() -> None:
     """Seed drug vocabulary, interactions, and contraindications if empty.
@@ -131,11 +156,11 @@ def create_app() -> FastAPI:
                         "message": "The requested resource was not found.",
                     },
                 )
-        # Default 422 for non-UUID validation errors (body, query, etc.). A custom
-        # field_validator that raises a bare ValueError (the standard Pydantic v2 idiom) puts
-        # the raw exception instance in error["ctx"]["error"], which plain json.dumps (what
-        # JSONResponse uses) cannot serialize -- jsonable_encoder coerces it to a string first.
-        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+        # Default 422 for non-UUID validation errors (body, query, etc.), with the rejected
+        # input stripped out -- see _safe_validation_errors.
+        return JSONResponse(
+            status_code=422, content={"detail": jsonable_encoder(_safe_validation_errors(exc))}
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:

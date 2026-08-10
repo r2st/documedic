@@ -106,7 +106,11 @@ class DocumentService:
             patient_id=patient_id,
             entity_type="document",
             entity_id=document.id,
-            payload={"file_name": file_name, "file_type": file_type, "sha256": sha256},
+            # No file_name: uploaded scans are routinely named after the patient
+            # ("ramesh_kumar_cbc_2026.pdf"), and audit_logs.payload is not encrypted. The name
+            # is on the document row, which entity_id already points at, so recording it here
+            # only duplicates a likely direct identifier into an immutable never-pruned table.
+            payload={"file_type": file_type, "sha256": sha256},
         )
         # Phase 1: extraction runs synchronously. (Plan P1-05c upgrades this to a Redis
         # Stream worker with SSE progress; the pipeline interface is unchanged.)
