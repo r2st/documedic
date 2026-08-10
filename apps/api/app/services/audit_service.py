@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_hash import (
@@ -25,6 +26,11 @@ from app.models.audit_log import AuditLog
 
 # Arbitrary fixed key for the append advisory lock.
 _AUDIT_LOCK_KEY = 4823701
+
+# How many times an append re-reads the chain tail after losing a sequence race. Each retry
+# only loses to an append that *succeeded*, so the loop makes progress; the bound exists to
+# turn a pathological livelock into a loud failure rather than a hung request.
+_MAX_SEQUENCE_ATTEMPTS = 5
 
 
 def _iso_utc(dt: datetime) -> str:
@@ -87,41 +93,70 @@ class AuditService:
         entity_id: uuid.UUID | None = None,
         payload: dict | None = None,
     ) -> AuditLog:
-        """Append one immutable, hash-chained audit entry. Does not commit."""
+        """Append one immutable, hash-chained audit entry. Does not commit.
+
+        Retries on a sequence collision. Assigning the sequence is a read of the current
+        maximum followed by an insert, so two appends that overlap can read the same maximum
+        and claim the same sequence; the unique constraint then fails one of them. On
+        PostgreSQL the advisory lock in :meth:`_lock` usually prevents that, but the lock is
+        not the guarantee — it is an optimisation that keeps the common case from colliding.
+        The retry is what makes the invariant hold, and it holds on every backend, including
+        the SQLite deployments where ``_lock`` does nothing at all.
+
+        Each attempt re-reads the tail of the chain, because a collision means someone else
+        appended: both the sequence *and* ``prev_hash`` have moved, so the record hash has to
+        be recomputed against the new predecessor or the chain would not verify.
+
+        The insert runs inside a SAVEPOINT so a failed attempt rolls back only itself. Without
+        that, the unique violation would poison the caller's whole transaction — and the
+        caller is mid-way through writing the clinical data this entry describes.
+        """
         await self._lock()
-        latest = await self._latest()
-        sequence = (latest.sequence + 1) if latest else 1
-        prev_hash = latest.record_hash if latest else GENESIS_HASH
-        created_at = datetime.now(UTC)
         payload = payload or {}
 
-        canonical = canonical_payload(
-            sequence=sequence,
-            action=action,
-            account_id=str(account_id) if account_id else None,
-            patient_id=str(patient_id) if patient_id else None,
-            entity_type=entity_type,
-            entity_id=str(entity_id) if entity_id else None,
-            payload=payload,
-            created_at=_iso_utc(created_at),
-        )
-        record_hash = compute_record_hash(prev_hash, canonical)
+        for attempt in range(_MAX_SEQUENCE_ATTEMPTS):
+            latest = await self._latest()
+            sequence = (latest.sequence + 1) if latest else 1
+            prev_hash = latest.record_hash if latest else GENESIS_HASH
+            created_at = datetime.now(UTC)
 
-        entry = AuditLog(
-            sequence=sequence,
-            account_id=account_id,
-            patient_id=patient_id,
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            payload=payload,
-            prev_hash=prev_hash,
-            record_hash=record_hash,
-            created_at=created_at,
-        )
-        self.db.add(entry)
-        await self.db.flush()
-        return entry
+            canonical = canonical_payload(
+                sequence=sequence,
+                action=action,
+                account_id=str(account_id) if account_id else None,
+                patient_id=str(patient_id) if patient_id else None,
+                entity_type=entity_type,
+                entity_id=str(entity_id) if entity_id else None,
+                payload=payload,
+                created_at=_iso_utc(created_at),
+            )
+            record_hash = compute_record_hash(prev_hash, canonical)
+
+            entry = AuditLog(
+                sequence=sequence,
+                account_id=account_id,
+                patient_id=patient_id,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                payload=payload,
+                prev_hash=prev_hash,
+                record_hash=record_hash,
+                created_at=created_at,
+            )
+            try:
+                async with self.db.begin_nested():
+                    self.db.add(entry)
+                    await self.db.flush()
+            except IntegrityError:
+                if attempt == _MAX_SEQUENCE_ATTEMPTS - 1:
+                    raise
+                # The savepoint rollback has already detached `entry`; the next attempt
+                # builds a fresh one against the chain tail as it now stands.
+                continue
+            return entry
+
+        raise AssertionError("unreachable: the loop returns or raises on the final attempt")
 
     async def list_for_patient(
         self,
