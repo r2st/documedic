@@ -46,3 +46,6 @@ nginx/ssl/
 # --- Secrets / keys (NEVER commit) ---
 keys
 keys/
+
+# Vitest / v8 coverage output
+coverage/
