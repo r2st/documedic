@@ -50,3 +50,18 @@ describe('SafetyFlagCard', () => {
     expect(screen.getByText('warning')).toBeInTheDocument();
   });
 });
+
+describe('ConfidenceBadge fallbacks', () => {
+  it('falls back to a neutral style for an unrecognised confidence band', () => {
+    render(<ConfidenceBadge band="unheard-of" value={0.5} />);
+    expect(screen.getByText('50%').className).toContain('bg-slate-50');
+  });
+});
+
+describe('SafetyFlagCard fallbacks', () => {
+  it('still renders the summary for an unrecognised severity', () => {
+    render(<SafetyFlagCard severity="mystery_level" isHardBlock={false} summary="Unclassified flag" />);
+    expect(screen.getByText('mystery level')).toBeInTheDocument();
+    expect(screen.getByText('Unclassified flag')).toBeInTheDocument();
+  });
+});

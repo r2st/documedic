@@ -207,3 +207,81 @@ async def test_health_reports_demo_mode(client, demo_llm):
     assert body["llm_mode"] == "demo"
     assert body["llm_demo_fallback"] is True
     assert body["llm_simulated"] is True
+
+
+# --------------------------------------------------------------------- unit: demo payload shaping
+
+
+def test_hypothesis_payload_merges_all_specialties_when_none_is_detected():
+    """A system prompt with no recognisable specialty still yields a usable differential."""
+    scn = demo_data.select_scenario("chest pain")
+    payload = demo_data._hypothesis_payload(scn, "no specialty here")
+    names = {h["diagnosis_name"] for h in payload["hypotheses"]}
+    # Union across Cardiology + General Internal Medicine + Primary Care for the cardiac scenario.
+    assert "Stable angina (suspected)" in names
+    assert "Gastro-oesophageal reflux disease" in names
+    assert "Musculoskeletal chest wall pain" in names
+
+
+def test_hypothesis_payload_scopes_to_the_detected_specialty():
+    scn = demo_data.select_scenario("fever and productive cough")
+    system = "You are on a multidisciplinary panel: Infectious Disease"
+    payload = demo_data._hypothesis_payload(scn, system)
+    names = {h["diagnosis_name"] for h in payload["hypotheses"]}
+    assert names == {
+        "Community-acquired pneumonia (suspected)",
+        "Pulmonary tuberculosis (to consider)",
+    }
+
+
+def test_hypothesis_payload_is_empty_for_a_specialty_with_no_scenario_input():
+    scn = demo_data.select_scenario("fever and productive cough")
+    payload = demo_data._hypothesis_payload(scn, "multidisciplinary panel: Cardiology")
+    assert payload["hypotheses"] == []
+
+
+def test_devils_payload_takes_the_leading_hypothesis_from_the_case_text():
+    scn = demo_data.select_scenario("chest pain")
+    user = "Case summary\nLeading hypothesis: Aortic dissection\nOther"
+    payload = demo_data._devils_payload(scn, user)
+    assert payload["leading_hypothesis"] == "Aortic dissection"
+
+
+def test_devils_payload_falls_back_to_the_scenario_leading_when_the_label_is_blank():
+    scn = demo_data.select_scenario("chest pain")
+    payload = demo_data._devils_payload(scn, "Leading hypothesis:   ")
+    assert payload["leading_hypothesis"] == scn.leading
+
+
+def test_devils_payload_falls_back_when_the_case_text_has_no_leading_label():
+    scn = demo_data.select_scenario("chest pain")
+    assert demo_data._devils_payload(scn, "")["leading_hypothesis"] == scn.leading
+
+
+def test_simulated_response_returns_a_bare_marked_payload_for_an_unknown_agent():
+    """An unrecognised system prompt must still be marked as demo, never raise."""
+    payload = demo_data.simulated_response("You are some brand new agent", "fever")
+    assert payload == {"_demo": True}
+
+
+def test_select_scenario_prefers_the_scenario_with_more_keyword_hits():
+    # "chest pain" (cardiac) vs "fever"+"cough"+"breathless" (respiratory) -> respiratory wins.
+    scn = demo_data.select_scenario("fever with cough and breathless, mild chest pain")
+    assert scn.key == "respiratory"
+
+
+def test_select_scenario_handles_empty_input():
+    assert demo_data.select_scenario("").key == "general"
+
+
+def test_extraction_payload_is_marked_and_well_shaped():
+    payload = demo_data.extraction_payload()
+    assert payload["_demo"] is True
+    assert payload["document_type"] == "prescription"
+    types = {e["entity_type"] for e in payload["entities"]}
+    assert types == {"medication", "lab_result", "condition"}
+    # Every demo entity is visibly tagged or carries deliberately low confidence.
+    for entity in payload["entities"]:
+        assert entity["confidence"], "demo entities must carry confidence scores"
+        assert max(entity["confidence"].values()) <= 0.6
+

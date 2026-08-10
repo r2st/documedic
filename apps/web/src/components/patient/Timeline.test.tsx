@@ -70,6 +70,57 @@ describe('buildTimeline', () => {
     expect(buildTimeline(null)).toEqual([]);
     expect(buildTimeline(undefined)).toEqual([]);
   });
+
+  it('includes derived markers with their computed_at date, value and unit', () => {
+    const entries = buildTimeline(
+      record({
+        derived_markers: [
+          { id: 'd1', marker_name: 'eGFR', computed_at: '2024-05-02', value_numeric: 48, unit: 'mL/min/1.73m2' },
+        ],
+      }),
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: 'd1',
+      kind: 'derived_marker',
+      title: 'eGFR',
+      detail: '48 mL/min/1.73m2',
+    });
+  });
+
+  it('skips derived markers with no computed_at date rather than fabricating one', () => {
+    const entries = buildTimeline(
+      record({ derived_markers: [{ id: 'd1', marker_name: 'BMI', computed_at: null }] }),
+    );
+    expect(entries).toEqual([]);
+  });
+
+  it('keeps a string-valued measurement verbatim and omits the unit when absent', () => {
+    const entries = buildTimeline(
+      record({
+        derived_markers: [
+          { id: 'd1', marker_name: 'BP category', computed_at: '2024-05-02', value_numeric: 'stage 2' },
+        ],
+      }),
+    );
+    expect(entries[0].detail).toBe('stage 2');
+  });
+
+  it('leaves the detail null when a marker carries no value at all', () => {
+    const entries = buildTimeline(
+      record({
+        derived_markers: [{ id: 'd1', marker_name: 'BMI', computed_at: '2024-05-02', value_numeric: null }],
+      }),
+    );
+    expect(entries[0].detail).toBeNull();
+  });
+
+  it('falls back to a generic title when a derived marker has no name', () => {
+    const entries = buildTimeline(
+      record({ derived_markers: [{ id: 'd1', computed_at: '2024-05-02', value_numeric: 3 }] }),
+    );
+    expect(entries[0].title).toBe('Derived marker');
+  });
 });
 
 describe('Timeline component', () => {
@@ -107,5 +158,30 @@ describe('Timeline component', () => {
   it('does not crash on a null record', () => {
     render(<Timeline record={null} />);
     expect(screen.getByText('No timeline events yet.')).toBeInTheDocument();
+  });
+
+  it('renders a derived marker row with its formatted date and value', () => {
+    render(
+      <Timeline
+        record={record({
+          derived_markers: [
+            { id: 'd1', marker_name: 'eGFR', computed_at: '2024-05-02', value_numeric: 48, unit: 'mL/min' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('eGFR')).toBeInTheDocument();
+    expect(screen.getByText(/48 mL\/min/)).toBeInTheDocument();
+  });
+
+  it('falls back to the raw string when a date cannot be parsed', () => {
+    render(
+      <Timeline
+        record={record({
+          conditions: [{ id: 'c1', condition_name: 'Hypertension', onset_date: 'not-a-date', status: 'active' }],
+        })}
+      />,
+    );
+    expect(screen.getByText('not-a-date')).toBeInTheDocument();
   });
 });

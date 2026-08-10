@@ -108,3 +108,57 @@ async def test_pilot_status(auth_client):
     resp = await auth_client.get("/api/v1/pilot/status")
     assert resp.status_code == 200
     assert "pilot_mode" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_validation_harness_handles_a_vignette_with_no_intake_questions(
+    auth_client, monkeypatch
+):
+    """The harness must not stall when triage asks nothing — it proceeds straight to reasoning."""
+    from app.services.reasoning_service import ReasoningService
+
+    async def _no_questions(self, session_id):
+        return []
+
+    submitted: list = []
+    original_submit = ReasoningService.submit_answers
+
+    async def _record_submit(self, account_id, session_id, answers):
+        submitted.append(answers)
+        return await original_submit(self, account_id, session_id, answers)
+
+    monkeypatch.setattr(ReasoningService, "pending_questions", _no_questions)
+    monkeypatch.setattr(ReasoningService, "submit_answers", _record_submit)
+
+    resp = await auth_client.post("/api/v1/validation/run")
+    assert resp.status_code == 201, resp.text
+    run = resp.json()
+    # Every vignette still ran and scored, and the intake loop broke out immediately.
+    assert len(run["results"]) == run["vignette_count"] >= 5
+    assert submitted == []
+    # Safety-critical metrics are unaffected by the (absent) intake step.
+    assert run["metrics"]["hard_block_accuracy"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_validation_run_is_scoped_to_the_owning_account(auth_client, client):
+    """A validation run belongs to one account; another clinician cannot read it."""
+    run_id = (await auth_client.post("/api/v1/validation/run")).json()["id"]
+
+    resp = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "other@example.com", "password": "password123", "display_name": "Dr Other"},
+    )
+    other = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    assert (await client.get(f"/api/v1/validation/runs/{run_id}", headers=other)).status_code == 404
+    assert (await client.get("/api/v1/validation/runs", headers=other)).json() == []
+
+
+@pytest.mark.asyncio
+async def test_validation_run_missing_id_is_404(auth_client):
+    import uuid
+
+    resp = await auth_client.get(f"/api/v1/validation/runs/{uuid.uuid4()}")
+    assert resp.status_code == 404
+

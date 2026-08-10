@@ -177,4 +177,47 @@ describe('ReasoningTheatre', () => {
 
     expect(MockEventSource.instances).toHaveLength(0);
   });
+
+  it('marks a lane done when its agent completes and keeps the remaining lanes active', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('reasoning_start', { sequence: ['triage', 'verifier'] });
+      source.emit('agent_start', { agent: 'triage', label: 'Triage' });
+      source.emit('agent_complete', { agent: 'triage' });
+    });
+
+    // The completed lane gets the muted treatment plus a tick; the pending one stays emphasised.
+    const done = screen.getByText('Triage');
+    expect(done.className).toContain('text-slate-500');
+    expect(screen.getByText('verifier').className).toContain('font-medium');
+    expect(done.closest('li')?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('renders the live hypothesis ranking with each probability band', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [
+          { diagnosis_name: 'Community-acquired pneumonia', probability_band: 'moderate' },
+          { diagnosis_name: 'Acute bronchitis', probability_band: 'low' },
+        ],
+      });
+    });
+
+    expect(screen.getByText('Hypotheses (live ranking)')).toBeInTheDocument();
+    expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+    expect(screen.getByText('moderate')).toBeInTheDocument();
+    expect(screen.getByText('Acute bronchitis')).toBeInTheDocument();
+    expect(screen.getByText('low')).toBeInTheDocument();
+  });
+
+  it('does not render a hypothesis card before any hypothesis has streamed', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await latestSource();
+    expect(screen.queryByText('Hypotheses (live ranking)')).not.toBeInTheDocument();
+  });
 });

@@ -137,4 +137,83 @@ describe('SuggestionCard', () => {
     );
     expect(screen.getByText('Structured object instead of a string')).toBeInTheDocument();
   });
+
+  it('renders every part of the devils-advocate critique, not just the summary', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          devils_advocate: {
+            summary: 'The leading impression rests on limited data.',
+            disconfirming_evidence: ['No chest imaging has confirmed consolidation.', ''],
+            alternative_explanations: ['Acute bronchitis', 'Viral upper respiratory infection'],
+            base_rate_caveat: 'Most acute cough is viral and self-limiting.',
+          },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('The leading impression rests on limited data.')).toBeVisible();
+    expect(screen.getByText('No chest imaging has confirmed consolidation.')).toBeVisible();
+    expect(
+      screen.getByText(/Acute bronchitis, Viral upper respiratory infection/),
+    ).toBeVisible();
+    expect(screen.getByText('Most acute cough is viral and self-limiting.')).toBeVisible();
+  });
+
+  it('renders guideline citations with source, document, heading and snippet', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          output_type: 'management',
+          citations: [
+            {
+              source: 'icmr',
+              document_title: 'Standard Treatment Workflow — Pneumonia',
+              heading: 'Empirical antibiotics',
+              section_id: 'stw-cap-3.2',
+              snippet: 'Assess severity before selecting an empirical regimen.',
+              score: 0.91,
+            },
+          ],
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('Guideline citations (grounding)')).toBeInTheDocument();
+    expect(screen.getByText('ICMR')).toBeInTheDocument();
+    expect(screen.getByText(/Standard Treatment Workflow — Pneumonia/)).toBeInTheDocument();
+    expect(screen.getByText(/Empirical antibiotics/)).toBeInTheDocument();
+    expect(screen.getByText('[stw-cap-3.2]')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Assess severity before selecting an empirical regimen\./),
+    ).toBeInTheDocument();
+  });
+
+  it('renders a citation with no heading or snippet without emitting placeholder text', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          citations: [
+            {
+              source: 'nice',
+              document_title: 'NG191',
+              heading: null,
+              section_id: 'ng191-1.1',
+              snippet: null,
+              score: null,
+            },
+          ],
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText('NICE')).toBeInTheDocument();
+    expect(screen.getByText('[ng191-1.1]')).toBeInTheDocument();
+    expect(screen.queryByText(/undefined|null/)).not.toBeInTheDocument();
+  });
+
+  it('does not render a citations block when the suggestion has no citations', () => {
+    render(<SuggestionCard suggestion={suggestion({ citations: [] })} sessionId="sess-1" />);
+    expect(screen.queryByText('Guideline citations (grounding)')).not.toBeInTheDocument();
+  });
 });
