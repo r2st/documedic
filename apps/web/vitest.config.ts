@@ -17,13 +17,12 @@ export default defineConfig({
       reporter: ['text', 'lcov'],
       // Ratchet: raise these as coverage improves, never lower them.
       //
-      // Branches sit at 99.58%: the three uncovered arms are guards that cannot be reached
-      // through the rendered UI (an unknown Metric label, and the `!sessionId` / `!docId`
-      // early returns, both behind affordances that only exist once the value is set). They
-      // are kept as defence in depth, so the branch bar stays a point below the rest.
+      // Branches reached 100% once the accessibility suite exercised the remaining guards
+      // (the `!sessionId` / `!docId` early returns and the unknown-Metric-label arm), so the
+      // bar now sits level with the rest.
       thresholds: {
         statements: 100,
-        branches: 99,
+        branches: 100,
         functions: 100,
         lines: 100,
       },

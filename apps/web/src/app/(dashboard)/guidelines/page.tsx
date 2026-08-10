@@ -34,9 +34,13 @@ export default function GuidelinesPage() {
         )}
       </div>
 
-      <form onSubmit={search} className="flex gap-2">
+      <form onSubmit={search} className="flex gap-2" role="search">
         <div className="relative flex-1">
+          <label htmlFor="guideline-search" className="sr-only">
+            Search the clinical guideline corpus
+          </label>
           <svg
+            aria-hidden="true"
             className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
             fill="none"
             viewBox="0 0 24 24"
@@ -50,6 +54,8 @@ export default function GuidelinesPage() {
             />
           </svg>
           <input
+            id="guideline-search"
+            type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search guidelines (e.g. management of dengue)"
@@ -59,7 +65,7 @@ export default function GuidelinesPage() {
         <Button type="submit">Search</Button>
       </form>
 
-      <div className="space-y-3">
+      <div className="space-y-3" aria-live="polite">
         {results.length > 0 && (
           <div className="animate-fade-in space-y-3">
             {results.map((c, i) => (
@@ -97,6 +103,7 @@ export default function GuidelinesPage() {
         {hasSearched && results.length === 0 && (
           <div className="animate-fade-in rounded-2xl border-2 border-dashed border-slate-200 px-6 py-12 text-center">
             <svg
+              aria-hidden="true"
               className="mx-auto h-10 w-10 text-slate-300"
               fill="none"
               viewBox="0 0 24 24"
@@ -119,6 +126,7 @@ export default function GuidelinesPage() {
         {!hasSearched && results.length === 0 && (
           <div className="rounded-2xl border-2 border-dashed border-slate-200 px-6 py-12 text-center">
             <svg
+              aria-hidden="true"
               className="mx-auto h-10 w-10 text-slate-300"
               fill="none"
               viewBox="0 0 24 24"

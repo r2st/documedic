@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Button } from '@/components/ui';
+import { Button, ErrorBanner } from '@/components/ui';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -39,14 +39,7 @@ export default function SignupPage() {
           <p className="mt-1 text-sm text-slate-500">Set up your credentials to get started</p>
         </div>
 
-        {error && (
-          <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-            <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-            <span>{error}</span>
-          </div>
-        )}
+        {error && <ErrorBanner message={error} />}
 
         <div className="space-y-4">
           <div>

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import type { ExtractionResult } from '@/lib/types';
-import { Button, Card, ConfidenceBadge } from '@/components/ui';
+import { Button, Card, ConfidenceBadge, ErrorBanner } from '@/components/ui';
 
 export default function UploadPage({ params }: { params: { id: string } }) {
   const { id } = params;
@@ -20,6 +20,9 @@ export default function UploadPage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  // The file input is a transparent overlay on the drop zone, so its own focus ring is
+  // invisible. Without this a keyboard user tabs onto the control and sees nothing change.
+  const [inputFocused, setInputFocused] = useState(false);
 
   async function onUpload(file: File) {
     setError(null);
@@ -78,6 +81,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
         className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
       >
         <svg
+          aria-hidden="true"
           className="h-4 w-4 transition-transform group-hover:-translate-x-0.5"
           fill="none"
           viewBox="0 0 24 24"
@@ -91,14 +95,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
 
       <h1 className="text-2xl font-bold tracking-tight text-slate-900">Upload document</h1>
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-          <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       {!reviewed && (
         <Card>
@@ -115,11 +112,11 @@ export default function UploadPage({ params }: { params: { id: string } }) {
               isDragging
                 ? 'border-brand-400 bg-brand-50'
                 : 'border-slate-300 bg-slate-50 hover:border-brand-300 hover:bg-brand-50/50'
-            }`}
+            } ${inputFocused ? 'ring-2 ring-brand-500 ring-offset-2' : ''}`}
           >
             {busy ? (
-              <div className="flex flex-col items-center">
-                <svg className="h-8 w-8 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
+              <div className="flex flex-col items-center" role="status">
+                <svg aria-hidden="true" className="h-8 w-8 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
@@ -129,6 +126,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
             ) : (
               <>
                 <svg
+                  aria-hidden="true"
                   className="mx-auto h-10 w-10 text-slate-400"
                   fill="none"
                   viewBox="0 0 24 24"
@@ -141,15 +139,21 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                     d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
                   />
                 </svg>
-                <p className="mt-3 text-sm font-medium text-slate-700">
+                <label htmlFor="document-file" className="mt-3 block text-sm font-medium text-slate-700">
                   Drag and drop a file here, or click to browse
+                </label>
+                <p id="document-file-hint" className="mt-1 text-xs text-slate-500">
+                  PDF, JPEG, or PNG up to 10 MB
                 </p>
-                <p className="mt-1 text-xs text-slate-500">PDF, JPEG, or PNG up to 10 MB</p>
                 <input
+                  id="document-file"
                   type="file"
                   accept=".pdf,image/*"
                   disabled={busy}
+                  aria-describedby="document-file-hint"
                   onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
+                  onFocus={() => setInputFocused(true)}
+                  onBlur={() => setInputFocused(false)}
                   className="absolute inset-0 cursor-pointer opacity-0"
                 />
               </>
@@ -193,11 +197,14 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                   <span className="inline-flex items-center rounded-md bg-brand-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-700 ring-1 ring-inset ring-brand-200">
                     {ent.entity_type}
                   </span>
+                  {/* Every row's visible label reads "Include", so the accessible name has to
+                      say which entity — otherwise the list is N identical checkboxes. */}
                   <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700">
                     <input
                       type="checkbox"
                       checked={!rejected.has(i)}
                       onChange={() => toggleReject(i)}
+                      aria-label={`Include ${ent.entity_type} ${i + 1} in the record`}
                       className="rounded border-slate-300 text-brand-600 focus:ring-brand-500"
                     />
                     Include
@@ -217,7 +224,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
           </ul>
 
           <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
-            <Button className="w-full sm:w-auto" onClick={() => void approve(reviewed.docId)} disabled={busy}>
+            <Button className="w-full sm:w-auto" onClick={() => void approve(reviewed.docId)} disabled={busy} aria-busy={busy}>
               {busy ? 'Saving…' : 'Confirm & merge into record'}
             </Button>
             <Link href={`/patients/${id}`} className="w-full sm:w-auto">

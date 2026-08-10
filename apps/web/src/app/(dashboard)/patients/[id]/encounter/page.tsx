@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import type { ClinicalSuggestion, IntakeQuestion } from '@/lib/types';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, ErrorBanner } from '@/components/ui';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
 import { ReasoningTheatre } from '@/components/reasoning/ReasoningTheatre';
 import { SuggestionCard } from '@/components/reasoning/SuggestionCard';
@@ -28,7 +28,11 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
           const isComplete = i < currentIndex;
           const isCurrent = i === currentIndex;
           return (
-            <li key={p.key} className={`flex items-center ${i < PHASES.length - 1 ? 'flex-1' : ''}`}>
+            <li
+              key={p.key}
+              aria-current={isCurrent ? 'step' : undefined}
+              className={`flex items-center ${i < PHASES.length - 1 ? 'flex-1' : ''}`}
+            >
               <div className="flex flex-shrink-0 items-center gap-1.5">
                 <span
                   className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors sm:h-7 sm:w-7 ${
@@ -40,7 +44,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                   }`}
                 >
                   {isComplete ? (
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                    <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                     </svg>
                   ) : (
@@ -113,6 +117,7 @@ export default function EncounterPage() {
         className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
       >
         <svg
+          aria-hidden="true"
           className="h-4 w-4 transition-transform group-hover:-translate-x-0.5"
           fill="none"
           viewBox="0 0 24 24"
@@ -128,14 +133,7 @@ export default function EncounterPage() {
 
       <StepIndicator currentPhase={phase} />
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-          <svg className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <span>{error}</span>
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
       {phase === 'complaint' && (
         <Card className="animate-fade-in">

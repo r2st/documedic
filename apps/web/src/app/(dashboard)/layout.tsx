@@ -13,6 +13,7 @@ function NavLink({ href, children }: { href: string; children: React.ReactNode }
   return (
     <Link
       href={href}
+      aria-current={isActive ? 'page' : undefined}
       className={`relative rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
         isActive
           ? 'text-brand-700 bg-brand-50'
@@ -31,6 +32,7 @@ function MobileNavLink({ href, children, onClick }: { href: string; children: Re
   return (
     <Link
       href={href}
+      aria-current={isActive ? 'page' : undefined}
       className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
         isActive
           ? 'text-brand-700 bg-brand-50'
@@ -51,7 +53,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (loading || !account) {
     return (
       <main className="grid min-h-screen place-items-center">
-        <div className="text-center">
+        <div className="text-center" role="status">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px] border-slate-200 border-t-brand-600" />
           <p className="text-sm font-medium text-slate-500">Loading Aether Clinician…</p>
         </div>
@@ -110,11 +112,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
           >
             {mobileMenuOpen ? (
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <svg aria-hidden="true" className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             ) : (
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <svg aria-hidden="true" className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
               </svg>
             )}

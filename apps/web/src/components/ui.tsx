@@ -13,6 +13,10 @@ export function Button({
   className = '',
   variant = 'primary',
   size = 'default',
+  // HTML defaults an unspecified button inside a form to type="submit". Every submit button
+  // in this app says so explicitly, so defaulting to "button" here means a control dropped
+  // into a form later cannot silently submit it.
+  type = 'button',
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
@@ -35,11 +39,40 @@ export function Button({
 
   return (
     <button
+      type={type}
       className={`${baseStyles} ${variantStyles} ${sizeStyles} ${className}`}
       {...props}
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Error message shown after a failed action.
+ *
+ * `role="alert"` is the point: these appear in response to something the clinician just did,
+ * often far from where focus is, so a screen reader has to be told rather than left to
+ * discover them. The icon is decorative — the message carries the meaning.
+ */
+export function ErrorBanner({ message, className = '' }: { message: string; className?: string }) {
+  return (
+    <div
+      role="alert"
+      className={`flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200 ${className}`}
+    >
+      <svg
+        aria-hidden="true"
+        className="mt-0.5 h-4 w-4 flex-shrink-0"
+        fill="none"
+        viewBox="0 0 24 24"
+        strokeWidth={2}
+        stroke="currentColor"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+      </svg>
+      <span>{message}</span>
+    </div>
   );
 }
 
@@ -50,8 +83,11 @@ const CONFIDENCE_STYLES: Record<string, string> = {
 };
 
 export function ConfidenceBadge({ band, value }: { band: string; value: number }) {
+  // The band is conveyed visually by colour alone, and a bare "85%" next to an extracted
+  // value does not say what it is a percentage of. The label carries both.
   return (
     <span
+      aria-label={`Extraction confidence ${band}, ${(value * 100).toFixed(0)} percent`}
       className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${
         CONFIDENCE_STYLES[band] ?? 'bg-slate-50 text-slate-600 ring-1 ring-slate-200'
       }`}
