@@ -400,9 +400,7 @@ async def test_mapped_pathways_batch_citations_across_every_matched_condition(
         patient = await create_patient(auth_client, full_name=f"mapped-{n}")
         for name in mapped[:n]:
             db.add(
-                Condition(
-                    patient_id=uuid.UUID(patient["id"]), condition_name=name, status="active"
-                )
+                Condition(patient_id=uuid.UUID(patient["id"]), condition_name=name, status="active")
             )
         await db.commit()
         db.expunge_all()

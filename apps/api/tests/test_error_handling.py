@@ -119,7 +119,5 @@ async def test_drug_safety_check_empty_body_rejected(auth_client):
     """Neither drug_reference_id nor drug_name given -- must be a clean validation error, not
     an unhandled exception further down the resolution pipeline."""
     patient = await create_patient(auth_client)
-    resp = await auth_client.post(
-        f"/api/v1/patients/{patient['id']}/drug-safety/check", json={}
-    )
+    resp = await auth_client.post(f"/api/v1/patients/{patient['id']}/drug-safety/check", json={})
     assert resp.status_code == 422

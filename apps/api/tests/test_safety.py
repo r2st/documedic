@@ -15,9 +15,7 @@ async def _add_current_medication(db, patient_id: str, reference_id: str) -> Non
     """Directly insert a current MedicationEvent, bypassing document extraction — used to set
     up interaction scenarios for drugs the PRESCRIPTION fixture doesn't cover."""
     vocab = (
-        await db.execute(
-            select(DrugVocabulary).where(DrugVocabulary.reference_id == reference_id)
-        )
+        await db.execute(select(DrugVocabulary).where(DrugVocabulary.reference_id == reference_id))
     ).scalar_one()
     db.add(
         MedicationEvent(
@@ -144,8 +142,7 @@ async def test_previously_dangling_interaction_refs_now_resolve_and_fire(auth_cl
     body = resp.json()
     assert body["proposed_drug_name"] == "Spironolactone"
     assert any(
-        f["check_type"] == "drug_interaction" and f["severity"] == "critical"
-        for f in body["flags"]
+        f["check_type"] == "drug_interaction" and f["severity"] == "critical" for f in body["flags"]
     )
 
 
@@ -159,9 +156,7 @@ async def test_sildenafil_nitrate_is_hard_block(auth_client, db):
     body = resp.json()
     assert body["is_blocked"] is True
     assert body["is_hard_block"] is True
-    assert any(
-        f["check_type"] == "drug_interaction" and f["is_hard_block"] for f in body["flags"]
-    )
+    assert any(f["check_type"] == "drug_interaction" and f["is_hard_block"] for f in body["flags"])
 
 
 @pytest.mark.asyncio
@@ -172,8 +167,7 @@ async def test_warfarin_aspirin_bleeding_risk_flagged(auth_client, db):
     resp = await _check(auth_client, pid, drug_reference_id="ASP-75")
     body = resp.json()
     assert any(
-        f["check_type"] == "drug_interaction" and f["severity"] == "critical"
-        for f in body["flags"]
+        f["check_type"] == "drug_interaction" and f["severity"] == "critical" for f in body["flags"]
     )
     assert body["is_hard_block"] is False  # major, not contraindicated -- flagged, not blocked
 

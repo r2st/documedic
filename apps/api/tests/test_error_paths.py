@@ -255,9 +255,7 @@ async def test_reasoning_start_for_unknown_patient_raises_not_found(db):
 async def test_record_decision_for_unknown_suggestion_raises_not_found(db):
     account = await _account(db)
     patient = await _patient(db, account)
-    session, _questions = await ReasoningService(db).start(
-        account.id, patient.id, "chest pain"
-    )
+    session, _questions = await ReasoningService(db).start(account.id, patient.id, "chest pain")
 
     with pytest.raises(SuggestionNotFoundError):
         await ReasoningService(db).record_decision(
@@ -296,11 +294,7 @@ async def test_reasoning_failure_marks_the_session_failed_and_audits(db, monkeyp
     assert "agent graph exploded" in (refreshed.error_detail or "")
 
     audit = (
-        (
-            await db.execute(
-                select(AuditLog).where(AuditLog.action == "reasoning_session_failed")
-            )
-        )
+        (await db.execute(select(AuditLog).where(AuditLog.action == "reasoning_session_failed")))
         .scalars()
         .all()
     )
@@ -381,9 +375,7 @@ def test_extract_json_recovers_an_object_wrapped_in_prose():
     """Weak models pad JSON with prose; the object is still extracted."""
     from app.agents.llm import _extract_json
 
-    assert _extract_json('Sure! {"tier": "suggestive"} Hope that helps.') == {
-        "tier": "suggestive"
-    }
+    assert _extract_json('Sure! {"tier": "suggestive"} Hope that helps.') == {"tier": "suggestive"}
 
 
 async def test_call_llm_returns_none_when_the_provider_is_unavailable(monkeypatch):
@@ -469,11 +461,7 @@ async def test_egfr_derivation_skips_a_lab_it_cannot_compute(db):
     await db.flush()
 
     markers = (
-        (
-            await db.execute(
-                select(DerivedMarker).where(DerivedMarker.patient_id == patient.id)
-            )
-        )
+        (await db.execute(select(DerivedMarker).where(DerivedMarker.patient_id == patient.id)))
         .scalars()
         .all()
     )

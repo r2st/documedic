@@ -48,6 +48,7 @@ class PathwayService:
             }
             for c in chunks
         }
+
     @staticmethod
     def _shape(pathway: ClinicalPathway, citations_by_id: dict[str, dict]) -> dict:
         """Pure formatting — no IO — so callers control how many queries they issue."""

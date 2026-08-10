@@ -39,7 +39,8 @@ def _static_sql_value(node: ast.AST) -> str | None:
         return node.value
     if isinstance(node, ast.JoinedStr):  # f-string: keep only the literal segments
         return "".join(
-            part.value for part in node.values
+            part.value
+            for part in node.values
             if isinstance(part, ast.Constant) and isinstance(part.value, str)
         )
     return None
@@ -147,9 +148,7 @@ def test_revision_chain_is_linear_and_complete():
         cursor = children[cursor]
         assert cursor not in seen, f"cycle in the migration chain at {cursor}"
         seen.add(cursor)
-    assert seen == set(revisions), (
-        f"migrations unreachable from the root: {set(revisions) - seen}"
-    )
+    assert seen == set(revisions), f"migrations unreachable from the root: {set(revisions) - seen}"
 
 
 @pytest.mark.parametrize("path", _migration_files(), ids=lambda p: p.name)
@@ -164,9 +163,7 @@ def test_no_mutation_of_immutable_clinical_tables(path: Path):
     for sql in _execute_sql_literals(tree):
         body = _DOLLAR_QUOTED.sub("", sql)  # RAISE EXCEPTION text mentions these words
         for table in immutable:
-            forbidden = re.search(
-                rf"\b(DELETE\s+FROM|UPDATE)\s+{table}\b", body, re.I
-            )
+            forbidden = re.search(rf"\b(DELETE\s+FROM|UPDATE)\s+{table}\b", body, re.I)
             assert not forbidden, (
                 f"{path.name} mutates the append-only table {table}: {forbidden.group(0)!r}"
             )

@@ -4,6 +4,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="w-full max-w-sm animate-fade-in">
         {/* Logo */}
         <div className="mb-8 flex flex-col items-center">
+          {/* Static SVG logo — next/image does not optimize SVG, so <img> is correct here. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.svg" alt="Aether Clinician" className="mb-4 h-14 w-14" />
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">
             Aether <span className="text-brand-600">Clinician</span>

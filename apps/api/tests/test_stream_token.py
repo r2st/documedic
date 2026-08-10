@@ -208,7 +208,5 @@ async def test_a_stream_token_for_a_deleted_account_is_rejected(client, auth_cli
 async def test_the_bearer_header_still_authenticates_the_stream(auth_client):
     """Non-browser clients (and tests) can skip the minting round trip."""
     session_id = await _session_id(auth_client)
-    async with auth_client.stream(
-        "GET", f"/api/v1/reasoning/{session_id}/stream"
-    ) as resp:
+    async with auth_client.stream("GET", f"/api/v1/reasoning/{session_id}/stream") as resp:
         assert resp.status_code == 200

@@ -21,9 +21,7 @@ class DrugSafetyOverride(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     __tablename__ = "drug_safety_overrides"
 
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("accounts.id"), nullable=False
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("accounts.id"), nullable=False)
     patient_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("patients.id"), nullable=False, index=True
     )

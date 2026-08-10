@@ -17,11 +17,7 @@ from tests.conftest import create_patient
 
 SHA = "a" * 64
 
-PNG = (
-    b"\x89PNG\r\n\x1a\n"
-    + b"\x00" * 8
-    + b"MEDICATIONS:\nCrocin 650mg\n"
-)
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"MEDICATIONS:\nCrocin 650mg\n"
 
 
 @pytest.mark.parametrize(
@@ -135,7 +131,5 @@ async def test_a_traversal_filename_upload_still_lands_inside_the_storage_root(a
     assert resp.status_code == 201, resp.text
 
     doc_id = resp.json()["id"]
-    fetched = await auth_client.get(
-        f"/api/v1/patients/{patient['id']}/documents/{doc_id}/file"
-    )
+    fetched = await auth_client.get(f"/api/v1/patients/{patient['id']}/documents/{doc_id}/file")
     assert fetched.status_code == 200

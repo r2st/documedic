@@ -67,7 +67,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-6">
           {/* Logo + Brand */}
           <Link href="/patients" className="flex items-center gap-2.5 group">
-            <img src="/logo.svg" alt="Aether Clinician" className="h-8 w-8 transition-transform group-hover:scale-105" />
+            {/* Static SVG logo — next/image does not optimize SVG, so <img> is correct here. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.svg"
+              alt="Aether Clinician"
+              className="h-8 w-8 transition-transform group-hover:scale-105"
+            />
             <span className="text-lg font-bold tracking-tight text-slate-900">
               Aether <span className="text-brand-600">Clinician</span>
             </span>

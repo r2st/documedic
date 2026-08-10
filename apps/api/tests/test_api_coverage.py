@@ -21,11 +21,7 @@ from app.services.regulatory_service import RegulatoryService
 from tests.conftest import create_patient
 
 PRESCRIPTION = (
-    b"%PDF-1.4\n"
-    b"MEDICATIONS:\n"
-    b"Glycomet 500mg BD\n"
-    b"LABS:\n"
-    b"Creatinine: 3.0 mg/dL (0.6-1.2)\n"
+    b"%PDF-1.4\nMEDICATIONS:\nGlycomet 500mg BD\nLABS:\nCreatinine: 3.0 mg/dL (0.6-1.2)\n"
 )
 
 

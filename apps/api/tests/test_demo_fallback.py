@@ -284,4 +284,3 @@ def test_extraction_payload_is_marked_and_well_shaped():
     for entity in payload["entities"]:
         assert entity["confidence"], "demo entities must carry confidence scores"
         assert max(entity["confidence"].values()) <= 0.6
-

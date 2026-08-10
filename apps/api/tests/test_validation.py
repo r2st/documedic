@@ -161,4 +161,3 @@ async def test_validation_run_missing_id_is_404(auth_client):
 
     resp = await auth_client.get(f"/api/v1/validation/runs/{uuid.uuid4()}")
     assert resp.status_code == 404
-

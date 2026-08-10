@@ -7,7 +7,7 @@ import pytest
 from tests.conftest import create_patient
 
 CRITICAL_LABS_DOC = (
-    b"%PDF-1.4\n" b"LABS:\n" b"Potassium: 7.0 mmol/L (3.5-5.1)\n" b"Sodium: 138 mmol/L (135-145)\n"
+    b"%PDF-1.4\nLABS:\nPotassium: 7.0 mmol/L (3.5-5.1)\nSodium: 138 mmol/L (135-145)\n"
 )
 
 

@@ -87,8 +87,7 @@ _PATHWAYS: dict[str, ClinicalPathway] = {
                 key="monitoring",
                 title="Monitoring",
                 items=(
-                    "Consider rechecking BP within 2-4 weeks of starting or changing "
-                    "therapy.",
+                    "Consider rechecking BP within 2-4 weeks of starting or changing therapy.",
                     "Consider monitoring renal function and serum potassium after starting "
                     "or up-titrating an ACE inhibitor, ARB, or potassium-sparing diuretic.",
                 ),
