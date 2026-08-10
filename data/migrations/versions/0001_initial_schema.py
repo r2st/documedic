@@ -78,24 +78,27 @@ def upgrade() -> None:
     if not is_pg:
         return
 
+    # One command per op.execute: the asyncpg driver runs DDL through a prepared statement,
+    # which rejects multi-command strings ("cannot insert multiple commands into a prepared
+    # statement"). Keep DROP and CREATE as separate executes.
     op.execute(_SET_UPDATED_AT_FN)
     for table in _MUTABLE_TABLES:
+        op.execute(f"DROP TRIGGER IF EXISTS trg_{table}_set_updated_at ON {table}")
         op.execute(
             f"""
-            DROP TRIGGER IF EXISTS trg_{table}_set_updated_at ON {table};
             CREATE TRIGGER trg_{table}_set_updated_at
                 BEFORE UPDATE ON {table}
-                FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+                FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at()
             """
         )
 
     op.execute(_AUDIT_IMMUTABLE_FN)
+    op.execute("DROP TRIGGER IF EXISTS trg_audit_logs_immutable ON audit_logs")
     op.execute(
         """
-        DROP TRIGGER IF EXISTS trg_audit_logs_immutable ON audit_logs;
         CREATE TRIGGER trg_audit_logs_immutable
             BEFORE UPDATE OR DELETE ON audit_logs
-            FOR EACH ROW EXECUTE FUNCTION fn_audit_logs_immutable();
+            FOR EACH ROW EXECUTE FUNCTION fn_audit_logs_immutable()
         """
     )
 

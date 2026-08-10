@@ -46,12 +46,15 @@ def upgrade() -> None:
         return
 
     op.execute(_IMMUTABLE_FN)
+    # One command per op.execute: the asyncpg driver runs DDL through a prepared statement,
+    # which rejects multi-command strings ("cannot insert multiple commands into a prepared
+    # statement"). Keep DROP and CREATE as separate executes.
+    op.execute(f"DROP TRIGGER IF EXISTS trg_{_TABLE}_immutable ON {_TABLE}")
     op.execute(
         f"""
-        DROP TRIGGER IF EXISTS trg_{_TABLE}_immutable ON {_TABLE};
         CREATE TRIGGER trg_{_TABLE}_immutable
             BEFORE UPDATE OR DELETE ON {_TABLE}
-            FOR EACH ROW EXECUTE FUNCTION fn_{_TABLE}_immutable();
+            FOR EACH ROW EXECUTE FUNCTION fn_{_TABLE}_immutable()
         """
     )
 
