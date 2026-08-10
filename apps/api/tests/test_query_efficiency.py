@@ -25,7 +25,7 @@ from sqlalchemy import event, select
 
 from app.models.allergy import Allergy
 from app.models.condition import Condition
-from app.models.drug_vocabulary import DrugVocabulary
+from app.models.drug_vocabulary import Contraindication, DrugInteraction, DrugVocabulary
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 from app.models.user import Account
@@ -139,18 +139,25 @@ async def _flags_select_count(db, engine, account, patient) -> int:
 
 
 async def test_safety_check_query_count_is_flat_in_medication_count(db, engine):
-    """The batched vocabulary load must keep the safety context O(1) in current meds."""
+    """The batched vocabulary load must keep the safety context O(1) in current meds.
+
+    The baseline is *two* medications, not one: below two there is no drug pair to interact,
+    so ``_load_interactions`` short-circuits and issues no query at all. That step is asserted
+    separately in ``test_a_single_medication_costs_no_interaction_query``; here we measure
+    growth in the regime where every query is already being issued.
+    """
     account, patient = await _account_and_patient(db)
     await _add_current_med(db, patient, "Metformin")
+    await _add_current_med(db, patient, "Atorvastatin")
     baseline = await _flags_select_count(db, engine, account, patient)
 
-    for generic in ("Atorvastatin", "Amlodipine", "Warfarin", "Paracetamol"):
+    for generic in ("Amlodipine", "Warfarin", "Paracetamol"):
         await _add_current_med(db, patient, generic)
     with_five = await _flags_select_count(db, engine, account, patient)
 
     assert with_five == baseline, (
         f"active_flags went from {baseline} to {with_five} SELECTs when the patient's current "
-        "medications went from 1 to 5 — the per-medication DrugVocabulary fetch is back"
+        "medications went from 2 to 5 — the per-medication DrugVocabulary fetch is back"
     )
 
 
@@ -198,9 +205,9 @@ async def test_vocabulary_is_loaded_in_a_single_batched_query(db, engine):
         ]
 
     by_id = [s for s in vocab_selects if "drug_vocabulary.id IN" in s.replace("\n", " ")]
-    assert len(by_id) == 1, (
-        f"expected exactly one batched vocabulary-by-id query, got {len(by_id)}: {by_id}"
-    )
+    assert (
+        len(by_id) == 1
+    ), f"expected exactly one batched vocabulary-by-id query, got {len(by_id)}: {by_id}"
 
 
 async def test_patient_pathways_query_count_is_flat_in_condition_count(db, engine):
@@ -269,9 +276,9 @@ async def test_unmapped_conditions_cost_no_guideline_queries(db, engine):
         "Some Unmapped Condition",
     ]
     guideline_queries = [s for s in counter["statements"] if "guideline_chunks" in s.lower()]
-    assert not guideline_queries, (
-        f"no pathway matched, so the guideline corpus should not be queried: {guideline_queries}"
-    )
+    assert (
+        not guideline_queries
+    ), f"no pathway matched, so the guideline corpus should not be queried: {guideline_queries}"
 
 
 # ------------------------------------------------------------------------------------------
@@ -463,3 +470,143 @@ async def test_merge_entities_query_count_is_independent_of_entity_count(db, aut
         f"merging 4 entities cost {counts[0]} queries but 32 cost {counts[1]} — "
         f"the merge is querying per entity"
     )
+
+
+# ---------------------------------------------------- drug-safety reference-data scoping
+# The two reference tables (drug_interactions, contraindications) used to be loaded in full on
+# every safety check. That is invisible in behavioural tests and cheap at seed size, but it
+# scales with the *corpus*, not with the patient — so it gets worse exactly as the product's
+# clinical coverage improves. These pin the scoping.
+
+
+async def _add_interaction_rows(db, count: int) -> None:
+    """Insert `count` interaction rules between drugs no test patient is ever on."""
+    for i in range(count):
+        db.add(
+            DrugInteraction(
+                drug_a_reference_id=f"NOISE-A-{i:04d}",
+                drug_b_reference_id=f"NOISE-B-{i:04d}",
+                severity="major",
+                description=f"synthetic corpus-growth row {i}",
+                source="test",
+            )
+        )
+    await db.flush()
+
+
+async def _add_contraindication_rows(db, count: int) -> None:
+    for i in range(count):
+        db.add(
+            Contraindication(
+                drug_reference_id=f"NOISE-C-{i:04d}",
+                condition_name=f"Synthetic Condition {i}",
+                severity="absolute",
+                description=f"synthetic corpus-growth row {i}",
+                is_absolute=True,
+                source="test",
+            )
+        )
+    await db.flush()
+
+
+async def test_reference_rules_loaded_do_not_grow_with_the_corpus(db):
+    """Growing the rule tables must not grow what one patient's safety context materialises."""
+    _account, patient = await _account_and_patient(db)
+    await _add_current_med(db, patient, "Metformin")
+    await _add_current_med(db, patient, "Warfarin")
+
+    before = await SafetyService(db)._build_context(patient.id)
+
+    await _add_interaction_rows(db, 200)
+    await _add_contraindication_rows(db, 200)
+
+    after = await SafetyService(db)._build_context(patient.id)
+
+    assert len(after.interaction_rules) == len(before.interaction_rules), (
+        f"400 unrelated reference rows changed the loaded interaction count from "
+        f"{len(before.interaction_rules)} to {len(after.interaction_rules)} — the safety "
+        "context is loading the whole table again"
+    )
+    assert len(after.contraindication_rules) == len(
+        before.contraindication_rules
+    ), "unrelated contraindication rows are being loaded into the patient's safety context"
+
+
+async def test_only_rules_touching_the_drugs_in_play_are_loaded(db):
+    """Positive assertion: every loaded rule references a drug the evaluation can involve."""
+    _account, patient = await _account_and_patient(db)
+    metformin = await _add_current_med(db, patient, "Metformin")
+    warfarin = await _add_current_med(db, patient, "Warfarin")
+    aspirin = await _vocab(db, "Aspirin")
+
+    ctx = await SafetyService(db)._build_context(
+        patient.id, proposed_reference_id=aspirin.reference_id
+    )
+
+    in_play = {metformin.reference_id, warfarin.reference_id, aspirin.reference_id}
+    for rule in ctx.interaction_rules:
+        assert {rule.drug_a_reference_id, rule.drug_b_reference_id} <= in_play, (
+            f"loaded an interaction rule ({rule.drug_a_reference_id}, "
+            f"{rule.drug_b_reference_id}) that cannot fire for these drugs"
+        )
+    for ci in ctx.contraindication_rules:
+        assert (
+            ci.drug_reference_id in in_play
+        ), f"loaded a contraindication for {ci.drug_reference_id}, which is not in play"
+
+
+async def test_the_proposed_drugs_own_rules_are_still_loaded(db):
+    """Scoping must not narrow so far that the proposal's own rules disappear.
+
+    Warfarin + aspirin is a curated interacting pair; the proposed drug is not yet a current
+    medication, so only ``proposed_reference_id`` can bring its rules into scope.
+    """
+    _account, patient = await _account_and_patient(db)
+    await _add_current_med(db, patient, "Warfarin")
+    aspirin = await _vocab(db, "Aspirin")
+
+    ctx = await SafetyService(db)._build_context(
+        patient.id, proposed_reference_id=aspirin.reference_id
+    )
+
+    pairs = {
+        frozenset((r.drug_a_reference_id, r.drug_b_reference_id)) for r in ctx.interaction_rules
+    }
+    warfarin = await _vocab(db, "Warfarin")
+    assert frozenset((warfarin.reference_id, aspirin.reference_id)) in pairs, (
+        "the warfarin/aspirin interaction rule was scoped out of the context that is supposed "
+        "to catch it"
+    )
+
+
+async def test_a_single_medication_costs_no_interaction_query(db, engine):
+    """One drug cannot pair with anything, so the interaction table is not touched at all."""
+    _account, patient = await _account_and_patient(db)
+    await _add_current_med(db, patient, "Metformin")
+
+    service = SafetyService(db)
+    db.expunge_all()
+    with counting_queries(engine) as counter:
+        await service._build_context(patient.id)
+
+    touched = [s for s in counter["statements"] if "drug_interactions" in s]
+    assert touched == [], f"queried drug_interactions for a single-drug patient: {touched}"
+
+
+async def test_a_patient_on_no_medications_touches_neither_reference_table(db, engine):
+    """An empty medication list with no proposal leaves nothing for either table to match."""
+    _account, patient = await _account_and_patient(db)
+
+    service = SafetyService(db)
+    db.expunge_all()
+    with counting_queries(engine) as counter:
+        ctx = await service._build_context(patient.id)
+
+    assert ctx.interaction_rules == []
+    assert ctx.contraindication_rules == []
+    touched = [
+        s
+        for s in counter["statements"]
+        if "drug_interactions" in s or "FROM contraindications" in s
+    ]
+    assert touched == [], f"queried reference tables with no drugs in play: {touched}"

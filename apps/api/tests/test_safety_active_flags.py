@@ -160,7 +160,9 @@ async def test_query_count_does_not_scale_with_medication_count(db, engine):
        allergy. That is now a single batched `WHERE id IN (...)` query.
 
     With both fixed the query count is *flat* in the number of medications, so this asserts
-    equality rather than a slack allowance.
+    equality rather than a slack allowance. The baseline is two medications because below two
+    there is no pair to interact and the interaction query is skipped entirely — a constant
+    step, not growth, covered by its own test below.
 
     ``expunge_all()`` before each measurement matters: ``db.get()`` is served from the session
     identity map, so without it the per-drug fetches never reach the database and the N+1
@@ -169,6 +171,7 @@ async def test_query_count_does_not_scale_with_medication_count(db, engine):
     """
     account, patient = await _account_and_patient(db)
     await _add_current_med(db, patient, "Metformin")
+    await _add_current_med(db, patient, "Aspirin")
 
     counter = {"n": 0}
 
@@ -185,17 +188,17 @@ async def test_query_count_does_not_scale_with_medication_count(db, engine):
         return counter["n"]
 
     try:
-        one_drug = await _measure(account.id, patient.id)
+        two_drugs = await _measure(account.id, patient.id)
 
-        for generic in ("Aspirin", "Warfarin", "Atorvastatin"):
+        for generic in ("Warfarin", "Atorvastatin", "Amlodipine"):
             await _add_current_med(db, patient, generic)
 
-        four_drugs = await _measure(account.id, patient.id)
+        five_drugs = await _measure(account.id, patient.id)
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", _count)
 
-    assert four_drugs == one_drug, (
-        f"query count grew from {one_drug} to {four_drugs} for 3 extra drugs — the per-drug "
+    assert five_drugs == two_drugs, (
+        f"query count grew from {two_drugs} to {five_drugs} for 3 extra drugs — the per-drug "
         "context rebuild or the per-drug vocabulary fetch is probably back"
     )
 

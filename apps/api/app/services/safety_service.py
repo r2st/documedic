@@ -60,77 +60,119 @@ class SafetyService:
         return await PatientService(self.db).get(account_id, patient_id)
 
     async def _build_context(
-        self, patient_id: uuid.UUID, *, exclude_reference_id: str | None = None
+        self, patient_id: uuid.UUID, *, proposed_reference_id: str | None = None
     ) -> SafetyContext:
-        # Current medications, resolved to reference ids + classes.
-        meds_result = await self.db.execute(
+        """Assemble everything ``evaluate_drug_safety`` needs for one patient.
+
+        ``proposed_reference_id`` is the drug about to be checked, when there is one. It only
+        widens the *reference-data* scope: the two rule tables are loaded for the drugs actually
+        in play (current medications plus the proposal) rather than in full. Patient data is
+        unaffected by it.
+        """
+        med_rows = await self._current_medication_rows(patient_id)
+        allergy_rows = await self._active_allergy_rows(patient_id)
+        vocab_by_id = await self._vocabulary_by_id(med_rows, allergy_rows)
+
+        current_meds = await self._current_meds(med_rows, vocab_by_id)
+        allergies = await self._allergies(allergy_rows, vocab_by_id)
+
+        # Reference data, scoped to the drugs this evaluation can possibly involve. Interactions
+        # only fire between the proposal and a current medication, and contraindications only for
+        # the proposal itself, so a full-table load is wasted I/O that grows with the corpus
+        # rather than with the patient. Both predicates ride existing indexes.
+        reference_ids = {m.reference_id for m in current_meds}
+        if proposed_reference_id:
+            reference_ids.add(proposed_reference_id)
+
+        return SafetyContext(
+            current_meds=current_meds,
+            allergies=allergies,
+            conditions=await self._conditions(patient_id),
+            egfr=await self._latest_egfr(patient_id),
+            interaction_rules=await self._load_interactions(reference_ids),
+            contraindication_rules=await self._load_contraindications(reference_ids),
+        )
+
+    async def _current_medication_rows(self, patient_id: uuid.UUID) -> list[MedicationEvent]:
+        result = await self.db.execute(
             select(MedicationEvent).where(
                 MedicationEvent.patient_id == patient_id,
                 MedicationEvent.is_deleted.is_(False),
                 MedicationEvent.is_current.is_(True),
             )
         )
-        med_rows = list(meds_result.scalars().all())
+        return list(result.scalars().all())
 
-        # Allergies (drug allergies resolved to reference id + class).
-        allergies_result = await self.db.execute(
+    async def _active_allergy_rows(self, patient_id: uuid.UUID) -> list[Allergy]:
+        result = await self.db.execute(
             select(Allergy).where(
                 Allergy.patient_id == patient_id,
                 Allergy.is_deleted.is_(False),
                 Allergy.status == "active",
             )
         )
-        allergy_rows = list(allergies_result.scalars().all())
+        return list(result.scalars().all())
 
-        # Batch-load every vocabulary row both loops below need, in one query. This used to be
-        # a `db.get()` per medication and per allergy — on the hot deterministic safety path,
-        # so a patient on 10 drugs paid 10 extra round-trips per allergy/interaction check.
-        vocab_by_id: dict = {}
+    async def _vocabulary_by_id(
+        self, med_rows: list[MedicationEvent], allergy_rows: list[Allergy]
+    ) -> dict[uuid.UUID, DrugVocabulary]:
+        """Batch-load every vocabulary row the two builders need, in one query.
+
+        This used to be a ``db.get()`` per medication and per allergy — on the hot deterministic
+        safety path, so a patient on 10 drugs paid 10 extra round-trips per check.
+        """
         vocab_ids = {row.drug_vocabulary_id for row in med_rows if row.drug_vocabulary_id} | {
             row.drug_vocabulary_id for row in allergy_rows if row.drug_vocabulary_id
         }
-        if vocab_ids:
-            vocab_result = await self.db.execute(
-                select(DrugVocabulary).where(DrugVocabulary.id.in_(vocab_ids))
-            )
-            vocab_by_id = {vocab.id: vocab for vocab in vocab_result.scalars().all()}
+        if not vocab_ids:
+            return {}
+        result = await self.db.execute(
+            select(DrugVocabulary).where(DrugVocabulary.id.in_(vocab_ids))
+        )
+        return {vocab.id: vocab for vocab in result.scalars().all()}
 
-        current_meds: list[DrugRef] = []
+    async def _current_meds(
+        self, med_rows: list[MedicationEvent], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
+    ) -> list[DrugRef]:
+        out: list[DrugRef] = []
         for med in med_rows:
-            ref_id, generic, drug_class = None, med.generic_name, None
-            if med.drug_vocabulary_id:
-                vocab = vocab_by_id.get(med.drug_vocabulary_id)
-                if vocab:
-                    ref_id, generic, drug_class = (
-                        vocab.reference_id,
-                        vocab.generic_name,
-                        vocab.drug_class,
+            vocab = vocab_by_id.get(med.drug_vocabulary_id) if med.drug_vocabulary_id else None
+            if vocab is not None:
+                out.append(
+                    DrugRef(
+                        reference_id=vocab.reference_id,
+                        generic_name=vocab.generic_name,
+                        drug_class=vocab.drug_class,
                     )
-            if ref_id is None and med.generic_name:
-                resolved = await self.resolver.resolve(med.generic_name)
-                if resolved:
-                    ref_id, generic, drug_class = (
-                        resolved.reference_id,
-                        resolved.generic_name,
-                        resolved.drug_class,
-                    )
-            if ref_id and ref_id != exclude_reference_id:
-                current_meds.append(
-                    DrugRef(reference_id=ref_id, generic_name=generic or "", drug_class=drug_class)
                 )
+                continue
+            # Unlinked row (e.g. imported before the vocabulary knew the brand): fall back to
+            # name resolution so the drug still participates in the safety evaluation.
+            resolved = await self.resolver.resolve(med.generic_name)
+            if resolved:
+                out.append(
+                    DrugRef(
+                        reference_id=resolved.reference_id,
+                        generic_name=resolved.generic_name,
+                        drug_class=resolved.drug_class,
+                    )
+                )
+        return out
 
-        allergies: list[PatientAllergy] = []
+    async def _allergies(
+        self, allergy_rows: list[Allergy], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
+    ) -> list[PatientAllergy]:
+        out: list[PatientAllergy] = []
         for a in allergy_rows:
             ref_id, drug_class = None, None
-            if a.drug_vocabulary_id:
-                vocab = vocab_by_id.get(a.drug_vocabulary_id)
-                if vocab:
-                    ref_id, drug_class = vocab.reference_id, vocab.drug_class
-            elif a.allergen_type == "drug":
+            vocab = vocab_by_id.get(a.drug_vocabulary_id) if a.drug_vocabulary_id else None
+            if vocab is not None:
+                ref_id, drug_class = vocab.reference_id, vocab.drug_class
+            elif a.drug_vocabulary_id is None and a.allergen_type == "drug":
                 resolved = await self.resolver.resolve(a.allergen_name)
                 if resolved:
                     ref_id, drug_class = resolved.reference_id, resolved.drug_class
-            allergies.append(
+            out.append(
                 PatientAllergy(
                     allergen_name=a.allergen_name,
                     drug_reference_id=ref_id,
@@ -138,22 +180,23 @@ class SafetyService:
                     allergy_id=str(a.id),
                 )
             )
+        return out
 
-        # Conditions.
-        cond_result = await self.db.execute(
+    async def _conditions(self, patient_id: uuid.UUID) -> list[PatientCondition]:
+        result = await self.db.execute(
             select(Condition).where(
                 Condition.patient_id == patient_id,
                 Condition.is_deleted.is_(False),
                 Condition.status == "active",
             )
         )
-        conditions = [
+        return [
             PatientCondition(condition_name=c.condition_name, icd10_code=c.icd10_code)
-            for c in cond_result.scalars().all()
+            for c in result.scalars().all()
         ]
 
-        # Latest eGFR.
-        egfr_result = await self.db.execute(
+    async def _latest_egfr(self, patient_id: uuid.UUID) -> float | None:
+        result = await self.db.execute(
             select(DerivedMarker)
             .where(
                 DerivedMarker.patient_id == patient_id,
@@ -163,25 +206,24 @@ class SafetyService:
             .order_by(DerivedMarker.computed_at.desc())
             .limit(1)
         )
-        egfr_marker = egfr_result.scalar_one_or_none()
-        egfr = float(egfr_marker.value_numeric) if egfr_marker else None
+        marker = result.scalar_one_or_none()
+        return float(marker.value_numeric) if marker else None
 
-        # Reference data (interactions touching current meds + the proposed drug; all CIs).
-        interactions = await self._load_interactions()
-        contraindications = await self._load_contraindications()
+    async def _load_interactions(self, reference_ids: set[str]) -> list[InteractionRule]:
+        """Interaction rules whose *both* endpoints are drugs in play.
 
-        return SafetyContext(
-            current_meds=current_meds,
-            allergies=allergies,
-            conditions=conditions,
-            egfr=egfr,
-            interaction_rules=interactions,
-            contraindication_rules=contraindications,
-        )
-
-    async def _load_interactions(self) -> list[InteractionRule]:
+        A rule with only one endpoint in the set can never fire — ``check_interactions`` looks
+        up the (proposed, current-med) pair — so fetching it is pure waste. Fewer than two drugs
+        means no pair exists at all.
+        """
+        if len(reference_ids) < 2:
+            return []
         result = await self.db.execute(
-            select(DrugInteraction).where(DrugInteraction.is_active.is_(True))
+            select(DrugInteraction).where(
+                DrugInteraction.is_active.is_(True),
+                DrugInteraction.drug_a_reference_id.in_(reference_ids),
+                DrugInteraction.drug_b_reference_id.in_(reference_ids),
+            )
         )
         return [
             InteractionRule(
@@ -195,9 +237,19 @@ class SafetyService:
             for r in result.scalars().all()
         ]
 
-    async def _load_contraindications(self) -> list[ContraindicationRule]:
+    async def _load_contraindications(self, reference_ids: set[str]) -> list[ContraindicationRule]:
+        """Contraindication rules for the drugs in play.
+
+        ``check_contraindications`` discards every rule whose ``drug_reference_id`` is not the
+        proposed drug, so the filter belongs in the query.
+        """
+        if not reference_ids:
+            return []
         result = await self.db.execute(
-            select(Contraindication).where(Contraindication.is_active.is_(True))
+            select(Contraindication).where(
+                Contraindication.is_active.is_(True),
+                Contraindication.drug_reference_id.in_(reference_ids),
+            )
         )
         return [
             ContraindicationRule(
@@ -233,12 +285,11 @@ class SafetyService:
         if vocab is None:
             raise ValidationError("Could not resolve the proposed drug via DrugVocabulary")
 
-        # Deliberately NOT excluding the proposed drug's own reference id from current_meds
-        # here (unlike active_flags' pairwise sub_ctx below): check_duplicate_therapy needs to
-        # see it to detect "patient is already on this exact product". check_interactions
-        # already self-skips (med.reference_id == proposed.reference_id), so nothing else in
-        # evaluate_drug_safety depends on the exclusion.
-        ctx = await self._build_context(patient_id)
+        # The proposed drug's own reference id stays in current_meds if the patient is already
+        # on it: check_duplicate_therapy needs to see it to detect "already an active order for
+        # this exact product". check_interactions self-skips that pair, so nothing else in
+        # evaluate_drug_safety is affected.
+        ctx = await self._build_context(patient_id, proposed_reference_id=vocab.reference_id)
         proposed = DrugRef(
             reference_id=vocab.reference_id,
             generic_name=vocab.generic_name,
@@ -354,10 +405,12 @@ class SafetyService:
         """Re-run pairwise checks across all current medications (P1-08c GET flags).
 
         The context is built ONCE and each drug's "everyone but me" variant is derived in
-        memory. ``exclude_reference_id`` only ever filters ``current_meds`` — allergies,
-        conditions, eGFR and the two reference tables are identical for every drug — so a
-        per-drug rebuild re-ran the same queries (including two full reference-table scans)
-        N times for N current medications.
+        memory by dropping that drug from ``current_meds``. Allergies, conditions, eGFR and the
+        two reference tables are identical for every drug in the loop, so a per-drug rebuild
+        re-ran the same queries N times for N current medications.
+
+        No ``proposed_reference_id`` is passed: every drug evaluated here is already a current
+        medication, so the reference-data scope is exactly the current-medication set.
         """
         await self._patient(account_id, patient_id)
         ctx = await self._build_context(patient_id)
