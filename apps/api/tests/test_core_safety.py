@@ -11,6 +11,7 @@ from app.core.safety import (
     PatientAllergy,
     PatientCondition,
     SafetyContext,
+    check_duplicate_therapy,
     evaluate_drug_safety,
     has_hard_block,
 )
@@ -20,6 +21,13 @@ DICLOFENAC = DrugRef(reference_id="DIC-50", generic_name="Diclofenac", drug_clas
 IBUPROFEN = DrugRef(reference_id="IBU-400", generic_name="Ibuprofen", drug_class="NSAID")
 METFORMIN = DrugRef(reference_id="MET-500", generic_name="Metformin", drug_class="Biguanide")
 ENALAPRIL = DrugRef(reference_id="ENA-5", generic_name="Enalapril", drug_class="ACE Inhibitor")
+RAMIPRIL = DrugRef(reference_id="RAM-5", generic_name="Ramipril", drug_class="ACE Inhibitor")
+PARACETAMOL_500 = DrugRef(
+    reference_id="PCM-500", generic_name="Paracetamol", drug_class="Analgesic"
+)
+PARACETAMOL_650 = DrugRef(
+    reference_id="PCM-650", generic_name="Paracetamol", drug_class="Analgesic"
+)
 
 
 def test_direct_allergy_is_hard_block():
@@ -174,3 +182,53 @@ def test_interaction_severity_matrix(rule_severity, expected_severity, expected_
     flags = evaluate_drug_safety(DICLOFENAC, ctx)
     assert flags[0].severity == expected_severity
     assert flags[0].is_hard_block is expected_hard
+
+
+# --- Duplicate therapy (not covered by the pairwise interaction-rule table) ---
+
+
+def test_reordering_active_medication_is_warning():
+    ctx = SafetyContext(current_meds=[METFORMIN])
+    flags = check_duplicate_therapy(METFORMIN, ctx)
+    assert len(flags) == 1
+    assert flags[0].check_type == "duplicate_therapy"
+    assert flags[0].severity == "warning"
+    assert flags[0].details["match_type"] == "same_product"
+    assert not flags[0].is_hard_block
+
+
+def test_same_ingredient_different_product_is_critical():
+    """Two different paracetamol brands/strengths -> unintentional double-dosing risk."""
+    ctx = SafetyContext(current_meds=[PARACETAMOL_500])
+    flags = check_duplicate_therapy(PARACETAMOL_650, ctx)
+    assert len(flags) == 1
+    assert flags[0].severity == "critical"
+    assert not flags[0].is_hard_block
+    assert flags[0].details["match_type"] == "same_ingredient"
+
+
+def test_same_drug_class_different_ingredient_is_warning():
+    """Two ACE inhibitors (Enalapril + Ramipril) -> therapeutic duplication warning."""
+    ctx = SafetyContext(current_meds=[ENALAPRIL])
+    flags = check_duplicate_therapy(RAMIPRIL, ctx)
+    assert len(flags) == 1
+    assert flags[0].severity == "warning"
+    assert flags[0].details["match_type"] == "same_class"
+
+
+def test_no_duplicate_therapy_flag_for_unrelated_drug():
+    ctx = SafetyContext(current_meds=[METFORMIN])
+    assert check_duplicate_therapy(ASPIRIN, ctx) == []
+
+
+def test_duplicate_therapy_is_not_a_hard_block_and_does_not_stop_other_checks():
+    """A duplicate-therapy warning must never suppress an allergy hard block on the same drug."""
+    ctx = SafetyContext(
+        current_meds=[IBUPROFEN],
+        allergies=[PatientAllergy(allergen_name="Ibuprofen", drug_reference_id="IBU-400")],
+    )
+    flags = evaluate_drug_safety(IBUPROFEN, ctx)
+    assert has_hard_block(flags)
+    types = {f.check_type for f in flags}
+    assert "allergy_conflict" in types
+    assert "duplicate_therapy" in types

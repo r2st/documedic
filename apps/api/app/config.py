@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # provider call failed), serve realistic simulated "[DEMO MODE]" clinical responses
     # instead of raising, so the product is always demonstrable. Default on.
     llm_demo_fallback: bool = True
+    # Per-request timeout (seconds) for each provider SDK call. Without this a hung upstream
+    # connection blocks the worker thread indefinitely instead of failing over.
+    llm_request_timeout_seconds: float = 30.0
+    # Base delay (seconds) for exponential backoff between retries of the SAME provider.
+    # Actual sleep = llm_retry_backoff_base_seconds * attempt_number, capped at 2s.
+    llm_retry_backoff_base_seconds: float = 0.25
 
     # --- OpenAI (primary LLM) ---
     openai_api_key: str = ""

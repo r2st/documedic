@@ -18,6 +18,48 @@ async def test_create_requires_consent(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_create_rejects_future_date_of_birth(auth_client):
+    resp = await auth_client.post(
+        "/api/v1/patients",
+        json={"full_name": "Future Person", "date_of_birth": "2099-01-01", "consent_given": True},
+    )
+    assert resp.status_code == 422
+    # The 422 body itself must be well-formed JSON with a readable message, not a 500 from a
+    # non-serializable ValueError leaking into the response (see main.py's
+    # validation_error_handler -- a bare `raise ValueError(...)` in a field_validator is the
+    # standard Pydantic v2 idiom and must not crash the handler).
+    body = resp.json()
+    assert "cannot be in the future" in str(body)
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_implausible_date_of_birth(auth_client):
+    resp = await auth_client.post(
+        "/api/v1/patients",
+        json={"full_name": "Ancient Person", "date_of_birth": "1850-01-01", "consent_given": True},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_malformed_phone(auth_client):
+    resp = await auth_client.post(
+        "/api/v1/patients",
+        json={"full_name": "Bad Phone", "phone": "call-me-maybe!!", "consent_given": True},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_future_date_of_birth(auth_client):
+    patient = await create_patient(auth_client)
+    resp = await auth_client.patch(
+        f"/api/v1/patients/{patient['id']}", json={"date_of_birth": "2099-01-01"}
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_and_get(auth_client):
     patient = await create_patient(auth_client, full_name="Sita Devi", sex="female")
     assert patient["consent_given"] is True

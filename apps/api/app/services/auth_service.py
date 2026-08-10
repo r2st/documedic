@@ -1,4 +1,10 @@
-"""Authentication service: signup, login, refresh-token rotation, logout."""
+"""Authentication service: signup, login, refresh-token rotation, logout.
+
+Every login/logout/refresh outcome — including failed attempts — is recorded to the
+append-only audit log (access trail; also supports brute-force detection). A failed login
+commits its audit row immediately because the caller's exception path rolls the session back
+before the router's own commit ever runs (see app.db.session.get_db).
+"""
 
 from __future__ import annotations
 
@@ -22,11 +28,13 @@ from app.exceptions import (
 )
 from app.models.user import Account, Session
 from app.schemas.auth import TokenResponse
+from app.services.audit_service import AuditService
 
 
 class AuthService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        self.audit = AuditService(db)
 
     async def _get_by_email(self, email: str) -> Account | None:
         result = await self.db.execute(
@@ -44,6 +52,13 @@ class AuthService:
         )
         self.db.add(account)
         await self.db.flush()
+        await self.audit.record(
+            action="auth_signup",
+            account_id=account.id,
+            entity_type="account",
+            entity_id=account.id,
+            payload={"email": account.email},
+        )
         return account
 
     async def _issue_tokens(
@@ -80,8 +95,25 @@ class AuthService:
     ) -> TokenResponse:
         account = await self._get_by_email(email)
         if account is None or not verify_password(password, account.password_hash):
+            # Committed immediately: the router's commit never runs once this raises, and a
+            # failed-login trail is exactly the record we cannot afford to lose to a rollback.
+            await self.audit.record(
+                action="auth_login_failed",
+                account_id=account.id if account else None,
+                entity_type="account",
+                payload={"email": email.lower(), "ip_address": ip_address},
+            )
+            await self.db.commit()
             raise InvalidCredentialsError()
-        return await self._issue_tokens(account, ip_address=ip_address, user_agent=user_agent)
+        tokens = await self._issue_tokens(account, ip_address=ip_address, user_agent=user_agent)
+        await self.audit.record(
+            action="auth_login_success",
+            account_id=account.id,
+            entity_type="account",
+            entity_id=account.id,
+            payload={"ip_address": ip_address, "user_agent": user_agent},
+        )
+        return tokens
 
     async def refresh(
         self,
@@ -110,7 +142,15 @@ class AuthService:
         account = await self.db.get(Account, session.account_id)
         if account is None or account.is_deleted:
             raise TokenError("Account no longer exists")
-        return await self._issue_tokens(account, ip_address=ip_address, user_agent=user_agent)
+        tokens = await self._issue_tokens(account, ip_address=ip_address, user_agent=user_agent)
+        await self.audit.record(
+            action="auth_token_refreshed",
+            account_id=account.id,
+            entity_type="account",
+            entity_id=account.id,
+            payload={"ip_address": ip_address, "user_agent": user_agent},
+        )
+        return tokens
 
     async def logout(self, refresh_token: str) -> None:
         token_hash = hash_token(refresh_token)
@@ -119,3 +159,10 @@ class AuthService:
         if session is not None:
             session.is_revoked = True
             await self.db.flush()
+            await self.audit.record(
+                action="auth_logout",
+                account_id=session.account_id,
+                entity_type="account",
+                entity_id=session.account_id,
+                payload={},
+            )

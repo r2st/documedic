@@ -10,6 +10,13 @@ Safety rules (per CLAUDE.md NON-NEGOTIABLE rules 3 & 8):
   * Interaction severity 'contraindicated'                     -> HARD BLOCK.
   * Renal threshold with action 'contraindicated'             -> HARD BLOCK.
 Hard blocks can never be dismissed; everything else is a warning/info flag.
+
+Duplicate-therapy detection (check_duplicate_therapy) is a separate, deterministic check: it
+flags re-ordering an active medication, prescribing a second product with the same active
+ingredient (e.g. two paracetamol brands -> unintentional overdose risk), or prescribing a
+second drug in the same therapeutic class the patient is already on (e.g. two ACE inhibitors).
+None of these are covered by the interaction-rule table (which only fires on specific curated
+drug pairs), so they are a distinct, always-on offline check.
 """
 
 from __future__ import annotations
@@ -19,7 +26,12 @@ from typing import Literal
 
 Severity = Literal["info", "warning", "critical", "hard_block"]
 CheckType = Literal[
-    "drug_interaction", "contraindication", "allergy_conflict", "renal_dose", "hepatic_dose"
+    "drug_interaction",
+    "contraindication",
+    "allergy_conflict",
+    "renal_dose",
+    "hepatic_dose",
+    "duplicate_therapy",
 ]
 
 
@@ -275,12 +287,89 @@ def _evaluate_renal(
     )
 
 
+def check_duplicate_therapy(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Flag re-ordering an active med, a same-ingredient duplicate, or a same-class duplicate.
+
+    None of these are "interactions" in the curated pairwise-rule sense, so they fall outside
+    ``check_interactions`` entirely; without this check two brands of the same generic (or two
+    drugs in the same class) can be prescribed side by side with zero flags raised.
+    """
+    flags: list[SafetyFlag] = []
+    proposed_generic = _norm(proposed.generic_name)
+    proposed_class = _norm(proposed.drug_class) if proposed.drug_class else None
+
+    for med in ctx.current_meds:
+        if med.reference_id == proposed.reference_id:
+            flags.append(
+                SafetyFlag(
+                    check_type="duplicate_therapy",
+                    severity="warning",
+                    is_hard_block=False,
+                    summary=(
+                        f"Patient already has an active order for {proposed.generic_name}. "
+                        "Confirm whether this is an intentional refill/dose change or a "
+                        "duplicate order."
+                    ),
+                    details={
+                        "proposed_drug": proposed.generic_name,
+                        "match_type": "same_product",
+                    },
+                )
+            )
+            continue
+
+        med_generic = _norm(med.generic_name)
+        if proposed_generic and med_generic == proposed_generic:
+            flags.append(
+                SafetyFlag(
+                    check_type="duplicate_therapy",
+                    severity="critical",
+                    is_hard_block=False,
+                    summary=(
+                        f"{proposed.generic_name} has the same active ingredient as a "
+                        f"different product the patient is already on ({med.generic_name}). "
+                        "Risk of unintentional double-dosing."
+                    ),
+                    details={
+                        "proposed_drug": proposed.generic_name,
+                        "existing_drug": med.generic_name,
+                        "match_type": "same_ingredient",
+                    },
+                )
+            )
+            continue
+
+        med_class = _norm(med.drug_class) if med.drug_class else None
+        if proposed_class and med_class and med_class == proposed_class:
+            flags.append(
+                SafetyFlag(
+                    check_type="duplicate_therapy",
+                    severity="warning",
+                    is_hard_block=False,
+                    summary=(
+                        f"Therapeutic duplication: {proposed.generic_name} is in the same "
+                        f"class ({proposed.drug_class}) as {med.generic_name}, which the "
+                        "patient is already on."
+                    ),
+                    details={
+                        "proposed_drug": proposed.generic_name,
+                        "existing_drug": med.generic_name,
+                        "drug_class": proposed.drug_class,
+                        "match_type": "same_class",
+                    },
+                )
+            )
+
+    return flags
+
+
 def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
     """Run all deterministic checks for a single proposed medication."""
     flags: list[SafetyFlag] = []
     flags.extend(check_allergies(proposed, ctx))
     flags.extend(check_interactions(proposed, ctx))
     flags.extend(check_contraindications(proposed, ctx))
+    flags.extend(check_duplicate_therapy(proposed, ctx))
     return flags
 
 

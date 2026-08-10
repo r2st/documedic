@@ -12,15 +12,25 @@ the case is marked ``degraded`` — the system never silently produces output.
 Temperature is fixed at 0.0 for deterministic clinical output. The verifier uses a
 separate client instance with no view of other agents' chain-of-thought (independent
 re-check).
+
+Every provider call is bounded by ``settings.llm_request_timeout_seconds`` so a hung upstream
+connection fails over instead of blocking the calling worker thread indefinitely. Failures are
+logged (provider, attempt, exception type — never the prompt/patient snapshot, which lives in
+``system``/``user``) so degraded-mode episodes are diagnosable in production. Retries of the
+same provider back off briefly between attempts to avoid hammering a struggling upstream.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
 
 from app.agents import demo_data
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMUnavailable(RuntimeError):
@@ -94,7 +104,9 @@ def _extract_json(text: str) -> dict[str, Any]:
 def _complete_openai(system: str, user: str, model: str, max_tokens: int) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(
+        api_key=settings.openai_api_key, timeout=settings.llm_request_timeout_seconds
+    )
     completion = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
@@ -110,7 +122,9 @@ def _complete_openai(system: str, user: str, model: str, max_tokens: int) -> str
 def _complete_anthropic(system: str, user: str, model: str, max_tokens: int) -> str:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.Anthropic(
+        api_key=settings.anthropic_api_key, timeout=settings.llm_request_timeout_seconds
+    )
     message = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -129,6 +143,7 @@ def _complete_openrouter(system: str, user: str, model: str, max_tokens: int) ->
     client = OpenAI(
         api_key=settings.openrouter_api_key,
         base_url=settings.openrouter_base_url,
+        timeout=settings.llm_request_timeout_seconds,
         default_headers={
             "HTTP-Referer": "https://documedic.aiknol.com",
             "X-Title": "Documedic (Aether Clinician)",
@@ -177,8 +192,10 @@ class LLMClient:
     def complete_json(self, system: str, user: str, *, retries: int = 2) -> dict[str, Any]:
         """Return the parsed JSON object from a single-turn completion.
 
-        Tries each configured provider in order, retrying each before moving to the next.
-        Raises ``LLMUnavailable`` when no provider succeeds so the agent degrades.
+        Tries each configured provider in order, retrying each (with a short backoff between
+        attempts) before moving to the next. Raises ``LLMUnavailable`` when no provider
+        succeeds so the agent degrades. Never logs ``system``/``user`` — they carry the
+        patient snapshot — only provider name, attempt number, and exception type.
         """
         providers = available_providers()
         if not providers:
@@ -189,12 +206,31 @@ class LLMClient:
 
         last_err: Exception | None = None
         for provider in providers:
-            for _ in range(retries + 1):
+            for attempt in range(retries + 1):
                 try:
                     return _extract_json(self._complete(provider, system, user))
                 except Exception as exc:  # noqa: BLE001 — surfaced to caller as LLMUnavailable
                     last_err = exc
+                    logger.warning(
+                        "LLM provider %r failed (attempt %d/%d): %s: %s",
+                        provider,
+                        attempt + 1,
+                        retries + 1,
+                        type(exc).__name__,
+                        str(exc)[:200],
+                    )
+                    if attempt < retries:
+                        backoff = min(
+                            settings.llm_retry_backoff_base_seconds * (attempt + 1), 2.0
+                        )
+                        time.sleep(backoff)
         # Every configured provider failed. Final safety net: simulated demo data if enabled.
+        logger.error(
+            "All configured LLM providers failed (%s); last error: %s: %s",
+            ", ".join(providers),
+            type(last_err).__name__ if last_err else "unknown",
+            str(last_err)[:200] if last_err else "",
+        )
         if demo_fallback_enabled():
             return demo_data.simulated_response(system, user)
         raise LLMUnavailable(str(last_err))

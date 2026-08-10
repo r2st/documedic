@@ -215,7 +215,12 @@ class SafetyService:
         if vocab is None:
             raise ValidationError("Could not resolve the proposed drug via DrugVocabulary")
 
-        ctx = await self._build_context(patient_id, exclude_reference_id=vocab.reference_id)
+        # Deliberately NOT excluding the proposed drug's own reference id from current_meds
+        # here (unlike active_flags' pairwise sub_ctx below): check_duplicate_therapy needs to
+        # see it to detect "patient is already on this exact product". check_interactions
+        # already self-skips (med.reference_id == proposed.reference_id), so nothing else in
+        # evaluate_drug_safety depends on the exclusion.
+        ctx = await self._build_context(patient_id)
         proposed = DrugRef(
             reference_id=vocab.reference_id,
             generic_name=vocab.generic_name,
