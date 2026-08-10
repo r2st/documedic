@@ -666,3 +666,32 @@ async def test_active_flags_returns_a_flag_for_each_interacting_current_medicati
         assert flag["summary"]
         # Safety Rule #4: no imperative clinical language in any flag microcopy.
         assert not flag["summary"].lower().startswith(("give ", "administer ", "prescribe "))
+
+
+async def test_the_audit_lock_is_taken_before_the_chain_tail_is_read(db, monkeypatch):
+    """Ordering is the whole point: locking after the read would serialise nothing.
+
+    ``record()`` computes the next sequence and ``prev_hash`` from the current tail. If the
+    advisory lock were acquired after that read, two concurrent appends could still both read
+    the same tail, then take the lock one after the other and write a forked chain — with the
+    unique constraint on ``sequence`` turning the race into a 500 on a clinician's action.
+    """
+    order: list[str] = []
+    service = AuditService(db)
+    real_lock = service._lock
+    real_latest = service._latest
+
+    async def _spy_lock() -> None:
+        order.append("lock")
+        await real_lock()
+
+    async def _spy_latest():
+        order.append("read_tail")
+        return await real_latest()
+
+    monkeypatch.setattr(service, "_lock", _spy_lock)
+    monkeypatch.setattr(service, "_latest", _spy_latest)
+
+    await service.record(action="test_lock_ordering")
+
+    assert order == ["lock", "read_tail"], order
