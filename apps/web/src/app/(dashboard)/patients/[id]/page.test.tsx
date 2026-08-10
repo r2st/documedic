@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditEntry, LongitudinalRecord, Paginated, Patient } from '@/lib/types';
 
@@ -210,5 +210,36 @@ describe('PatientDetailPage', () => {
       'href',
       '/patients/pat-1/encounter',
     );
+  });
+});
+
+describe('PatientDetailPage header fallbacks', () => {
+  beforeEach(() => {
+    vi.mocked(api.getPatient).mockReset();
+    vi.mocked(api.getRecord).mockReset();
+    vi.mocked(api.auditTrail).mockReset();
+    vi.mocked(api.verifyAudit).mockReset();
+  });
+
+  it('labels missing demographics rather than rendering empty separators', async () => {
+    mockAll();
+    vi.mocked(api.getPatient).mockResolvedValue(
+      patient({ full_name: '', sex: null, date_of_birth: null }),
+    );
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+
+    expect(await screen.findByText(/DOB unknown/)).toBeInTheDocument();
+    expect(screen.getByText(/unknown · DOB unknown/)).toBeInTheDocument();
+    // No name to derive an initial from -- the avatar shows a placeholder, not a blank circle.
+    expect(screen.getByText('?')).toBeInTheDocument();
+  });
+
+  it('renders nothing rather than a half-built header when the patient payload is absent', async () => {
+    mockAll();
+    // A 200 with an empty body would otherwise dereference null in the header.
+    vi.mocked(api.getPatient).mockResolvedValue(null as unknown as Patient);
+    const { container } = render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 });

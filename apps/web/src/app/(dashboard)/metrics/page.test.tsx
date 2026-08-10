@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
@@ -234,5 +234,91 @@ describe('MetricsPage', () => {
     expect(within(item).getByText('sentinel event')).toBeInTheDocument();
     expect(within(item).getByText('missed diagnosis')).toBeInTheDocument();
     expect(within(item).getByText('investigating')).toBeInTheDocument();
+  });
+});
+
+describe('MetricsPage error and badge fallbacks', () => {
+  beforeEach(() => {
+    vi.mocked(api.performanceMetrics).mockReset().mockResolvedValue(metrics());
+    vi.mocked(api.listSafetyReports).mockReset().mockResolvedValue([]);
+    vi.mocked(api.pilotStatus).mockReset().mockResolvedValue({ pilot_mode: false, message: '' });
+    vi.mocked(api.runValidation).mockReset().mockResolvedValue(RUN);
+    vi.mocked(api.fileSafetyReport).mockReset().mockResolvedValue(REPORT);
+    vi.mocked(api.downloadSamdDossier).mockReset().mockResolvedValue(undefined);
+  });
+
+  it('shows a generic message when the metrics load fails outside the API contract', async () => {
+    vi.mocked(api.performanceMetrics).mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<MetricsPage />);
+    expect(await screen.findByText(/Failed to load metrics/)).toBeInTheDocument();
+  });
+
+  it('shows a generic message when the validation harness fails outside the API contract', async () => {
+    vi.mocked(api.runValidation).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<MetricsPage />);
+    await screen.findByText('42');
+
+    await user.click(screen.getByRole('button', { name: 'Run validation harness' }));
+    expect(await screen.findByText(/Validation harness failed/)).toBeInTheDocument();
+  });
+
+  it('surfaces the server message when the dossier download is refused', async () => {
+    vi.mocked(api.downloadSamdDossier).mockRejectedValue(
+      new ApiError(403, 'forbidden', 'Dossier export requires a regulatory role'),
+    );
+    const user = userEvent.setup();
+    render(<MetricsPage />);
+    await screen.findByText('42');
+
+    await user.click(screen.getByRole('button', { name: 'Download CDSCO dossier' }));
+    expect(
+      await screen.findByText('Dossier export requires a regulatory role'),
+    ).toBeInTheDocument();
+  });
+
+  it('surfaces the server message when a safety report is rejected', async () => {
+    vi.mocked(api.fileSafetyReport).mockRejectedValue(
+      new ApiError(422, 'invalid', 'Description must name the affected workflow'),
+    );
+    const user = userEvent.setup();
+    render(<MetricsPage />);
+    await screen.findByText('42');
+
+    await user.type(screen.getByLabelText('Description'), 'Something went wrong.');
+    await user.click(screen.getByRole('button', { name: 'Submit report' }));
+
+    expect(
+      await screen.findByText('Description must name the affected workflow'),
+    ).toBeInTheDocument();
+  });
+
+  it('drops a whitespace-only report even if the form is submitted directly', async () => {
+    // The button is disabled for blank input, but implicit form submission can bypass it, so
+    // the handler keeps its own guard. Nothing should reach the safety-report endpoint.
+    const user = userEvent.setup();
+    const { container } = render(<MetricsPage />);
+    await screen.findByText('42');
+
+    await user.type(screen.getByLabelText('Description'), '   ');
+    const form = screen.getByLabelText('Description').closest('form');
+    expect(form).not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+
+    await waitFor(() => expect(container).toBeTruthy());
+    expect(api.fileSafetyReport).not.toHaveBeenCalled();
+  });
+
+  it('styles safety reports whose severity and status are outside the known sets', async () => {
+    // These come from the backend enum; the badges must render new values rather than crash
+    // or show an unstyled fragment.
+    vi.mocked(api.listSafetyReports).mockResolvedValue([
+      { ...REPORT, severity: 'catastrophic', status: 'escalated' },
+    ]);
+    render(<MetricsPage />);
+
+    const item = await screen.findByRole('listitem');
+    expect(within(item).getByText('catastrophic')).toBeInTheDocument();
+    expect(within(item).getByText('escalated')).toBeInTheDocument();
   });
 });

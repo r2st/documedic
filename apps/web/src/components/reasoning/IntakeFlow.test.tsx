@@ -81,3 +81,95 @@ describe('IntakeFlow', () => {
     expect(api.submitIntakeAnswers).not.toHaveBeenCalled();
   });
 });
+
+describe('IntakeFlow question rendering', () => {
+  beforeEach(() => {
+    vi.mocked(api.submitIntakeAnswers).mockReset();
+  });
+
+  it('styles an unrecognised question type with the neutral badge instead of dropping it', () => {
+    // Question types come from the Triage agent, so the UI must not assume a closed set.
+    render(
+      <IntakeFlow
+        sessionId="s1"
+        questions={[question({ question_type: 'social_history' })]}
+        onComplete={vi.fn()}
+      />,
+    );
+
+    const badge = screen.getByText('social history');
+    expect(badge).toBeInTheDocument();
+    expect(badge.className).toContain('bg-slate-50');
+  });
+
+  it('shows the agent rationale when one is given', () => {
+    render(
+      <IntakeFlow
+        sessionId="s1"
+        questions={[question({ rationale: 'Duration separates acute from chronic causes.' })]}
+        onComplete={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText('Duration separates acute from chronic causes.'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the question alone when the agent gave no rationale', () => {
+    // `questions` seeds component state, so the two cases need separate mounts.
+    const { container } = render(
+      <IntakeFlow sessionId="s1" questions={[question({ rationale: null })]} onComplete={vi.fn()} />,
+    );
+
+    expect(screen.getByText('How long has the pain lasted?')).toBeInTheDocument();
+    expect(container.querySelector('p.italic')).toBeNull();
+  });
+
+  it('submits an empty payload when every answer was left blank or whitespace', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockResolvedValue({
+      session: {} as never,
+      pending_questions: [],
+      intake_complete: true,
+    });
+    const user = userEvent.setup();
+    render(
+      <IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />,
+    );
+
+    await user.type(screen.getByPlaceholderText(/Your answer/), '   ');
+    await user.click(screen.getByRole('button', { name: /Submit/i }));
+
+    expect(api.submitIntakeAnswers).toHaveBeenCalledWith('s1', []);
+  });
+});
+
+describe('IntakeFlow partial answers', () => {
+  beforeEach(() => {
+    vi.mocked(api.submitIntakeAnswers).mockReset();
+  });
+
+  it('omits a question the clinician never touched from the payload', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockResolvedValue({
+      session: {} as never,
+      pending_questions: [],
+      intake_complete: true,
+    });
+    const user = userEvent.setup();
+    render(
+      <IntakeFlow
+        sessionId="s1"
+        questions={[question(), question({ id: 'q2', question_text: 'Any fever?' })]}
+        onComplete={vi.fn()}
+      />,
+    );
+
+    const [first] = screen.getAllByPlaceholderText(/Your answer/);
+    await user.type(first, '3 days');
+    await user.click(screen.getByRole('button', { name: 'Submit answers' }));
+
+    // q2 was never given a value at all, so it has no entry in the answer map.
+    expect(api.submitIntakeAnswers).toHaveBeenCalledWith('s1', [
+      { question_id: 'q1', answer_text: '3 days' },
+    ]);
+  });
+});

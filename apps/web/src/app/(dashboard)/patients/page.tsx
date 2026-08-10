@@ -173,8 +173,9 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
           </div>
         )}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-700">Full name</label>
+          <label htmlFor="new-patient-full-name" className="mb-1.5 block text-sm font-medium text-slate-700">Full name</label>
           <input
+            id="new-patient-full-name"
             required
             placeholder="Enter patient's full name"
             value={fullName}
@@ -184,8 +185,9 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">Sex</label>
+            <label htmlFor="new-patient-sex" className="mb-1.5 block text-sm font-medium text-slate-700">Sex</label>
             <select
+              id="new-patient-sex"
               value={sex}
               onChange={(e) => setSex(e.target.value)}
               className="w-full"
@@ -197,8 +199,9 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             </select>
           </div>
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">Date of birth</label>
+            <label htmlFor="new-patient-dob" className="mb-1.5 block text-sm font-medium text-slate-700">Date of birth</label>
             <input
+              id="new-patient-dob"
               type="date"
               value={dob}
               onChange={(e) => setDob(e.target.value)}
@@ -206,8 +209,9 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">Phone</label>
+            <label htmlFor="new-patient-phone" className="mb-1.5 block text-sm font-medium text-slate-700">Phone</label>
             <input
+              id="new-patient-phone"
               placeholder="Phone number"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}

@@ -147,3 +147,29 @@ describe('api requests', () => {
     expect(body.keep_current_refresh_token).toBe('keep-me');
   });
 });
+
+describe('tokenStore on the server', () => {
+  // The app is a Next.js App Router project, so these getters are evaluated during server
+  // rendering too, where `localStorage` does not exist. Each guard has to return null rather
+  // than throw a ReferenceError that would take the whole render down.
+  beforeEach(() => {
+    localStorage.clear();
+    tokenStore.set({
+      access_token: 'a1',
+      refresh_token: 'r1',
+      token_type: 'bearer',
+      expires_in: 900,
+    });
+    vi.stubGlobal('window', undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reads as empty with no window, even when localStorage holds tokens', () => {
+    expect(tokenStore.access).toBeNull();
+    expect(tokenStore.refresh).toBeNull();
+    expect(tokenStore.accessExpiresAt).toBeNull();
+  });
+});

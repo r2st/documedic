@@ -164,3 +164,25 @@ describe('SafetyPage', () => {
     );
   });
 });
+
+describe('SafetyPage scope summary', () => {
+  beforeEach(() => {
+    vi.mocked(api.checkDrugSafety).mockReset();
+  });
+
+  it('reads the scope as zero rather than blank when the counts are absent', async () => {
+    // The clinician needs to know what the deterministic check ran against. A payload missing
+    // those counts must degrade to "0", never to an empty gap that reads as "not checked".
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        checked_against: {} as SafetyCheckResponse['checked_against'],
+      }),
+    );
+    await runCheck();
+
+    expect(
+      await screen.findByText(/0 current\s*medication\(s\), 0 allergy\(ies\), 0 condition\(s\)/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/eGFR available/)).not.toBeInTheDocument();
+  });
+});

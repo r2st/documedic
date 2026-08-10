@@ -221,3 +221,59 @@ describe('ReasoningTheatre', () => {
     expect(screen.queryByText('Hypotheses (live ranking)')).not.toBeInTheDocument();
   });
 });
+
+describe('ReasoningTheatre partial payloads', () => {
+  it('renders a can-not-miss entry that arrives without its narrative fields', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    // Rule #3: a can't-miss item is never dropped for being incomplete -- the panel still
+    // has to appear so the clinician sees that the sentinel fired.
+    act(() => {
+      source.emit('cant_miss', { items: [{}] });
+    });
+
+    expect(
+      screen.getByText("Can't-miss conditions forced onto the differential"),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the devils-advocate panel even when the critique carries no summary', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    // Rule #5: dissent is never suppressed, so an empty summary must not collapse the panel.
+    act(() => {
+      source.emit('devils_advocate', { critique: {} });
+    });
+
+    expect(screen.getByText("Devil's advocate")).toBeInTheDocument();
+  });
+
+  it('renders a verifier verdict that carries no tier and no caveats', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('verifier', { status: 'approved' });
+    });
+
+    expect(screen.getByText('Verifier verdict')).toBeInTheDocument();
+    expect(screen.getByText('Status: approved')).toBeInTheDocument();
+    expect(screen.queryByText(/^•/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ReasoningTheatre caveat rendering', () => {
+  it('renders a null caveat as an empty bullet rather than the text "null"', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('verifier', { status: 'approved', case_caveats: [null, 'Limited history'] });
+    });
+
+    expect(screen.getByText('• Limited history')).toBeInTheDocument();
+    expect(screen.queryByText(/null/)).not.toBeInTheDocument();
+  });
+});

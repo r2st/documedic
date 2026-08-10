@@ -133,3 +133,32 @@ describe('DashboardLayout', () => {
     );
   });
 });
+
+describe('DashboardLayout identity fallbacks', () => {
+  beforeEach(() => {
+    pathname = '/patients';
+    logout.mockReset();
+  });
+
+  it('falls back to the email in the mobile panel when no display name is set', async () => {
+    authState = { account: { ...ACCOUNT, display_name: null }, loading: false };
+    const user = userEvent.setup();
+    render(<DashboardLayout><p>child</p></DashboardLayout>);
+
+    await user.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    // Desktop header and mobile panel both identify the clinician; neither may go blank.
+    expect(screen.getAllByText('jane@clinic.in')).toHaveLength(2);
+    expect(screen.getAllByText('J')).toHaveLength(2);
+  });
+
+  it('renders a placeholder initial when the account has nothing to derive one from', async () => {
+    authState = { account: { ...ACCOUNT, display_name: null, email: '' }, loading: false };
+    const user = userEvent.setup();
+    render(<DashboardLayout><p>child</p></DashboardLayout>);
+
+    expect(screen.getByText('?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open menu' }));
+    expect(screen.getAllByText('?')).toHaveLength(2);
+  });
+});

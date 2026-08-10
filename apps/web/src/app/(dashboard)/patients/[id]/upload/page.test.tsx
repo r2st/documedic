@@ -210,3 +210,25 @@ describe('UploadPage', () => {
     expect(await screen.findByText('Upload failed')).toBeInTheDocument();
   });
 });
+
+describe('UploadPage approval guards', () => {
+  beforeEach(() => {
+    push.mockReset();
+    vi.mocked(api.uploadDocument).mockReset().mockResolvedValue(DOC);
+    vi.mocked(api.getExtraction).mockReset().mockResolvedValue(extraction());
+    vi.mocked(api.approveExtraction).mockReset();
+  });
+
+  it('reports a generic message when approval fails outside the API contract', async () => {
+    vi.mocked(api.approveExtraction).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Review extraction');
+    await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
+
+    expect(await screen.findByText('Approval failed')).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+  });
+});

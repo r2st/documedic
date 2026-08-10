@@ -163,3 +163,64 @@ describe('PatientsPage', () => {
     expect(within(item).getByText('A')).toBeInTheDocument();
   });
 });
+
+describe('PatientsPage edge cases', () => {
+  beforeEach(() => {
+    vi.mocked(api.listPatients).mockReset().mockResolvedValue(page([summary()]));
+    vi.mocked(api.createPatient).mockReset();
+  });
+
+  it('shows a placeholder initial for a patient with no usable name', async () => {
+    vi.mocked(api.listPatients).mockResolvedValue(page([summary({ full_name: '' })]));
+    render(<PatientsPage />);
+
+    const item = await screen.findByRole('listitem');
+    expect(within(item).getByText('?')).toBeInTheDocument();
+  });
+
+  it('reports a generic message when creation fails outside the API contract', async () => {
+    // A network drop rejects with a TypeError, not an ApiError -- the form still has to say
+    // something actionable instead of rendering `undefined`.
+    vi.mocked(api.createPatient).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<PatientsPage />);
+
+    await user.click(await screen.findByRole('button', { name: /New patient/i }));
+    await user.type(screen.getByPlaceholderText(/Full name/i), 'Ravi Kumar');
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /Create patient/i }));
+
+    expect(await screen.findByText('Failed to create patient')).toBeInTheDocument();
+    expect(screen.getByText('Register new patient')).toBeInTheDocument();
+  });
+});
+
+describe('CreatePatientForm optional demographics', () => {
+  beforeEach(() => {
+    vi.mocked(api.listPatients).mockReset().mockResolvedValue(page([summary()]));
+    vi.mocked(api.createPatient).mockReset().mockResolvedValue({} as Patient);
+  });
+
+  it('sends the date of birth and phone number when they are supplied', async () => {
+    const user = userEvent.setup();
+    render(<PatientsPage />);
+
+    await user.click(await screen.findByRole('button', { name: /New patient/i }));
+    await user.type(screen.getByPlaceholderText(/Full name/i), 'Ravi Kumar');
+    await user.type(screen.getByPlaceholderText(/Phone number/i), '+91 90000 11111');
+    const dob = screen.getByLabelText('Date of birth');
+    await user.type(dob, '1985-03-14');
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /Create patient/i }));
+
+    await waitFor(() =>
+      expect(api.createPatient).toHaveBeenCalledWith({
+        full_name: 'Ravi Kumar',
+        sex: 'unknown',
+        date_of_birth: '1985-03-14',
+        phone: '+91 90000 11111',
+        consent_given: true,
+      }),
+    );
+  });
+});
