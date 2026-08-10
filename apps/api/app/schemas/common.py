@@ -6,11 +6,8 @@ Enums here must stay in sync with packages/shared-types/src/enums.ts.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
-
-T = TypeVar("T")
 
 
 class AutonomyTier(str, Enum):
@@ -117,7 +114,7 @@ class PaginationMeta(BaseModel):
     has_more: bool
 
 
-class PaginatedResponse(BaseModel, Generic[T]):
+class PaginatedResponse[T](BaseModel):
     items: list[T]
     pagination: PaginationMeta
 

@@ -16,10 +16,10 @@ import uuid
 from datetime import UTC, date, datetime
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import String, bindparam, select, text
 
 from app.core.crypto import encrypt_str
-from app.db.types import EncryptedDate, EncryptedString
+from app.db.types import GUID, EncryptedDate, EncryptedString
 from app.exceptions import (
     FileTooLargeError,
     NotFoundError,
@@ -28,6 +28,7 @@ from app.exceptions import (
     ValidationError,
 )
 from app.models.drug_safety_check import DrugSafetyCheck
+from app.models.drug_vocabulary import DrugVocabulary
 from app.models.patient import Patient
 from app.models.user import Account
 from app.services.reasoning_service import ReasoningService, SuggestionNotFoundError
@@ -42,6 +43,35 @@ async def _account(db) -> Account:
     db.add(account)
     await db.flush()
     return account
+
+
+async def _drug(db) -> DrugVocabulary:
+    drug = DrugVocabulary(
+        brand_name="Crocin",
+        generic_name="Paracetamol",
+        reference_id=f"ref-{uuid.uuid4().hex}",
+    )
+    db.add(drug)
+    await db.flush()
+    return drug
+
+
+async def _safety_check(db, account, patient, *, is_hard_block: bool) -> DrugSafetyCheck:
+    """A persisted check. `check_type`/`severity` must satisfy the table's CHECK constraints."""
+    drug = await _drug(db)
+    check = DrugSafetyCheck(
+        patient_id=patient.id,
+        account_id=account.id,
+        drug_vocabulary_id=drug.id,
+        check_type="allergy_conflict" if is_hard_block else "drug_interaction",
+        severity="hard_block" if is_hard_block else "warning",
+        is_hard_block=is_hard_block,
+        summary="Allergy hard block" if is_hard_block else "Moderate interaction",
+        details={},
+    )
+    db.add(check)
+    await db.flush()
+    return check
 
 
 async def _patient(db, account: Account) -> Patient:
@@ -103,13 +133,13 @@ def test_encrypted_date_returns_none_when_plaintext_decrypts_but_is_not_a_date()
 
 def test_encrypted_date_round_trips_and_accepts_an_iso_string_on_write():
     column = EncryptedDate()
-    assert column.process_result_value(column.process_bind_param(date(1968, 5, 10), None), None) == (
-        date(1968, 5, 10)
-    )
+
+    def _round_trip(value):
+        return column.process_result_value(column.process_bind_param(value, None), None)
+
+    assert _round_trip(date(1968, 5, 10)) == date(1968, 5, 10)
     # A str going in is coerced, matching the model's tolerance for ISO input.
-    assert column.process_result_value(column.process_bind_param("1968-05-10", None), None) == (
-        date(1968, 5, 10)
-    )
+    assert _round_trip("1968-05-10") == date(1968, 5, 10)
     assert column.process_result_value(None, None) is None
     assert column.process_bind_param(None, None) is None
 
@@ -123,9 +153,14 @@ async def test_patient_with_legacy_plaintext_pii_still_reads_through_the_api(db,
     created = await create_patient(auth_client, full_name="Legacy Row")
     patient_id = created["id"]
 
+    # Typed bindparams matter here: `id` is a GUID column, stored as bare 32-char hex off
+    # PostgreSQL, so a dashed string would silently match zero rows and the test would pass
+    # against an unmodified row. `name` is bound as a plain String to bypass EncryptedString's
+    # bind processor -- writing plaintext past the ORM is the whole point.
     await db.execute(
         text("UPDATE patients SET full_name = :name WHERE id = :pid").bindparams(
-            name="Plaintext Name", pid=patient_id
+            bindparam("name", "Plaintext Name", type_=String()),
+            bindparam("pid", uuid.UUID(patient_id), type_=GUID()),
         )
     )
     await db.commit()
@@ -159,15 +194,7 @@ async def test_override_of_another_patients_check_raises_not_found(db):
     patient_a = await _patient(db, account)
     patient_b = await _patient(db, account)
 
-    check = DrugSafetyCheck(
-        patient_id=patient_b.id,
-        check_type="allergy",
-        severity="contraindicated",
-        is_hard_block=True,
-        message="Allergy hard block",
-    )
-    db.add(check)
-    await db.flush()
+    check = await _safety_check(db, account, patient_b, is_hard_block=True)
 
     with pytest.raises(NotFoundError):
         await SafetyService(db).override_hard_block(
@@ -182,15 +209,7 @@ async def test_override_of_a_non_hard_block_is_rejected(db):
     """Only hard blocks take the override path; a soft flag needs no documented override."""
     account = await _account(db)
     patient = await _patient(db, account)
-    check = DrugSafetyCheck(
-        patient_id=patient.id,
-        check_type="interaction",
-        severity="moderate",
-        is_hard_block=False,
-        message="Moderate interaction",
-    )
-    db.add(check)
-    await db.flush()
+    check = await _safety_check(db, account, patient, is_hard_block=False)
 
     with pytest.raises(ValidationError):
         await SafetyService(db).override_hard_block(
@@ -326,7 +345,7 @@ def test_ocr_returns_empty_when_tesseract_times_out(monkeypatch):
         raise subprocess.TimeoutExpired(cmd="tesseract", timeout=60)
 
     monkeypatch.setattr(pipeline.subprocess, "run", _timeout)
-    assert pipeline.ocr_image_bytes(b"\x89PNG fake", "image/png") == ""
+    assert pipeline._tesseract_text(b"\x89PNG fake", "image/png") == ""
 
 
 def test_ocr_returns_empty_when_tesseract_cannot_be_executed(monkeypatch):
@@ -338,14 +357,14 @@ def test_ocr_returns_empty_when_tesseract_cannot_be_executed(monkeypatch):
         raise OSError("exec format error")
 
     monkeypatch.setattr(pipeline.subprocess, "run", _oserror)
-    assert pipeline.ocr_image_bytes(b"\x89PNG fake", "image/png") == ""
+    assert pipeline._tesseract_text(b"\x89PNG fake", "image/png") == ""
 
 
 def test_ocr_returns_empty_when_no_binary_is_installed(monkeypatch):
     from app.services.extraction import pipeline
 
     monkeypatch.setattr(pipeline.shutil, "which", lambda _cmd: None)
-    assert pipeline.ocr_image_bytes(b"\x89PNG fake", "image/png") == ""
+    assert pipeline._tesseract_text(b"\x89PNG fake", "image/png") == ""
 
 
 # --------------------------------------------------------------------------------------
@@ -440,7 +459,7 @@ async def test_egfr_derivation_skips_a_lab_it_cannot_compute(db):
 
     lab = LabResult(
         patient_id=patient.id,
-        test_name="Creatinine",
+        marker_name="Creatinine",
         value_numeric=1.1,
         unit="mg/dL",
         sample_date=datetime(2024, 1, 1, tzinfo=UTC),
@@ -518,7 +537,7 @@ async def test_stream_rejects_a_stream_token_presented_in_the_authorization_head
         json={"presenting_complaint": "chest pain for two days"},
     )
     assert start.status_code in (200, 201), start.text
-    session_id = start.json()["session_id"]
+    session_id = start.json()["session"]["id"]
 
     minted = await auth_client.post(f"/api/v1/reasoning/{session_id}/stream-token")
     assert minted.status_code == 200, minted.text
@@ -540,7 +559,7 @@ async def test_stream_rejects_a_token_with_a_malformed_subject(auth_client):
         f"/api/v1/patients/{patient['id']}/reasoning",
         json={"presenting_complaint": "chest pain for two days"},
     )
-    session_id = start.json()["session_id"]
+    session_id = start.json()["session"]["id"]
 
     bad = create_access_token("not-a-uuid")
     resp = await auth_client.get(
@@ -567,18 +586,15 @@ async def test_refresh_fails_once_the_account_is_deleted(db):
     from app.services.auth_service import AuthService
 
     service = AuthService(db)
-    tokens = await service.signup(
-        email=f"gone-{uuid.uuid4().hex}@example.com",
+    email = f"gone-{uuid.uuid4().hex}@example.com"
+    # `signup` returns the Account; the refresh token only exists once a session is issued.
+    account = await service.signup(
+        email=email,
         password="password123",
         display_name="Gone Soon",
     )
+    tokens = await service.login(email, "password123")
 
-    account = (
-        (await db.execute(select(Account).where(Account.email.like("gone-%"))))
-        .scalars()
-        .first()
-    )
-    assert account is not None
     account.is_deleted = True
     await db.commit()
 

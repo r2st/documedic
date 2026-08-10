@@ -31,6 +31,7 @@ from app.models.patient import Patient
 from app.models.user import Account
 from app.services.pathway_service import PathwayService
 from app.services.safety_service import SafetyService
+from tests.conftest import create_patient
 
 pytestmark = pytest.mark.asyncio
 
@@ -265,8 +266,189 @@ async def test_unmapped_conditions_cost_no_guideline_queries(db, engine):
         result = await service.for_patient(account_id=account.id, patient_id=patient.id)
 
     assert result["pathways"] == []
-    assert sorted(result["unmapped_conditions"]) == ["Another Unmapped One", "Some Unmapped Condition"]
+    assert sorted(result["unmapped_conditions"]) == [
+        "Another Unmapped One",
+        "Some Unmapped Condition",
+    ]
     guideline_queries = [s for s in counter["statements"] if "guideline_chunks" in s.lower()]
     assert not guideline_queries, (
         f"no pathway matched, so the guideline corpus should not be queried: {guideline_queries}"
+    )
+
+
+# ------------------------------------------------------------------------------------------
+# End-to-end query-count flatness.
+#
+# The service-level tests above pin individual call sites. These pin the whole request: a
+# reintroduced N+1 anywhere between the router and the ORM shows up as a query count that
+# grows with the patient's record size, whatever layer it was reintroduced in. Each endpoint
+# is measured twice against two patients with different row counts and must issue the same
+# number of statements both times.
+# ------------------------------------------------------------------------------------------
+
+_SCALING_ENDPOINTS = [
+    ("patients_list", "/api/v1/patients"),
+    ("patient_detail", "/api/v1/patients/{pid}"),
+    ("longitudinal_record", "/api/v1/patients/{pid}/record"),
+    ("documents", "/api/v1/patients/{pid}/documents"),
+    ("drug_safety_flags", "/api/v1/patients/{pid}/drug-safety/flags"),
+    ("drug_safety_overrides", "/api/v1/patients/{pid}/drug-safety/overrides"),
+    ("pathways", "/api/v1/patients/{pid}/pathways"),
+    ("audit", "/api/v1/patients/{pid}/audit"),
+]
+
+
+async def _seed_record(db, patient_id: uuid.UUID, account_id: uuid.UUID, n: int) -> None:
+    """Add `n` rows of each patient-owned entity type — the counts a clinician controls."""
+    from app.models.document import Document
+    from app.models.encounter import Encounter
+    from app.models.lab_result import LabResult
+
+    for i in range(n):
+        db.add(
+            MedicationEvent(
+                patient_id=patient_id,
+                generic_name=f"Drug{i}",
+                dose=f"{i}mg",
+                event_type="start",
+                is_current=True,
+                event_date=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        )
+        db.add(Condition(patient_id=patient_id, condition_name=f"Condition{i}", status="active"))
+        db.add(
+            Allergy(
+                patient_id=patient_id,
+                allergen_name=f"Allergen{i}",
+                allergen_type="drug",
+                severity="mild",
+                status="active",
+            )
+        )
+        db.add(
+            LabResult(
+                patient_id=patient_id,
+                marker_name=f"Marker{i}",
+                value_numeric=1.0 + i,
+                unit="mg/dL",
+                sample_date=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        )
+        db.add(
+            Encounter(
+                patient_id=patient_id,
+                encounter_type="outpatient",
+                encounter_date=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        )
+        db.add(
+            Document(
+                patient_id=patient_id,
+                account_id=account_id,
+                file_name=f"doc{i}.pdf",
+                file_type="pdf",
+                file_size_bytes=10,
+                storage_path=f"/tmp/doc{i}.pdf",
+                storage_hash_sha256=f"{i:064d}",
+                extraction_status="completed",
+            )
+        )
+    await db.commit()
+
+
+@pytest.mark.parametrize(("label", "template"), _SCALING_ENDPOINTS, ids=[e[0] for e in _SCALING_ENDPOINTS])
+async def test_read_endpoint_query_count_is_flat_in_record_size(
+    db, auth_client, engine, label, template
+):
+    from sqlalchemy import select as _select
+
+    from app.models.user import Account
+
+    account_id = (await db.execute(_select(Account.id))).scalars().first()
+
+    counts = []
+    for n in (1, 6):
+        patient = await create_patient(auth_client, full_name=f"{label}-{n}")
+        await _seed_record(db, uuid.UUID(patient["id"]), account_id, n)
+        # A production request gets a cold session; the identity map would otherwise serve
+        # db.get() for free and hide a per-row fetch.
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get(template.format(pid=patient["id"]))
+        assert resp.status_code == 200, resp.text
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"{label} issued {counts[0]} queries for 1 row of each entity but {counts[1]} for 6 — "
+        f"the count must not scale with the size of the record"
+    )
+
+
+async def test_mapped_pathways_batch_citations_across_every_matched_condition(db, auth_client, engine):
+    """Four matched pathways must cost the same as one — citations are fetched in one query."""
+    mapped = ["Hypertension", "Type 2 Diabetes Mellitus", "Dyslipidemia", "Community-Acquired Pneumonia"]
+
+    counts = []
+    for n in (1, 4):
+        patient = await create_patient(auth_client, full_name=f"mapped-{n}")
+        for name in mapped[:n]:
+            db.add(
+                Condition(
+                    patient_id=uuid.UUID(patient["id"]), condition_name=name, status="active"
+                )
+            )
+        await db.commit()
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get(f"/api/v1/patients/{patient['id']}/pathways")
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()["pathways"]) == n, "the conditions must actually match a pathway"
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"one matched pathway cost {counts[0]} queries, four cost {counts[1]} — "
+        f"guideline citations are being fetched per pathway instead of in one batch"
+    )
+
+
+async def test_merge_entities_query_count_is_independent_of_entity_count(db, auth_client, engine):
+    """Ingestion is the write path that scales: a 30-line prescription is one document.
+
+    The dedup keys are loaded once up front, so merging 32 entities must cost the same number
+    of statements as merging 4.
+    """
+    from app.services.graph_service import GraphService
+
+    def _entities(n: int) -> list[dict]:
+        out: list[dict] = []
+        for i in range(n):
+            out.append(
+                {"entity_type": "medication", "fields": {"generic_name": f"Drug{i}", "dose": f"{i}mg"}}
+            )
+            out.append(
+                {"entity_type": "lab_result", "fields": {"marker_name": f"M{i}", "value_numeric": i}}
+            )
+            out.append({"entity_type": "condition", "fields": {"condition_name": f"C{i}"}})
+            out.append({"entity_type": "allergy", "fields": {"allergen_name": f"A{i}"}})
+        return out
+
+    counts = []
+    for n in (1, 8):
+        created = await create_patient(auth_client, full_name=f"ingest-{n}")
+        await db.commit()
+        db.expunge_all()
+        patient = await db.get(Patient, uuid.UUID(created["id"]))
+        with counting_queries(engine) as counter:
+            # A fresh service per measurement, so DrugResolver's warm cache cannot mask a
+            # per-entity vocabulary lookup.
+            result = await GraphService(db).merge_entities(
+                patient=patient, document=None, entities=_entities(n)
+            )
+        await db.commit()
+        assert sum(result.values()) == n * 4, result
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"merging 4 entities cost {counts[0]} queries but 32 cost {counts[1]} — "
+        f"the merge is querying per entity"
     )

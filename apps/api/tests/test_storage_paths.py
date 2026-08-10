@@ -107,9 +107,9 @@ async def test_an_overlong_upload_filename_is_truncated_before_it_is_stored(auth
 async def test_a_missing_upload_filename_falls_back_to_a_placeholder(db):
     """`UploadFile.filename` is optional; an empty one must not become an empty path."""
     from app.models.user import Account
+    from app.schemas.patient import PatientCreate
     from app.services.document_service import DocumentService
     from app.services.patient_service import PatientService
-    from app.schemas.patient import PatientCreate
 
     account = Account(email=f"noname-{uuid.uuid4().hex}@example.com", password_hash="x")
     db.add(account)

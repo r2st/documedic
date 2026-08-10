@@ -29,7 +29,6 @@ from app.services.graph_service import GraphService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.storage import compute_sha256, get_storage
 
-
 # Comfortably longer than any real scan filename, short enough to be a bounded column value.
 MAX_FILE_NAME_CHARS = 255
 
