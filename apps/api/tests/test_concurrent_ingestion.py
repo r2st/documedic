@@ -27,8 +27,8 @@ That guarantee is asserted separately, and at the service layer, by
 ``test_two_appends_that_read_the_same_chain_tail_both_succeed``: it drives two sessions into
 the read-then-insert window on purpose, which is the only way to reach the race from a test.
 Before the retry in ``AuditService.record``, that window produced unique violations on
-``audit_logs.sequence`` (5 of 8 concurrent appends failed); PostgreSQL hides it behind the
-advisory lock, so it would only ever have shown up on a backend without one.
+``audit_logs.sequence`` — 9 of that test's 12 concurrent appends failed. PostgreSQL hides it
+behind the advisory lock, so it would only ever have shown up on a backend without one.
 """
 
 from __future__ import annotations
