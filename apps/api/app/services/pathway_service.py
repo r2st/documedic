@@ -20,10 +20,22 @@ class PathwayService:
         self.db = db
         self.guidelines = GuidelineService(db)
 
-    async def _hydrate(self, pathway: ClinicalPathway) -> dict:
-        all_ids = [sid for stage in pathway.stages for sid in stage.guideline_section_ids]
+    async def _citations_by_id(self, pathways: list[ClinicalPathway]) -> dict[str, dict]:
+        """Fetch the guideline citations for every stage of every pathway in one query.
+
+        Taking a list (not a single pathway) is what keeps ``for_patient`` from issuing one
+        guideline lookup per matched condition.
+        """
+        all_ids = [
+            sid
+            for pathway in pathways
+            for stage in pathway.stages
+            for sid in stage.guideline_section_ids
+        ]
+        if not all_ids:
+            return {}
         chunks = await self.guidelines.get_by_section_ids(all_ids)
-        citations_by_id = {
+        return {
             c["section_id"]: {
                 "section_id": c["section_id"],
                 "source": c["source"],
@@ -36,6 +48,9 @@ class PathwayService:
             }
             for c in chunks
         }
+    @staticmethod
+    def _shape(pathway: ClinicalPathway, citations_by_id: dict[str, dict]) -> dict:
+        """Pure formatting — no IO — so callers control how many queries they issue."""
         return {
             "condition_name": pathway.condition_name,
             "source": pathway.source,
@@ -54,6 +69,9 @@ class PathwayService:
                 for stage in pathway.stages
             ],
         }
+
+    async def _hydrate(self, pathway: ClinicalPathway) -> dict:
+        return self._shape(pathway, await self._citations_by_id([pathway]))
 
     async def get(self, condition_name: str) -> dict:
         pathway = get_pathway(condition_name)
@@ -82,7 +100,7 @@ class PathwayService:
         )
         conditions = result.scalars().all()
 
-        pathways: list[dict] = []
+        matched: list[ClinicalPathway] = []
         unmapped: list[str] = []
         seen: set[str] = set()
         for condition in conditions:
@@ -94,10 +112,13 @@ class PathwayService:
             if key in seen:
                 continue
             seen.add(key)
-            pathways.append(await self._hydrate(pathway))
+            matched.append(pathway)
+
+        # One guideline lookup for all matched pathways, not one per condition.
+        citations_by_id = await self._citations_by_id(matched)
 
         return {
             "patient_id": patient_id,
-            "pathways": pathways,
+            "pathways": [self._shape(pathway, citations_by_id) for pathway in matched],
             "unmapped_conditions": sorted(set(unmapped)),
         }

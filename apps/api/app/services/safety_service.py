@@ -67,16 +67,37 @@ class SafetyService:
                 MedicationEvent.is_current.is_(True),
             )
         )
-        current_meds: list[DrugRef] = []
+        med_rows = list(meds_result.scalars().all())
+
+        # Allergies (drug allergies resolved to reference id + class).
+        allergies_result = await self.db.execute(
+            select(Allergy).where(
+                Allergy.patient_id == patient_id,
+                Allergy.is_deleted.is_(False),
+                Allergy.status == "active",
+            )
+        )
+        allergy_rows = list(allergies_result.scalars().all())
+
+        # Batch-load every vocabulary row both loops below need, in one query. This used to be
+        # a `db.get()` per medication and per allergy — on the hot deterministic safety path,
+        # so a patient on 10 drugs paid 10 extra round-trips per allergy/interaction check.
         vocab_by_id: dict = {}
-        for med in meds_result.scalars().all():
+        vocab_ids = {row.drug_vocabulary_id for row in med_rows if row.drug_vocabulary_id} | {
+            row.drug_vocabulary_id for row in allergy_rows if row.drug_vocabulary_id
+        }
+        if vocab_ids:
+            vocab_result = await self.db.execute(
+                select(DrugVocabulary).where(DrugVocabulary.id.in_(vocab_ids))
+            )
+            vocab_by_id = {vocab.id: vocab for vocab in vocab_result.scalars().all()}
+
+        current_meds: list[DrugRef] = []
+        for med in med_rows:
             ref_id, generic, drug_class = None, med.generic_name, None
             if med.drug_vocabulary_id:
-                vocab = vocab_by_id.get(med.drug_vocabulary_id) or await self.db.get(
-                    DrugVocabulary, med.drug_vocabulary_id
-                )
+                vocab = vocab_by_id.get(med.drug_vocabulary_id)
                 if vocab:
-                    vocab_by_id[med.drug_vocabulary_id] = vocab
                     ref_id, generic, drug_class = (
                         vocab.reference_id,
                         vocab.generic_name,
@@ -95,25 +116,12 @@ class SafetyService:
                     DrugRef(reference_id=ref_id, generic_name=generic or "", drug_class=drug_class)
                 )
 
-        # Allergies (drug allergies resolved to reference id + class).
-        allergies_result = await self.db.execute(
-            select(Allergy).where(
-                Allergy.patient_id == patient_id,
-                Allergy.is_deleted.is_(False),
-                Allergy.status == "active",
-            )
-        )
         allergies: list[PatientAllergy] = []
-        for a in allergies_result.scalars().all():
+        for a in allergy_rows:
             ref_id, drug_class = None, None
             if a.drug_vocabulary_id:
-                # Reuse the cache the medication loop filled — a patient allergic to a drug
-                # they are also on would otherwise re-fetch the same vocabulary row.
-                vocab = vocab_by_id.get(a.drug_vocabulary_id) or await self.db.get(
-                    DrugVocabulary, a.drug_vocabulary_id
-                )
+                vocab = vocab_by_id.get(a.drug_vocabulary_id)
                 if vocab:
-                    vocab_by_id[a.drug_vocabulary_id] = vocab
                     ref_id, drug_class = vocab.reference_id, vocab.drug_class
             elif a.allergen_type == "drug":
                 resolved = await self.resolver.resolve(a.allergen_name)

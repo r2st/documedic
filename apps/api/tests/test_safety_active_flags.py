@@ -151,11 +151,21 @@ async def test_another_accounts_patient_is_rejected(db):
 
 @pytest.mark.asyncio
 async def test_query_count_does_not_scale_with_medication_count(db, engine):
-    """Regression guard for the N+1 fix.
+    """Regression guard for the N+1 fixes.
 
-    active_flags used to call _build_context once per current medication. With the context
-    built once, adding drugs adds only the per-drug vocabulary lookup — so going from 1 to 4
-    medications must not multiply the query count.
+    Two separate regressions are pinned here:
+
+    1. active_flags used to call _build_context once per current medication.
+    2. _build_context then issued one `db.get(DrugVocabulary, ...)` per medication and per
+       allergy. That is now a single batched `WHERE id IN (...)` query.
+
+    With both fixed the query count is *flat* in the number of medications, so this asserts
+    equality rather than a slack allowance.
+
+    ``expunge_all()`` before each measurement matters: ``db.get()`` is served from the session
+    identity map, so without it the per-drug fetches never reach the database and the N+1
+    stays invisible in tests while still costing a round-trip per drug in production, where
+    every request gets a fresh session.
     """
     account, patient = await _account_and_patient(db)
     await _add_current_med(db, patient, "Metformin")
@@ -166,25 +176,27 @@ async def test_query_count_does_not_scale_with_medication_count(db, engine):
     def _count(conn, cursor, statement, parameters, context, executemany):
         counter["n"] += 1
 
-    try:
+    async def _measure(account_id, patient_id) -> int:
+        # Fresh service (no warm DrugResolver cache) + empty identity map == production shape.
         service = SafetyService(db)
+        db.expunge_all()
         counter["n"] = 0
-        await service.active_flags(account_id=account.id, patient_id=patient.id)
-        one_drug = counter["n"]
+        await service.active_flags(account_id=account_id, patient_id=patient_id)
+        return counter["n"]
+
+    try:
+        one_drug = await _measure(account.id, patient.id)
 
         for generic in ("Aspirin", "Warfarin", "Atorvastatin"):
             await _add_current_med(db, patient, generic)
 
-        counter["n"] = 0
-        await service.active_flags(account_id=account.id, patient_id=patient.id)
-        four_drugs = counter["n"]
+        four_drugs = await _measure(account.id, patient.id)
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", _count)
 
-    # Per-drug cost is now a single vocabulary resolve, not a whole context rebuild.
-    assert four_drugs <= one_drug + 8, (
-        f"query count grew from {one_drug} to {four_drugs} for 3 extra drugs — "
-        "the per-drug context rebuild is probably back"
+    assert four_drugs == one_drug, (
+        f"query count grew from {one_drug} to {four_drugs} for 3 extra drugs — the per-drug "
+        "context rebuild or the per-drug vocabulary fetch is probably back"
     )
 
 
