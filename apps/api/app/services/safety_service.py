@@ -8,6 +8,7 @@ are hard blocks that cannot be dismissed.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,8 +107,13 @@ class SafetyService:
         for a in allergies_result.scalars().all():
             ref_id, drug_class = None, None
             if a.drug_vocabulary_id:
-                vocab = await self.db.get(DrugVocabulary, a.drug_vocabulary_id)
+                # Reuse the cache the medication loop filled — a patient allergic to a drug
+                # they are also on would otherwise re-fetch the same vocabulary row.
+                vocab = vocab_by_id.get(a.drug_vocabulary_id) or await self.db.get(
+                    DrugVocabulary, a.drug_vocabulary_id
+                )
                 if vocab:
+                    vocab_by_id[a.drug_vocabulary_id] = vocab
                     ref_id, drug_class = vocab.reference_id, vocab.drug_class
             elif a.allergen_type == "drug":
                 resolved = await self.resolver.resolve(a.allergen_name)
@@ -334,16 +340,25 @@ class SafetyService:
     async def active_flags(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID
     ) -> list[tuple[DrugVocabulary, list[SafetyFlag]]]:
-        """Re-run pairwise checks across all current medications (P1-08c GET flags)."""
+        """Re-run pairwise checks across all current medications (P1-08c GET flags).
+
+        The context is built ONCE and each drug's "everyone but me" variant is derived in
+        memory. ``exclude_reference_id`` only ever filters ``current_meds`` — allergies,
+        conditions, eGFR and the two reference tables are identical for every drug — so a
+        per-drug rebuild re-ran the same queries (including two full reference-table scans)
+        N times for N current medications.
+        """
         await self._patient(account_id, patient_id)
         ctx = await self._build_context(patient_id)
         out: list[tuple[DrugVocabulary, list[SafetyFlag]]] = []
         seen_refs = {m.reference_id for m in ctx.current_meds}
-        for ref in seen_refs:
+        for ref in sorted(seen_refs):
             vocab = await self.resolver.resolve_reference_id(ref)
             if vocab is None:
                 continue
-            sub_ctx = await self._build_context(patient_id, exclude_reference_id=ref)
+            sub_ctx = replace(
+                ctx, current_meds=[m for m in ctx.current_meds if m.reference_id != ref]
+            )
             proposed = DrugRef(
                 reference_id=vocab.reference_id,
                 generic_name=vocab.generic_name,

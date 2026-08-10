@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import settings
+from app.config import assert_production_config, settings
 from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
 from app.middleware import RequestContextMiddleware
@@ -71,6 +71,9 @@ async def _seed_drug_data() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Before anything touches patient data: refuse to serve production traffic with a
+    # development-grade secret, debug mode on, or a wildcard CORS policy.
+    assert_production_config()
     await _seed_drug_data()
     yield
     await dispose_engine()

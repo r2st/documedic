@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,8 @@ import tempfile
 from app.config import settings
 from app.services.extraction import claude_client
 from app.services.extraction.text_parser import ParsedEntity, parse_text
+
+logger = logging.getLogger(__name__)
 
 
 def _confidence_band(score: float) -> str:
@@ -83,8 +86,16 @@ class ExtractionPipeline:
                     return ExtractionResultInternal(
                         entities, doc_type, False, claude_client.model_label()
                     )
-            except Exception:
-                pass  # fall through to deterministic path
+            except Exception as exc:  # noqa: BLE001 — fall through to the deterministic path
+                # Never log the document bytes or the model response (patient data) —
+                # only the exception type, so degraded extraction is diagnosable.
+                logger.warning(
+                    "Vision extraction unavailable, falling back to the deterministic "
+                    "parser (file_type=%s): %s: %s",
+                    file_type,
+                    type(exc).__name__,
+                    str(exc)[:200],
+                )
 
         # 2) Recover text: PDF text layer, supplied raw text, or Tesseract OCR for images.
         ocr_used = False

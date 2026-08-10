@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     # jwt_refresh_ttl_days expiry hasn't passed yet.
     session_idle_timeout_minutes: int = 30
 
+    # --- Brute-force protection (login) ---
+    # Counted from the append-only audit log (auth_login_failed), so the control survives a
+    # process restart and needs no Redis — it is deterministic and offline-capable.
+    # Set login_max_failed_attempts to 0 to disable the lockout entirely.
+    login_max_failed_attempts: int = 8
+    login_attempt_window_minutes: int = 15
+    login_lockout_minutes: int = 15
+
     # --- Field-level encryption (patient PII at rest) ---
     # When unset, a key is derived from app_secret_key (dev convenience). Set explicitly in
     # production so rotating app_secret_key doesn't also break decryption of stored PII.
@@ -137,6 +145,66 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+
+DEFAULT_SECRET_KEY = "dev-insecure-secret-change-me"
+
+
+def production_config_errors(cfg: "Settings") -> list[str]:
+    """Configuration that is safe in dev but unacceptable in production.
+
+    Returns a list of human-readable problems (empty when the config is fit to serve real
+    patient data). Kept as a pure function so it is unit-testable against a constructed
+    Settings without touching the process environment.
+
+    Note what is *not* here: DEMO_MODE. Demo mode removes the credential gate but keeps auth,
+    audit logging, and every safety check — it is a deliberate product mode, not a security
+    downgrade — so it is allowed in production as long as the banner stays visible.
+    """
+    problems: list[str] = []
+    if not cfg.is_production:
+        return problems
+
+    if cfg.app_secret_key == DEFAULT_SECRET_KEY or len(cfg.app_secret_key) < 32:
+        problems.append(
+            "APP_SECRET_KEY is the built-in default or shorter than 32 characters — "
+            "generate one with `openssl rand -hex 32`."
+        )
+    if cfg.app_debug:
+        problems.append("APP_DEBUG must be false in production (it leaks internals).")
+    if "*" in cfg.cors_origin_list:
+        problems.append(
+            "CORS_ORIGINS must name explicit origins in production — a wildcard combined "
+            "with credentialed requests exposes the API to any site."
+        )
+    if any(o.startswith("http://") and "localhost" not in o for o in cfg.cors_origin_list):
+        problems.append("CORS_ORIGINS contains a non-local http:// origin; use https://.")
+    if not cfg.field_encryption_key:
+        problems.append(
+            "FIELD_ENCRYPTION_KEY must be set explicitly in production so rotating "
+            "APP_SECRET_KEY does not make stored patient PII undecryptable."
+        )
+    if cfg.storage_backend == "s3" and cfg.s3_secret_key == "minioadmin":
+        problems.append("S3_SECRET_KEY is still the MinIO development default.")
+    return problems
+
+
+class InsecureProductionConfigError(RuntimeError):
+    """Raised at startup when production is configured with development-grade secrets."""
+
+
+def assert_production_config(cfg: "Settings | None" = None) -> None:
+    """Fail fast when running as production with an unsafe configuration.
+
+    Called from the app lifespan so a misconfigured deployment refuses to serve rather than
+    silently handling patient data with a known signing key.
+    """
+    problems = production_config_errors(cfg or settings)
+    if problems:
+        raise InsecureProductionConfigError(
+            "Refusing to start in production with an insecure configuration:\n  - "
+            + "\n  - ".join(problems)
+        )
 
 
 @lru_cache

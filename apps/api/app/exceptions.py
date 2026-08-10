@@ -59,6 +59,13 @@ class ForbiddenError(AetherError):
     code = "forbidden"
 
 
+class TooManyAttemptsError(AetherError):
+    """Too many failed attempts. Try again later."""
+
+    status_code = 429
+    code = "too_many_attempts"
+
+
 class ConflictError(AetherError):
     status_code = 409
     code = "conflict"

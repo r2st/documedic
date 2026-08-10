@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -19,9 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_sessionmaker
-from app.models.guideline import GuidelineChunk
+from app.models.guideline import _SOURCES, GuidelineChunk
+
+logger = logging.getLogger(__name__)
 
 GUIDELINES_DIR = Path(__file__).resolve().parents[4] / "data" / "guidelines"
+# Mirrors the guideline_chunks.source CHECK constraint — validated here so a bad corpus file
+# is reported per-document instead of aborting the transaction at flush time.
+ALLOWED_SOURCES = frozenset(_SOURCES)
 _MAX_CHUNK_TOKENS = 512
 _WORD = re.compile(r"\S+")
 
@@ -51,14 +57,45 @@ def chunk_text(text: str, max_tokens: int = _MAX_CHUNK_TOKENS) -> list[str]:
 
 
 def load_corpus(path: Path | None = None) -> list[dict]:
-    """Flatten the curated corpus into chunk records (without corpus_version)."""
+    """Flatten the curated corpus into chunk records (without corpus_version).
+
+    Documents are validated before they reach the database: ``guideline_chunks.source`` has a
+    CHECK constraint, and a typo'd source in a hand-curated JSON file would otherwise abort
+    the whole ingest with an opaque IntegrityError halfway through. Malformed documents and
+    sections are skipped with a warning so one bad entry cannot block the rest of the corpus.
+    """
     chunks: list[dict] = []
     files = [path] if path else sorted(GUIDELINES_DIR.glob("*.json"))
     for file in files:
         if file is None or not file.exists():
             continue
-        for doc in json.loads(file.read_text()):
+        try:
+            docs = json.loads(file.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Skipping unreadable guideline file %s: %s", file.name, exc)
+            continue
+        for doc in docs:
+            source = doc.get("source")
+            if source not in ALLOWED_SOURCES:
+                logger.warning(
+                    "Skipping guideline document %r in %s: source %r is not one of %s",
+                    doc.get("document_title"),
+                    file.name,
+                    source,
+                    ", ".join(sorted(ALLOWED_SOURCES)),
+                )
+                continue
+            if not doc.get("document_title"):
+                logger.warning("Skipping guideline document in %s: no document_title", file.name)
+                continue
             for section in doc.get("sections", []):
+                if not section.get("section_id") or not (section.get("content") or "").strip():
+                    logger.warning(
+                        "Skipping section %r in %s: section_id and content are both required",
+                        section.get("section_id"),
+                        file.name,
+                    )
+                    continue
                 pieces = chunk_text(section["content"])
                 for i, piece in enumerate(pieces):
                     section_id = (

@@ -32,6 +32,14 @@ _SECTION_ALIASES = {
     "investigation": "labs",
     "investigations": "labs",
     "results": "labs",
+    # Headers that actually appear on Indian pathology-lab printouts.
+    "lab report": "labs",
+    "laboratory report": "labs",
+    "test report": "labs",
+    "biochemistry": "labs",
+    "haematology": "labs",
+    "hematology": "labs",
+    "pathology report": "labs",
     "condition": "conditions",
     "conditions": "conditions",
     "diagnosis": "conditions",
@@ -70,6 +78,18 @@ _LAB_RE = re.compile(
     r"^(?P<marker>[A-Za-z][A-Za-z0-9\-\.\/\(\) ]*?)\s*[:=]\s*"
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z%/µμ\^0-9]+)?\s*"
     r"(?:\(?\s*(?P<low>\d+(?:\.\d+)?)\s*[-–]\s*(?P<high>\d+(?:\.\d+)?)\s*\)?)?\s*$"
+)
+
+# Whitespace-column layout, which is what most printed lab reports actually use:
+#   "HbA1c            8.4 %      (4.0 - 5.6)"
+# There is no ':' to key off, and a bare "<name> <number> <unit>" line is indistinguishable
+# from a prescription line — so a parenthesised reference range is required as the
+# discriminator. Prescriptions do not carry one (a dose schedule like "(1-0-1)" has three
+# parts and fails this pattern), which keeps medications from being read as labs.
+_LAB_COLUMNAR_RE = re.compile(
+    r"^(?P<marker>[A-Za-z][A-Za-z0-9\-\.\/\+ ]*?)\s{1,}"
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>%|[A-Za-z][A-Za-z/µμ\^0-9\.]*)?\s*"
+    r"\(\s*(?P<low>\d+(?:\.\d+)?)\s*[-–]\s*(?P<high>\d+(?:\.\d+)?)\s*\)\s*$"
 )
 
 
@@ -120,7 +140,7 @@ def _parse_medication(line: str) -> ParsedEntity | None:
 
 
 def _parse_lab(line: str) -> ParsedEntity | None:
-    m = _LAB_RE.match(line.strip())
+    m = _LAB_RE.match(line.strip()) or _LAB_COLUMNAR_RE.match(line.strip())
     if not m:
         return None
     marker = m.group("marker").strip()

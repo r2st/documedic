@@ -21,6 +21,14 @@ def hash_password(plain: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Constant-time bcrypt comparison. Fails closed on any malformed input.
+
+    A corrupted, empty, or non-string stored hash must return False rather than raise —
+    an exception here would turn a bad row into a 500 on the login path (and, with the
+    dummy-hash enumeration defence in AuthService, into a crash on unknown emails).
+    """
+    if not isinstance(plain, str) or not isinstance(hashed, str):
+        return False
     try:
         return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("utf-8"))
     except (ValueError, TypeError):

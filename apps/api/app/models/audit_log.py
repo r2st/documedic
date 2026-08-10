@@ -10,8 +10,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.types import GUID, JSONBType
 from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
 
-# Recognised clinical action types written to the immutable trail.
+# Recognised action types written to the immutable trail. Authentication events are part of
+# the access trail (who reached patient data, and every failed/blocked attempt to).
 AUDIT_ACTIONS = (
+    "auth_signup",
+    "auth_login_success",
+    "auth_login_failed",
+    "auth_login_locked_out",
+    "auth_logout",
+    "auth_logout_all",
+    "auth_token_refreshed",
+    "auth_refresh_token_reuse_detected",
+    "auth_session_revoked",
+    "auth_session_idle_expired",
+    "critical_lab_value_detected",
     "patient_created",
     "patient_updated",
     "patient_deleted",

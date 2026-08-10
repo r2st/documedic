@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.session import get_db
 from app.dependencies import get_current_account
+from app.exceptions import FileTooLargeError
 from app.models.user import Account
 from app.schemas.document import (
     DocumentResponse,
@@ -29,6 +31,27 @@ _MIME_BY_TYPE = {
 }
 
 
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_capped(file: UploadFile, limit: int) -> bytes:
+    """Read an upload, aborting as soon as it exceeds ``limit``.
+
+    ``await file.read()`` buffers the entire body first and only then lets the service check
+    the size, so a multi-gigabyte body is fully spooled (to memory, then to the temp disk
+    Starlette rolls over to) before it can be rejected. Reading in chunks and stopping one
+    chunk past the limit bounds what an unauthenticated-sized body can cost us.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > limit:
+            raise FileTooLargeError(f"File exceeds maximum of {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     patient_id: uuid.UUID,
@@ -36,7 +59,7 @@ async def upload_document(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
-    data = await file.read()
+    data = await _read_capped(file, settings.max_upload_bytes)
     document = await DocumentService(db).upload(
         account_id=account.id,
         patient_id=patient_id,
