@@ -65,6 +65,24 @@ class PatientUpdate(BaseModel):
     _check_phone = field_validator("phone")(_validate_phone)
 
 
+class PatientSearchRequest(BaseModel):
+    """Search terms for ``POST /patients/search``.
+
+    A POST with a body rather than ``GET ?search=`` on purpose. The search term for this
+    endpoint is a patient's name or phone number -- a direct identifier under the DPDP Act,
+    and the same value that ``patients.full_name``/``phone`` are encrypted at rest to
+    protect. A URL query string is the one part of a request that is logged in cleartext
+    almost everywhere by default: nginx's ``$request`` in access.log, cloud load-balancer
+    logs, APM traces, browser history, and the ``Referer`` header of any outbound link on
+    the resulting page. Putting it in the body keeps it inside the TLS-encrypted payload,
+    which nothing on the path logs by default.
+    """
+
+    search: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=25, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
 class PatientResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

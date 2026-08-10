@@ -219,9 +219,23 @@ async def test_custom_validator_422_reports_its_message_without_the_value(auth_c
 
 
 @pytest.mark.asyncio
-async def test_query_parameter_422_does_not_echo_the_search_term(auth_client):
+async def test_search_body_422_does_not_echo_the_search_term(auth_client):
     """Patient search terms are patient names; a rejected one must not come back in the body."""
-    resp = await auth_client.get("/api/v1/patients", params={"search": "Ramesh Kumar" * 40})
+    resp = await auth_client.post("/api/v1/patients/search", json={"search": "Ramesh Kumar" * 40})
 
     assert resp.status_code == 422
     assert "Ramesh Kumar" not in resp.text, resp.text
+
+
+@pytest.mark.asyncio
+async def test_rejecting_a_legacy_search_query_param_does_not_echo_it(auth_client):
+    """The 400 that retires ``?search=`` must not repeat the term it is rejecting.
+
+    The term is already in the access log by the time we see it — that is the whole reason
+    for the migration — but the response body reaches error trackers and browser consoles
+    that the log line does not, so it must stay clean.
+    """
+    resp = await auth_client.get("/api/v1/patients", params={"search": "Ramesh Kumar"})
+
+    assert resp.status_code == 400
+    assert "Ramesh" not in resp.text, resp.text

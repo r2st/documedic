@@ -84,6 +84,13 @@ class ConsentRequiredError(AetherError):
     code = "consent_required"
 
 
+class UnsupportedQueryParameterError(AetherError):
+    """A query parameter that is no longer accepted was supplied."""
+
+    status_code = 400
+    code = "unsupported_query_parameter"
+
+
 class ValidationError(AetherError):
     status_code = 422
     code = "validation_error"

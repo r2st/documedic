@@ -171,10 +171,21 @@ export const api = {
       body: JSON.stringify({ keep_current_refresh_token: tokenStore.refresh }),
     }),
 
+  /**
+   * List or search the account's patients.
+   *
+   * A search term is a patient name or phone number, so it goes in a POST body rather than
+   * a `?search=` query string: query strings are logged in cleartext by nginx, load
+   * balancers and APM agents, and are kept in browser history and leaked via `Referer`.
+   * The plain list has no identifier in it and stays a GET.
+   */
   listPatients: (search?: string) =>
-    request<Paginated<PatientSummary>>(
-      `/patients${search ? `?search=${encodeURIComponent(search)}` : ''}`,
-    ),
+    search
+      ? request<Paginated<PatientSummary>>('/patients/search', {
+          method: 'POST',
+          body: JSON.stringify({ search }),
+        })
+      : request<Paginated<PatientSummary>>('/patients'),
   getPatient: (id: string) => request<Patient>(`/patients/${id}`),
   createPatient: (data: Record<string, unknown>) =>
     request<Patient>('/patients', { method: 'POST', body: JSON.stringify(data) }),

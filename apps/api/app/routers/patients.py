@@ -4,22 +4,36 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.dependencies import get_current_account
+from app.exceptions import UnsupportedQueryParameterError
+from app.models.patient import Patient
 from app.models.user import Account
 from app.schemas.common import MessageResponse, PaginatedResponse, PaginationMeta
 from app.schemas.patient import (
     PatientCreate,
     PatientResponse,
+    PatientSearchRequest,
     PatientSummary,
     PatientUpdate,
 )
 from app.services.patient_service import PatientService
 
 router = APIRouter(prefix="/patients", tags=["patients"])
+
+
+def _page(
+    items: list[Patient], total: int, limit: int, offset: int
+) -> PaginatedResponse[PatientSummary]:
+    return PaginatedResponse[PatientSummary](
+        items=[PatientSummary.model_validate(p) for p in items],
+        pagination=PaginationMeta(
+            total=total, limit=limit, offset=offset, has_more=offset + len(items) < total
+        ),
+    )
 
 
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
@@ -34,21 +48,44 @@ async def create_patient(
 
 @router.get("", response_model=PaginatedResponse[PatientSummary])
 async def list_patients(
-    search: str | None = Query(default=None, max_length=200),
+    request: Request,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[PatientSummary]:
+    """Page through the account's patients. Filtering by name/phone lives on
+    ``POST /patients/search`` -- see :class:`PatientSearchRequest` for why.
+    """
+    # Rejected loudly rather than ignored. FastAPI drops undeclared query parameters
+    # silently, so a client still sending ?search=Ramesh would get an unfiltered first page
+    # back and look like it worked -- while having already written the name into every
+    # access log on the path. A 400 makes the migration impossible to miss.
+    if "search" in request.query_params:
+        raise UnsupportedQueryParameterError(
+            "Patient search no longer accepts a `search` query parameter, because the term "
+            "is a direct identifier and query strings are logged in cleartext. Use "
+            "POST /patients/search with the term in the request body."
+        )
+    items, total = await PatientService(db).list(account.id, limit=limit, offset=offset)
+    return _page(items, total, limit, offset)
+
+
+@router.post("/search", response_model=PaginatedResponse[PatientSummary])
+async def search_patients(
+    body: PatientSearchRequest,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[PatientSummary]:
+    """Search the account's patients by name or phone, with the term in the request body.
+
+    POST, not GET, purely so the identifier stays out of URLs and therefore out of access
+    logs, browser history and Referer headers. It is a read: nothing is created or mutated.
+    """
     items, total = await PatientService(db).list(
-        account.id, search=search, limit=limit, offset=offset
+        account.id, search=body.search, limit=body.limit, offset=body.offset
     )
-    return PaginatedResponse[PatientSummary](
-        items=[PatientSummary.model_validate(p) for p in items],
-        pagination=PaginationMeta(
-            total=total, limit=limit, offset=offset, has_more=offset + len(items) < total
-        ),
-    )
+    return _page(items, total, body.limit, body.offset)
 
 
 @router.get("/{patient_id}", response_model=PatientResponse)

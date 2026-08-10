@@ -109,15 +109,28 @@ describe('endpoint contracts', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it('percent-encodes the patient search term', async () => {
+  it('sends the patient search term in a POST body, never in the URL', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ items: [] }));
     await api.listPatients('Asha & Co / #1');
-    expect(callAt().url).toBe(`${PREFIX}/patients?search=Asha%20%26%20Co%20%2F%20%231`);
+    const { url, method, json } = callAt();
+    // The term is a direct identifier; a query string would put it in every access log.
+    expect(url).toBe(`${PREFIX}/patients/search`);
+    expect(url).not.toContain('Asha');
+    expect(method).toBe('POST');
+    expect(json).toEqual({ search: 'Asha & Co / #1' });
   });
 
-  it('omits the search parameter entirely when no term is given', async () => {
+  it('lists with a plain GET and no search parameter when no term is given', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ items: [] }));
     await api.listPatients();
+    const { url, method } = callAt();
+    expect(url).toBe(`${PREFIX}/patients`);
+    expect(method).toBe('GET');
+  });
+
+  it('treats an empty search term as a plain list rather than an empty-term search', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ items: [] }));
+    await api.listPatients('');
     expect(callAt().url).toBe(`${PREFIX}/patients`);
   });
 

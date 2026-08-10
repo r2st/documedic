@@ -104,6 +104,48 @@ async def auth_client(client):
     return client
 
 
+@pytest_asyncio.fixture
+async def second_auth_client(app):
+    """A *different* account on the same app, for tenancy and concurrency tests.
+
+    Deliberately its own AsyncClient rather than a header swap on ``auth_client``: several
+    tests interleave requests from both clinicians, and sharing one client would silently
+    make the last-set Authorization header win.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "doc2@example.com",
+                "password": "password456",
+                "display_name": "Dr Second",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        ac.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+        yield ac
+
+
+@pytest_asyncio.fixture
+async def colleague_client(app, auth_client):
+    """A second HTTP client authenticated as the **same** account as ``auth_client``.
+
+    Models two clinicians sharing one practice login (or one clinician with the chart open
+    in two tabs) — both see and may edit the same patients, which is the situation where
+    lost updates and stale reads actually happen.
+    """
+    resp = await auth_client.post(
+        "/api/v1/auth/login",
+        json={"email": "doc@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 200, resp.text
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        ac.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+        yield ac
+
+
 async def create_patient(client: AsyncClient, **overrides) -> dict:
     payload = {
         "full_name": "Ramesh Kumar",

@@ -53,7 +53,7 @@ async def test_audit_action_filter_is_length_bounded(auth_client):
 
 @pytest.mark.asyncio
 async def test_patient_search_term_is_length_bounded(auth_client):
-    resp = await auth_client.get("/api/v1/patients", params={"search": "a" * 201})
+    resp = await auth_client.post("/api/v1/patients/search", json={"search": "a" * 201})
     assert resp.status_code == 422
 
 
@@ -62,6 +62,14 @@ async def test_pagination_bounds_are_enforced(auth_client):
     assert (await auth_client.get("/api/v1/patients", params={"limit": 101})).status_code == 422
     assert (await auth_client.get("/api/v1/patients", params={"limit": 0})).status_code == 422
     assert (await auth_client.get("/api/v1/patients", params={"offset": -1})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_search_pagination_bounds_are_enforced(auth_client):
+    """The body-based search must keep the same bounds the query params had."""
+    for body in ({"limit": 101}, {"limit": 0}, {"offset": -1}):
+        resp = await auth_client.post("/api/v1/patients/search", json=body)
+        assert resp.status_code == 422, body
 
 
 @pytest.mark.asyncio
