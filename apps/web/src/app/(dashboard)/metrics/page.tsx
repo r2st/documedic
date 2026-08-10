@@ -5,7 +5,10 @@ import { api, ApiError } from '@/lib/api';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
 import { Button, Card } from '@/components/ui';
 
-const METRIC_COLORS: Record<string, string> = {
+// `as const` (rather than Record<string, string>) makes the key set a closed union, so
+// TypeScript rejects an unknown metric label at the call site instead of silently
+// falling back to a default colour at runtime.
+const METRIC_COLORS = {
   Sessions: 'border-t-brand-500',
   'Hard blocks': 'border-t-red-500',
   "Can't-miss flags": 'border-t-amber-500',
@@ -14,12 +17,11 @@ const METRIC_COLORS: Record<string, string> = {
   'Degraded rate': 'border-t-slate-400',
   'Citation faithfulness': 'border-t-emerald-500',
   'Open safety reports': 'border-t-rose-500',
-};
+} as const;
 
-function Metric({ label, value }: { label: string; value: string | number }) {
-  const borderColor = METRIC_COLORS[label] || 'border-t-brand-500';
+function Metric({ label, value }: { label: keyof typeof METRIC_COLORS; value: string | number }) {
   return (
-    <Card className={`border-t-4 ${borderColor} text-center`}>
+    <Card className={`border-t-4 ${METRIC_COLORS[label]} text-center`}>
       <p className="text-3xl font-bold tracking-tight text-slate-900">{value}</p>
       <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">{label}</p>
     </Card>

@@ -10,8 +10,12 @@ import { Button, Card, ConfidenceBadge } from '@/components/ui';
 export default function UploadPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const router = useRouter();
-  const [docId, setDocId] = useState<string | null>(null);
-  const [extraction, setExtraction] = useState<ExtractionResult | null>(null);
+  // The document id and its extraction always arrive together from onUpload, so they
+  // live in one state object — that makes "extraction present, id missing" unrepresentable
+  // and lets the approve handler take a non-null id without a defensive guard.
+  const [reviewed, setReviewed] = useState<{ docId: string; extraction: ExtractionResult } | null>(
+    null,
+  );
   const [rejected, setRejected] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -22,8 +26,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
     setBusy(true);
     try {
       const doc = await api.uploadDocument(id, file);
-      setDocId(doc.id);
-      setExtraction(await api.getExtraction(id, doc.id));
+      setReviewed({ docId: doc.id, extraction: await api.getExtraction(id, doc.id) });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Upload failed');
     } finally {
@@ -48,8 +51,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
     if (file) void onUpload(file);
   }
 
-  async function approve() {
-    if (!docId) return;
+  async function approve(docId: string) {
     setBusy(true);
     try {
       await api.approveExtraction(id, docId, [...rejected]);
@@ -98,7 +100,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {!extraction && (
+      {!reviewed && (
         <Card>
           <p className="mb-4 text-sm text-slate-600">
             Upload a prescription, lab report, or discharge summary (PDF / JPEG / PNG). Extraction
@@ -156,29 +158,29 @@ export default function UploadPage({ params }: { params: { id: string } }) {
         </Card>
       )}
 
-      {extraction && (
+      {reviewed && (
         <Card className="animate-fade-in">
           <div className="mb-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-900">Review extraction</h2>
               <div className="flex items-center gap-2">
-                {extraction.ocr_fallback_used && (
+                {reviewed.extraction.ocr_fallback_used && (
                   <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
                     OCR fallback
                   </span>
                 )}
                 <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
-                  {extraction.document_type ?? 'unknown'}
+                  {reviewed.extraction.document_type ?? 'unknown'}
                 </span>
               </div>
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              {extraction.confirmation_required_count} field(s) need confirmation. Uncheck any entity to exclude it.
+              {reviewed.extraction.confirmation_required_count} field(s) need confirmation. Uncheck any entity to exclude it.
             </p>
           </div>
 
           <ul className="space-y-3">
-            {extraction.entities.map((ent, i) => (
+            {reviewed.extraction.entities.map((ent, i) => (
               <li
                 key={i}
                 className={`rounded-xl border p-4 transition-all ${
@@ -215,7 +217,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
           </ul>
 
           <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
-            <Button className="w-full sm:w-auto" onClick={approve} disabled={busy}>
+            <Button className="w-full sm:w-auto" onClick={() => void approve(reviewed.docId)} disabled={busy}>
               {busy ? 'Saving…' : 'Confirm & merge into record'}
             </Button>
             <Link href={`/patients/${id}`} className="w-full sm:w-auto">

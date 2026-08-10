@@ -96,8 +96,9 @@ export default function EncounterPage() {
     }
   }
 
-  async function loadResults() {
-    if (!sessionId) return;
+  // Takes the session id as an argument rather than closing over the nullable state:
+  // the only call site sits inside a `sessionId &&` guard, so the id is already narrowed.
+  async function loadResults(sessionId: string) {
     setSuggestions(await api.listSuggestions(sessionId));
     setPhase('results');
   }
@@ -172,7 +173,7 @@ export default function EncounterPage() {
 
       {phase === 'reasoning' && sessionId && (
         <div className="animate-slide-up">
-          <ReasoningTheatre sessionId={sessionId} onComplete={() => void loadResults()} />
+          <ReasoningTheatre sessionId={sessionId} onComplete={() => void loadResults(sessionId)} />
           <p className="mt-3 text-center text-xs text-slate-400">
             Evidence and dissent are shown before conclusions to counter automation bias.
           </p>
