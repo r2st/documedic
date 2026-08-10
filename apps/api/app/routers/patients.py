@@ -57,7 +57,7 @@ async def get_patient(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> PatientResponse:
-    patient = await PatientService(db).get(account.id, patient_id)
+    patient = await PatientService(db).get_for_display(account.id, patient_id)
     return PatientResponse.model_validate(patient)
 
 

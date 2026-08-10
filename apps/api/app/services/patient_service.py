@@ -62,6 +62,29 @@ class PatientService:
             raise PatientNotFoundError()
         return patient
 
+    async def get_for_display(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
+        """Fetch a patient *and* record the PHI access in the audit trail.
+
+        Separate from :meth:`get` on purpose. ``get`` is also the ownership check that nearly
+        every other router calls before doing its own work, so auditing inside it would file a
+        access entry for each of those and drown the real signal. This variant is for the
+        endpoints that actually hand decrypted patient data to a caller.
+
+        Writes were already audited; reads were not, which left the most common real-world
+        breach -- a legitimate account browsing records it has no clinical reason to open --
+        invisible. The DPDP Act's accountability duty needs read access to be attributable too.
+        """
+        patient = await self.get(account_id, patient_id)
+        await self.audit.record(
+            action="patient_viewed",
+            account_id=account_id,
+            patient_id=patient_id,
+            entity_type="patient",
+            entity_id=patient_id,
+        )
+        await self.db.commit()
+        return patient
+
     async def list(
         self,
         account_id: uuid.UUID,

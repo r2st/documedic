@@ -21,6 +21,7 @@ from app.schemas.document import (
     ExtractionApproval,
     ExtractionResult,
 )
+from app.services.audit_service import AuditService
 from app.services.document_service import DocumentService
 
 router = APIRouter(prefix="/patients/{patient_id}/documents", tags=["documents"])
@@ -160,6 +161,17 @@ async def download_file(
     # session's tokens live. PDFs are therefore always handed over as a download.
     is_image = document.file_type.startswith("image/")
     disposition = "inline" if is_image else "attachment"
+    # The widest PHI disclosure in the API -- this hands over the original scan, not an
+    # extracted summary -- so the retrieval itself is audited.
+    await AuditService(db).record(
+        action="document_downloaded",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="document",
+        entity_id=doc_id,
+        payload={"file_name": document.file_name, "file_type": document.file_type},
+    )
+    await db.commit()
     return Response(
         content=data,
         media_type=_MIME_BY_TYPE.get(document.file_type, "application/octet-stream"),

@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
 from app.schemas.record import CriticalLabFlagItem, CriticalLabFlagsResponse, LongitudinalRecord
+from app.services.audit_service import AuditService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
 from app.services.record_service import RecordService
@@ -25,9 +26,19 @@ async def get_record(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> LongitudinalRecord:
-    # Ownership check (raises if not found / not owned).
+    # Ownership check (raises if not found / not owned) plus a PHI-access audit entry: this
+    # returns the whole longitudinal record, the widest clinical read in the API.
     await PatientService(db).get(account.id, patient_id)
-    return await RecordService(db).assemble(patient_id)
+    record = await RecordService(db).assemble(patient_id)
+    await AuditService(db).record(
+        action="patient_record_viewed",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+    )
+    await db.commit()
+    return record
 
 
 @labs_router.get("/critical-flags", response_model=CriticalLabFlagsResponse)

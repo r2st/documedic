@@ -27,6 +27,12 @@ def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
+    # 0001 builds the schema with Base.metadata.create_all() off the *live* ORM models, so a
+    # database created today already has this column and a bare ADD COLUMN aborts the whole
+    # upgrade with DuplicateColumnError. Databases stamped before this revision still need it.
+    # (0007 solves the same problem with checkfirst=True, 0008 with IF NOT EXISTS.)
+    if _column_exists(bind, "sessions", "last_used_at"):
+        return
     op.add_column(
         "sessions",
         sa.Column(
@@ -43,4 +49,15 @@ def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
+    if not _column_exists(bind, "sessions", "last_used_at"):
+        return
     op.drop_column("sessions", "last_used_at")
+
+
+def _column_exists(bind: sa.engine.Connection, table: str, column: str) -> bool:
+    return bool(
+        bind.exec_driver_sql(
+            "SELECT 1 FROM information_schema.columns "
+            f"WHERE table_name = '{table}' AND column_name = '{column}'"
+        ).scalar()
+    )
