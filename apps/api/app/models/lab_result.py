@@ -32,14 +32,24 @@ class LabResult(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "('high', 'low', 'critical_high', 'critical_low')",
             name="ck_lab_results_abnormality_direction",
         ),
-        # Matches the longitudinal-record and lab-safety sorts; labs accumulate per document
-        # ingested, so this is the set that grows fastest for a long-running patient.
+        # Serves the patient_id lookup for the longitudinal-record and lab-safety reads. It
+        # does NOT save them their sort, despite carrying the sort columns -- measured, see
+        # below. Labs accumulate per document ingested, so this is the set that grows fastest
+        # for a long-running patient.
         #
-        # Both readers sort with NULLS LAST (sample_date is nullable), and a DESC index in
-        # PostgreSQL is NULLS FIRST unless told otherwise -- so the null ordering has to be
-        # spelled out for the index to satisfy the ORDER BY. SQLite's parser rejects
-        # NULLS LAST inside a CREATE INDEX at any version, so this one is emitted for
-        # PostgreSQL only; the test/dev SQLite database simply goes without it.
+        # Measured on PostgreSQL 16, 3000 labs for one patient: the planner bitmap-scans on
+        # patient_id and then sorts, rather than reading the index in order. That is the
+        # correct choice -- RecordService.assemble takes the whole set with no LIMIT, so an
+        # ordered index scan would have to fetch every heap row in index order (random I/O)
+        # where the bitmap scan reads the heap sequentially and sorts 3000 rows in 445 kB of
+        # work_mem. The trailing sort columns only start paying if this read ever gains a
+        # LIMIT, at which point the scan could stop early; until then they make the index
+        # wider for no gain, which is worth revisiting.
+        #
+        # The NULLS LAST is still required for that future case: both readers sort NULLS LAST
+        # (sample_date is nullable) and a DESC index in PostgreSQL is NULLS FIRST unless told
+        # otherwise. SQLite's parser rejects NULLS LAST inside a CREATE INDEX at any version,
+        # hence the PostgreSQL-only emission and the sibling below.
         Index(
             "ix_lab_results_patient_sample_date",
             "patient_id",

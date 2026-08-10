@@ -35,8 +35,12 @@ class ClinicalSuggestion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             f"autonomy_tier IN ({', '.join(repr(t) for t in _TIERS)})",
             name="ck_clinical_suggestions_tier",
         ),
-        # Matches the per-session suggestion read. Small per session, but the table is
-        # append-only across every reasoning run in the system.
+        # Serves the session_id lookup for the per-session suggestion read. Like the other
+        # unbounded list reads (documents, labs, medications) that read has no LIMIT, so the
+        # trailing created_at does not save it a sort -- the planner filters on session_id and
+        # orders the result itself. Kept because the per-session set is small enough that the
+        # extra column costs almost nothing, and because the table is append-only across every
+        # reasoning run in the system, so the session_id lookup itself has to stay indexed.
         Index("ix_clinical_suggestions_session_created", "session_id", "created_at"),
     )
 

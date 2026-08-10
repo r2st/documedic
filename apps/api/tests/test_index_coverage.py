@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import ast
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.models import Base
 from app.models.audit_log import AuditLog
@@ -531,3 +532,86 @@ async def test_audit_log_still_writes_and_reads_after_index_removal(db):
     ).scalar_one()
     assert fetched.id == entry.id
     assert fetched.patient_id == patient.id
+
+
+# ------------------------------------------------------- sort-optimization claims (0008)
+
+
+@contextmanager
+def _captured_sql(engine):
+    """Collect every SQL statement executed on `engine` for the duration of the block."""
+    statements: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _record)
+
+
+async def test_only_the_paginated_reads_can_use_their_index_ordering(db, engine):
+    """Pin which of 0008's six composites actually save their read a sort.
+
+    An index's ordering only earns its keep when the query has a LIMIT: without one the planner
+    must read the whole matched set regardless, and sequential heap access plus a quicksort
+    beats fetching every row in index order. Measured on PostgreSQL 16, only the two paginated
+    reads take the ordered scan; the other four bitmap-scan the leading column and sort.
+
+    That measurement cannot be reproduced here -- the suite runs on SQLite, which has a
+    different planner -- but its *cause* can be. This asserts which reads carry a LIMIT, which
+    is the property the comments in 0008 and the ORM models are written against. If someone
+    paginates the document list, this fails and points at the comments that then become wrong.
+    """
+    from app.services.document_service import DocumentService
+    from app.services.patient_service import PatientService
+    from app.services.record_service import RecordService
+
+    account, patient = await _account_with_patient(db)
+    await db.commit()
+    service = AuditService(db)
+    await service.record(
+        action="patient_viewed",
+        account_id=account.id,
+        patient_id=patient.id,
+        entity_type="patient",
+        entity_id=patient.id,
+    )
+    await db.commit()
+
+    def _ordered_selects(statements: list[str]) -> list[str]:
+        return [s for s in statements if "ORDER BY" in s.upper() and "SELECT" in s.upper()]
+
+    # --- paginated: the ordering can stop early, so 0008's claim holds for these two.
+    with _captured_sql(engine) as sql:
+        await PatientService(db).list(account.id, limit=25, offset=0)
+    patient_list = _ordered_selects(sql)
+    assert patient_list, "expected an ordered SELECT from PatientService.list"
+    assert all("LIMIT" in s.upper() for s in patient_list), patient_list
+
+    with _captured_sql(engine) as sql:
+        await service.list_for_patient(patient.id, limit=50, offset=0)
+    audit_page = _ordered_selects(sql)
+    assert audit_page, "expected an ordered SELECT from AuditService.list_for_patient"
+    assert any("LIMIT" in s.upper() for s in audit_page), audit_page
+
+    # --- unbounded: no LIMIT, so the trailing sort columns buy nothing today.
+    with _captured_sql(engine) as sql:
+        await DocumentService(db).list(account.id, patient.id)
+    documents = _ordered_selects(sql)
+    assert documents, "expected an ordered SELECT from DocumentService.list"
+    assert not any("LIMIT" in s.upper() for s in documents), (
+        "DocumentService.list is now paginated; ix_documents_patient_created can serve the "
+        "ordering after all, so update the comments in 0008 and app/models/document.py"
+    )
+
+    with _captured_sql(engine) as sql:
+        await RecordService(db).assemble(patient.id)
+    record_reads = _ordered_selects(sql)
+    assert len(record_reads) >= 2, record_reads
+    assert not any("LIMIT" in s.upper() for s in record_reads), (
+        "RecordService.assemble is now paginated; the lab_results / medication_events "
+        "composites can serve their ordering after all, so update their comments"
+    )

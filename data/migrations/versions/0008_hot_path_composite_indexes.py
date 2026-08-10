@@ -9,18 +9,37 @@ system and is never pruned), so the sort is the part that degrades, not the look
 Ordering each index to match the query's ORDER BY lets PostgreSQL read the rows out in order
 and, where there is a LIMIT, stop early instead of sorting the whole set to return 25 rows.
 
-Ordered by how much each is expected to matter:
+**That last clause turned out to be the whole story, and this docstring originally overstated
+the result.** Re-measured in round 12 against PostgreSQL 16 seeded to 774k audit rows / 106k
+labs / 50k patients: the ordering is only ever used where the query has a LIMIT. Two of these
+six do; the other four read their whole set, and for those the planner bitmap-scans the
+leading column and sorts anyway -- correctly, because with no LIMIT there is nothing to stop
+early on, and sequential heap access plus a quicksort beats an ordered index scan's random
+I/O. The per-column comments in the ORM models record the individual measurements.
+
+Where the ordering is used (LIMIT/OFFSET pagination):
 
 * ``audit_logs (patient_id, sequence DESC)`` -- append-only compliance log, the largest table
-  in the system over time, read with LIMIT/OFFSET by the audit view.
-* ``patients (account_id, updated_at DESC) WHERE NOT is_deleted`` -- the most-hit endpoint.
-  Partial on the soft-delete flag so the index holds only live rows.
+  in the system over time, read with LIMIT/OFFSET by the audit view. Confirmed serving an
+  index-only scan with zero heap fetches; see 729e0e3 for the two-phase rewrite that made the
+  planner choose it.
+* ``patients (account_id, updated_at DESC) WHERE NOT is_deleted`` -- the most-hit endpoint,
+  read with LIMIT/OFFSET. Confirmed serving an ordered index scan. Partial on the soft-delete
+  flag so the index holds only live rows.
+
+Where only the leading-column lookup is used (whole-set reads, no LIMIT):
+
 * ``lab_results (patient_id, sample_date DESC NULLS LAST, marker_name)`` and
-  ``medication_events (patient_id, is_current DESC, event_date DESC)`` -- both sorted on every
-  longitudinal-record build, which is the read behind most clinical screens.
+  ``medication_events (patient_id, is_current DESC, event_date DESC)`` -- read in full on
+  every longitudinal-record build, which is the read behind most clinical screens.
 * ``documents (patient_id, created_at DESC)`` and
-  ``clinical_suggestions (session_id, created_at)`` -- smaller per-parent sets, but the
-  indexes are cheap and these are read on every document list / reasoning result.
+  ``clinical_suggestions (session_id, created_at)`` -- smaller per-parent sets, read in full
+  on every document list / reasoning result.
+
+These four still earn their place: after migration 0009 each is the only index on its scoping
+column, so it is what keeps that lookup off a sequential scan. But their trailing columns buy
+nothing today -- they only make the index wider -- and would start paying if any of these four
+reads were paginated. Worth revisiting if none ever is.
 
 Created CONCURRENTLY: these run against tables holding live patient data, and a plain CREATE
 INDEX takes an ACCESS EXCLUSIVE-blocking write lock for its duration. Concurrent index builds

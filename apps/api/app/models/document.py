@@ -48,7 +48,11 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "('pending', 'processing', 'completed', 'failed', 'needs_confirmation')",
             name="ck_documents_extraction_status",
         ),
-        # Matches the per-patient document list, which is sorted newest-first.
+        # Serves the patient_id lookup for the per-patient document list. The list is sorted
+        # newest-first and this index carries created_at DESC, but the planner sorts anyway:
+        # measured on PostgreSQL 16 with 800 documents for one patient, it bitmap-scans on
+        # patient_id and quicksorts. DocumentService.list has no LIMIT, so the ordering buys
+        # no early exit; it would if the list were ever paginated.
         Index("ix_documents_patient_created", "patient_id", text("created_at DESC")),
     )
 
