@@ -70,9 +70,7 @@ class MetricsService:
             .select_from(ClinicalSuggestion)
             .where(
                 ClinicalSuggestion.session_id.in_(
-                    select(ReasoningSession.id).where(
-                        ReasoningSession.account_id == account_id
-                    )
+                    select(ReasoningSession.id).where(ReasoningSession.account_id == account_id)
                 ),
                 ClinicalSuggestion.cant_miss_flag.is_(True),
             )

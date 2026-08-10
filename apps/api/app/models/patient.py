@@ -1,14 +1,23 @@
-"""Patient model."""
+"""Patient model.
+
+Direct identifiers and other DPDP-sensitive free text (full_name, date_of_birth, phone,
+address_text, notes) are encrypted at rest via EncryptedString/EncryptedDate (app.db.types) —
+transparent to the ORM layer and everything above it: reads decrypt automatically, writes
+encrypt automatically. The one consequence is that these columns can no longer be filtered or
+indexed at the database level (ciphertext is non-deterministic), so full-text patient search
+(PatientService.list) filters in Python after decryption instead of via SQL ILIKE — see there
+for the tradeoff.
+"""
 
 from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.types import GUID
+from app.db.types import GUID, EncryptedDate, EncryptedString
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -23,12 +32,12 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     account_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("accounts.id"), nullable=False, index=True
     )
-    full_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    full_name: Mapped[str] = mapped_column(EncryptedString(), nullable=False)
+    date_of_birth: Mapped[date | None] = mapped_column(EncryptedDate(), nullable=True)
     sex: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
-    address_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str | None] = mapped_column(EncryptedString(), nullable=True)
+    address_text: Mapped[str | None] = mapped_column(EncryptedString(), nullable=True)
+    notes: Mapped[str | None] = mapped_column(EncryptedString(), nullable=True)
     consent_given: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

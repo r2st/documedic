@@ -50,9 +50,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
 
 def _fallback(state: CaseState, leading: str) -> dict:
     alternatives = [
-        h.diagnosis_name
-        for h in state.leading_hypotheses(4)
-        if h.diagnosis_name != leading
+        h.diagnosis_name for h in state.leading_hypotheses(4) if h.diagnosis_name != leading
     ][:3]
     return {
         "leading_hypothesis": leading,

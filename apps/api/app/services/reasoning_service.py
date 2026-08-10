@@ -65,9 +65,7 @@ class ReasoningService:
             raise PatientNotFoundError()
         return patient
 
-    async def _session(
-        self, account_id: uuid.UUID, session_id: uuid.UUID
-    ) -> ReasoningSession:
+    async def _session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> ReasoningSession:
         result = await self.db.execute(
             select(ReasoningSession).where(
                 ReasoningSession.id == session_id,
@@ -430,9 +428,7 @@ class ReasoningService:
                 task.cancel()
 
     # --------------------------------------------------------------- queries
-    async def get_session(
-        self, account_id: uuid.UUID, session_id: uuid.UUID
-    ) -> ReasoningSession:
+    async def get_session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> ReasoningSession:
         return await self._session(account_id, session_id)
 
     async def list_suggestions(

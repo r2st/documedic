@@ -65,9 +65,7 @@ def active_condition_names(snapshot: dict[str, Any]) -> list[str]:
 
 def latest_marker(snapshot: dict[str, Any], marker: str) -> float | None:
     rows = snapshot.get("derived_markers", []) + snapshot.get("lab_results", [])
-    candidates = [
-        r for r in rows if (r.get("marker_name") or "").lower() == marker.lower()
-    ]
+    candidates = [r for r in rows if (r.get("marker_name") or "").lower() == marker.lower()]
     if not candidates:
         return None
     try:

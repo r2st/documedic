@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import ConsentRequiredError, PatientNotFoundError
@@ -40,8 +40,10 @@ class PatientService:
             account_id=account_id,
             patient_id=patient.id,
             entity_type="patient",
+            # AuditLog.payload is not itself encrypted, so PII (full_name etc.) must never
+            # land here — only non-identifying facts about the action.
             entity_id=patient.id,
-            payload={"full_name": patient.full_name, "consent_given": True},
+            payload={"consent_given": True},
         )
         await self.db.commit()
         await self.db.refresh(patient)
@@ -68,20 +70,34 @@ class PatientService:
         limit: int = 25,
         offset: int = 0,
     ) -> tuple[list[Patient], int]:
-        conditions = [
-            Patient.account_id == account_id,
-            Patient.is_deleted.is_(False),
-        ]
-        if search:
-            like = f"%{search.strip()}%"
-            conditions.append(or_(Patient.full_name.ilike(like), Patient.phone.ilike(like)))
+        """List/search an account's patients.
 
-        base = select(Patient).where(*conditions)
-        total = await self.db.scalar(select(func.count()).select_from(base.subquery()))
+        full_name and phone are encrypted at rest (non-deterministic ciphertext), so they can't
+        be filtered with SQL ILIKE/LIKE any more. When ``search`` is set this loads the
+        account's patients (already scoped to one clinician's panel, not the whole system) and
+        filters in Python after decryption, then paginates the filtered list. Without a search
+        term, pagination stays a plain SQL LIMIT/OFFSET as before.
+        """
+        base = select(Patient).where(
+            Patient.account_id == account_id, Patient.is_deleted.is_(False)
+        )
+
+        if search:
+            needle = search.strip().lower()
+            result = await self.db.execute(base.order_by(Patient.updated_at.desc()))
+            matched = [
+                p
+                for p in result.scalars().all()
+                if needle in (p.full_name or "").lower() or needle in (p.phone or "")
+            ]
+            total = len(matched)
+            return matched[offset : offset + limit], total
+
+        total_count = await self.db.scalar(select(func.count()).select_from(base.subquery()))
         result = await self.db.execute(
             base.order_by(Patient.updated_at.desc()).limit(limit).offset(offset)
         )
-        return list(result.scalars().all()), int(total or 0)
+        return list(result.scalars().all()), int(total_count or 0)
 
     async def update(
         self, account_id: uuid.UUID, patient_id: uuid.UUID, data: PatientUpdate

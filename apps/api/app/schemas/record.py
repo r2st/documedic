@@ -98,3 +98,18 @@ class LongitudinalRecord(BaseModel):
     conditions: list[ConditionItem]
     allergies: list[AllergyItem]
     derived_markers: list[DerivedMarkerItem]
+
+
+class CriticalLabFlagItem(BaseModel):
+    lab_result_id: uuid.UUID
+    marker_name: str
+    value: float
+    unit: str | None
+    severity: str
+    summary: str
+    details: dict
+
+
+class CriticalLabFlagsResponse(BaseModel):
+    patient_id: uuid.UUID
+    flags: list[CriticalLabFlagItem]

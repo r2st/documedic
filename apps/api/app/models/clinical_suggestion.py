@@ -80,9 +80,7 @@ class ClinicianDecisionRecord(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     suggestion_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("clinical_suggestions.id"), nullable=False, index=True
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("accounts.id"), nullable=False
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("accounts.id"), nullable=False)
     decision: Mapped[str] = mapped_column(String(30), nullable=False)
     # Override of a hard block / flag-for-review requires documented reasoning (Safety Rule #3).
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

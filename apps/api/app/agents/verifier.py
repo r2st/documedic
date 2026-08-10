@@ -98,8 +98,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             "autonomy_tier": tier,
             "case_caveats": case_caveats,
             "verdicts": [
-                {"target": v.target, "status": v.status, "rationale": v.rationale}
-                for v in verdicts
+                {"target": v.target, "status": v.status, "rationale": v.rationale} for v in verdicts
             ],
         },
     )

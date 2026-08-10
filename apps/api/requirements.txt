@@ -18,6 +18,9 @@ greenlet==3.1.1
 bcrypt==4.2.1
 pyjwt==2.10.1
 
+# --- Field-level encryption (patient PII at rest) ---
+cryptography==44.0.0
+
 # --- Cache / queue ---
 redis==5.2.1
 

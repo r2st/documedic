@@ -149,8 +149,7 @@ def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]
     client.upsert(
         collection_name=collection,
         points=[
-            PointStruct(id=i, vector=embeddings[i], payload=records[i])
-            for i in range(len(records))
+            PointStruct(id=i, vector=embeddings[i], payload=records[i]) for i in range(len(records))
         ],
     )
 

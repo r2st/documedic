@@ -17,6 +17,20 @@ ingredient (e.g. two paracetamol brands -> unintentional overdose risk), or pres
 second drug in the same therapeutic class the patient is already on (e.g. two ACE inhibitors).
 None of these are covered by the interaction-rule table (which only fires on specific curated
 drug pairs), so they are a distinct, always-on offline check.
+
+Allergy cross-reactivity (check_allergies) additionally consults a curated map of clinically
+recognised cross-reactive drug-class families (e.g. penicillins <-> cephalosporins) so a
+documented allergy to one class also flags a structurally related class, not only an exact
+drug-class match. Cross-reactivity is a well-established but incomplete risk (typically a
+minority of patients react), so it is a dismissible "critical" flag rather than a hard block —
+unlike a direct or same-class match, which stays a hard block.
+
+Guideline-adherence checking (check_guideline_adherence) is a separate, informational-only,
+offline check: for a small curated set of conditions with an unambiguous ICMR STW first-line
+class, it notes when a proposed drug is in the same therapeutic domain as an active condition
+but outside the guideline-preferred first-line classes for it. It never blocks and never claims
+certainty — clinicians routinely have good reasons (prior failure, contraindication, allergy)
+to prescribe outside first-line, so this is a nudge, not a rule.
 """
 
 from __future__ import annotations
@@ -32,7 +46,79 @@ CheckType = Literal[
     "renal_dose",
     "hepatic_dose",
     "duplicate_therapy",
+    "guideline_deviation",
 ]
+
+# Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
+# lower-cased class names; membership is bidirectional (see _cross_reactive_classes). This is
+# deliberately conservative — only well-documented cross-reactivity families are included.
+_CROSS_REACTIVITY_CLASSES: dict[str, frozenset[str]] = {
+    "penicillin": frozenset({"cephalosporin", "carbapenem"}),
+    "cephalosporin": frozenset({"penicillin", "carbapenem"}),
+    "carbapenem": frozenset({"penicillin", "cephalosporin"}),
+    "sulfonamide antibiotic": frozenset({"sulfonylurea", "thiazide diuretic", "loop diuretic"}),
+    "sulfonylurea": frozenset({"sulfonamide antibiotic"}),
+    "thiazide diuretic": frozenset({"sulfonamide antibiotic"}),
+    "loop diuretic": frozenset({"sulfonamide antibiotic"}),
+    "nsaid": frozenset({"salicylate", "antiplatelet"}),
+    "salicylate": frozenset({"nsaid"}),
+    "antiplatelet": frozenset({"nsaid"}),
+}
+
+
+def _cross_reactive_classes(drug_class: str) -> frozenset[str]:
+    return _CROSS_REACTIVITY_CLASSES.get(_norm(drug_class), frozenset())
+
+
+# condition_name (lower-cased) -> guideline-preferred first-line therapy for that condition.
+# `domain_classes` are ALL drug classes plausibly prescribed to treat the condition (so the
+# check never fires for an unrelated drug, e.g. an analgesic in a hypertensive patient);
+# `first_line_classes` (subset of domain_classes) are the ICMR STW first-line preference.
+_GUIDELINE_FIRST_LINE: dict[str, dict] = {
+    "hypertension": {
+        "domain_classes": frozenset(
+            {
+                "ace inhibitor",
+                "arb",
+                "calcium channel blocker",
+                "thiazide diuretic",
+                "beta blocker",
+                "alpha blocker",
+                "loop diuretic",
+                "potassium-sparing diuretic",
+            }
+        ),
+        "first_line_classes": frozenset(
+            {"ace inhibitor", "arb", "calcium channel blocker", "thiazide diuretic"}
+        ),
+        "guideline_reference": "ICMR STW — Hypertension: first-line pharmacotherapy",
+    },
+    "type 2 diabetes mellitus": {
+        "domain_classes": frozenset(
+            {
+                "biguanide",
+                "sglt2 inhibitor",
+                "sulfonylurea",
+                "dpp-4 inhibitor",
+                "glp-1 agonist",
+                "insulin",
+                "thiazolidinedione",
+                "alpha-glucosidase inhibitor",
+            }
+        ),
+        "first_line_classes": frozenset({"biguanide"}),
+        "guideline_reference": (
+            "ICMR STW — Type 2 Diabetes Mellitus: first-line pharmacotherapy (metformin)"
+        ),
+    },
+    "dyslipidemia": {
+        "domain_classes": frozenset(
+            {"statin", "fibrate", "bile acid sequestrant", "cholesterol absorption inhibitor"}
+        ),
+        "first_line_classes": frozenset({"statin"}),
+        "guideline_reference": "ICMR STW — Dyslipidemia: first-line pharmacotherapy (statin)",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -155,6 +241,69 @@ def check_allergies(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
                     allergy_id=allergy.allergy_id,
                 )
             )
+            continue
+
+        if allergy.drug_class and proposed.drug_class:
+            related = _cross_reactive_classes(allergy.drug_class)
+            if _norm(proposed.drug_class) in related:
+                flags.append(
+                    SafetyFlag(
+                        check_type="allergy_conflict",
+                        severity="critical",
+                        is_hard_block=False,
+                        summary=(
+                            f"Documented allergy to {allergy.allergen_name} "
+                            f"({allergy.drug_class}) has recognised cross-reactivity with "
+                            f"{proposed.generic_name} ({proposed.drug_class}). Evidence "
+                            "suggests considering an alternative or confirming tolerance "
+                            "before prescribing."
+                        ),
+                        details={
+                            "allergen": allergy.allergen_name,
+                            "allergen_class": allergy.drug_class,
+                            "proposed_drug": proposed.generic_name,
+                            "proposed_drug_class": proposed.drug_class,
+                            "match_type": "cross_reactivity",
+                        },
+                        allergy_id=allergy.allergy_id,
+                    )
+                )
+    return flags
+
+
+def check_guideline_adherence(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Informational-only nudge when a prescribed drug is off guideline first-line for an
+    active condition it plausibly treats. Never a hard block; see module docstring."""
+    flags: list[SafetyFlag] = []
+    if not proposed.drug_class:
+        return flags
+    proposed_class = _norm(proposed.drug_class)
+    for condition in ctx.conditions:
+        entry = _GUIDELINE_FIRST_LINE.get(_norm(condition.condition_name))
+        if entry is None or proposed_class not in entry["domain_classes"]:
+            continue
+        if proposed_class in entry["first_line_classes"]:
+            continue
+        flags.append(
+            SafetyFlag(
+                check_type="guideline_deviation",
+                severity="info",
+                is_hard_block=False,
+                summary=(
+                    f"{proposed.generic_name} ({proposed.drug_class}) is not among the "
+                    f"guideline-preferred first-line classes for {condition.condition_name}. "
+                    f"{entry['guideline_reference']}. Consider whether first-line therapy has "
+                    "already been tried or is contraindicated for this patient."
+                ),
+                details={
+                    "proposed_drug": proposed.generic_name,
+                    "proposed_drug_class": proposed.drug_class,
+                    "condition": condition.condition_name,
+                    "first_line_classes": sorted(entry["first_line_classes"]),
+                    "guideline_reference": entry["guideline_reference"],
+                },
+            )
+        )
     return flags
 
 
@@ -370,6 +519,7 @@ def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFl
     flags.extend(check_interactions(proposed, ctx))
     flags.extend(check_contraindications(proposed, ctx))
     flags.extend(check_duplicate_therapy(proposed, ctx))
+    flags.extend(check_guideline_adherence(proposed, ctx))
     return flags
 
 

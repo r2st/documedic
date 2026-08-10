@@ -19,8 +19,22 @@ from app.models.guideline import GuidelineChunk
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOP = {
-    "the", "a", "an", "of", "for", "and", "or", "to", "in", "with", "management",
-    "patient", "consider", "considering", "guidelines", "support",
+    "the",
+    "a",
+    "an",
+    "of",
+    "for",
+    "and",
+    "or",
+    "to",
+    "in",
+    "with",
+    "management",
+    "patient",
+    "consider",
+    "considering",
+    "guidelines",
+    "support",
 }
 
 

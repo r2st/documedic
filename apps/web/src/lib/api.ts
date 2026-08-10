@@ -26,6 +26,7 @@ const PREFIX = `${API_URL}/api/v1`;
 
 const ACCESS_KEY = 'aether_access';
 const REFRESH_KEY = 'aether_refresh';
+const EXPIRES_KEY = 'aether_access_expires_at';
 
 export const tokenStore = {
   get access() {
@@ -34,13 +35,21 @@ export const tokenStore = {
   get refresh() {
     return typeof window === 'undefined' ? null : localStorage.getItem(REFRESH_KEY);
   },
+  /** Epoch-ms the current access token expires at, or null if unknown/absent. */
+  get accessExpiresAt(): number | null {
+    if (typeof window === 'undefined') return null;
+    const raw = localStorage.getItem(EXPIRES_KEY);
+    return raw ? Number(raw) : null;
+  },
   set(tokens: TokenResponse) {
     localStorage.setItem(ACCESS_KEY, tokens.access_token);
     localStorage.setItem(REFRESH_KEY, tokens.refresh_token);
+    localStorage.setItem(EXPIRES_KEY, String(Date.now() + tokens.expires_in * 1000));
   },
   clear() {
     localStorage.removeItem(ACCESS_KEY);
     localStorage.removeItem(REFRESH_KEY);
+    localStorage.removeItem(EXPIRES_KEY);
   },
 };
 
@@ -139,6 +148,28 @@ export const api = {
     tokenStore.clear();
   },
   me: () => request<Account>('/auth/me'),
+  /** Proactively rotate the access/refresh pair (used for scheduled, idle-free refresh). */
+  refreshAccessToken: () => tryRefresh(),
+
+  // --- Session management ---
+  listSessions: () =>
+    request<
+      Array<{
+        id: string;
+        ip_address: string | null;
+        user_agent: string | null;
+        created_at: string;
+        last_used_at: string;
+        expires_at: string;
+      }>
+    >('/auth/sessions'),
+  revokeSession: (sessionId: string) =>
+    request<{ message: string }>(`/auth/sessions/${sessionId}`, { method: 'DELETE' }),
+  logoutAllOtherSessions: () =>
+    request<{ message: string }>('/auth/logout-all', {
+      method: 'POST',
+      body: JSON.stringify({ keep_current_refresh_token: tokenStore.refresh }),
+    }),
 
   listPatients: (search?: string) =>
     request<Paginated<PatientSummary>>(

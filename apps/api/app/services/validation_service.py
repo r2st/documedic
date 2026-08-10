@@ -129,9 +129,7 @@ class ValidationService:
         return patient
 
     def _score(self, vignette: dict, session, suggestions: list) -> dict:
-        diffs = [
-            s for s in suggestions if s.output_type in ("differential", "cant_miss")
-        ]
+        diffs = [s for s in suggestions if s.output_type in ("differential", "cant_miss")]
         titles = [s.title.lower() for s in diffs]
         expected = [e.lower() for e in vignette.get("expected_diagnoses", [])]
 
@@ -173,9 +171,7 @@ class ValidationService:
         cm_recalled = sum(len(r["cant_miss_recalled"]) for r in results)
         cited_expected = [r for r in results if r["expects_cited_management"]]
         faithfulness = [
-            r["citation_faithfulness"]
-            for r in results
-            if r["citation_faithfulness"] is not None
+            r["citation_faithfulness"] for r in results if r["citation_faithfulness"] is not None
         ]
         tiers: dict[str, int] = {}
         for r in results:

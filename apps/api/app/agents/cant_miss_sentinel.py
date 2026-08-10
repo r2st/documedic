@@ -76,9 +76,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
         "cant_miss",
         {
             "agent": AGENT,
-            "items": [
-                {"diagnosis_name": h.diagnosis_name, "why": h.rationale} for h in added
-            ],
+            "items": [{"diagnosis_name": h.diagnosis_name, "why": h.rationale} for h in added],
         },
     )
     await ctx.emit("agent_complete", {"agent": AGENT})

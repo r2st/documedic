@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +13,9 @@ from app.models.user import Account
 from app.schemas.auth import (
     AccountResponse,
     LoginRequest,
+    LogoutAllRequest,
     RefreshRequest,
+    SessionResponse,
     SignupRequest,
     TokenResponse,
 )
@@ -71,3 +75,36 @@ async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> Me
 @router.get("/me", response_model=AccountResponse)
 async def me(account: Account = Depends(get_current_account)) -> AccountResponse:
     return AccountResponse.model_validate(account)
+
+
+@router.get("/sessions", response_model=list[SessionResponse])
+async def list_sessions(
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> list[SessionResponse]:
+    sessions = await AuthService(db).list_sessions(account.id)
+    return [SessionResponse.model_validate(s) for s in sessions]
+
+
+@router.delete("/sessions/{session_id}", response_model=MessageResponse)
+async def revoke_session(
+    session_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    await AuthService(db).revoke_session(account.id, session_id)
+    await db.commit()
+    return MessageResponse(message="Session revoked")
+
+
+@router.post("/logout-all", response_model=MessageResponse)
+async def logout_all(
+    body: LogoutAllRequest,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    count = await AuthService(db).revoke_all_sessions(
+        account.id, keep_refresh_token=body.keep_current_refresh_token
+    )
+    await db.commit()
+    return MessageResponse(message=f"Revoked {count} session(s)")

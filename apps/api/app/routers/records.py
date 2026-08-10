@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
-from app.schemas.record import LongitudinalRecord
+from app.schemas.record import CriticalLabFlagItem, CriticalLabFlagsResponse, LongitudinalRecord
+from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
 from app.services.record_service import RecordService
 
 router = APIRouter(prefix="/patients/{patient_id}/record", tags=["records"])
+labs_router = APIRouter(prefix="/patients/{patient_id}/labs", tags=["records"])
 
 
 @router.get("", response_model=LongitudinalRecord)
@@ -26,3 +28,35 @@ async def get_record(
     # Ownership check (raises if not found / not owned).
     await PatientService(db).get(account.id, patient_id)
     return await RecordService(db).assemble(patient_id)
+
+
+@labs_router.get("/critical-flags", response_model=CriticalLabFlagsResponse)
+async def critical_lab_flags(
+    patient_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> CriticalLabFlagsResponse:
+    """Deterministic, offline panic/critical-value check on the patient's latest labs.
+
+    Re-runs on every call (no caching) so it reflects the current record, and re-audits any
+    finding — Critical Safety Rule #8 (must work without an LLM).
+    """
+    flagged = await LabSafetyService(db).check_patient_labs(
+        account_id=account.id, patient_id=patient_id
+    )
+    await db.commit()
+    return CriticalLabFlagsResponse(
+        patient_id=patient_id,
+        flags=[
+            CriticalLabFlagItem(
+                lab_result_id=lab.id,
+                marker_name=flag.marker_name,
+                value=flag.value,
+                unit=flag.unit,
+                severity=flag.severity,
+                summary=flag.summary,
+                details=flag.details,
+            )
+            for lab, flag in flagged
+        ],
+    )

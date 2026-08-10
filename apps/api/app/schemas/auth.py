@@ -37,3 +37,20 @@ class AccountResponse(BaseModel):
     email: EmailStr
     display_name: str | None
     created_at: datetime
+
+
+class LogoutAllRequest(BaseModel):
+    # Optional: pass the caller's own current refresh token to keep that one session alive
+    # while revoking every other one ("log out all other devices").
+    keep_current_refresh_token: str | None = None
+
+
+class SessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    ip_address: str | None
+    user_agent: str | None
+    created_at: datetime
+    last_used_at: datetime
+    expires_at: datetime

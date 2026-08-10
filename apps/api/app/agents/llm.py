@@ -104,9 +104,7 @@ def _extract_json(text: str) -> dict[str, Any]:
 def _complete_openai(system: str, user: str, model: str, max_tokens: int) -> str:
     from openai import OpenAI
 
-    client = OpenAI(
-        api_key=settings.openai_api_key, timeout=settings.llm_request_timeout_seconds
-    )
+    client = OpenAI(api_key=settings.openai_api_key, timeout=settings.llm_request_timeout_seconds)
     completion = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
@@ -220,9 +218,7 @@ class LLMClient:
                         str(exc)[:200],
                     )
                     if attempt < retries:
-                        backoff = min(
-                            settings.llm_retry_backoff_base_seconds * (attempt + 1), 2.0
-                        )
+                        backoff = min(settings.llm_retry_backoff_base_seconds * (attempt + 1), 2.0)
                         time.sleep(backoff)
         # Every configured provider failed. Final safety net: simulated demo data if enabled.
         logger.error(

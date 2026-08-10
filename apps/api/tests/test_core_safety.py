@@ -12,6 +12,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     check_duplicate_therapy,
+    check_guideline_adherence,
     evaluate_drug_safety,
     has_hard_block,
 )
@@ -232,3 +233,105 @@ def test_duplicate_therapy_is_not_a_hard_block_and_does_not_stop_other_checks():
     types = {f.check_type for f in flags}
     assert "allergy_conflict" in types
     assert "duplicate_therapy" in types
+
+
+# --- Allergy cross-reactivity (related, not identical, drug-class families) ---
+
+PENICILLIN_DRUG = DrugRef(
+    reference_id="AMOX-500", generic_name="Amoxicillin", drug_class="Penicillin"
+)
+CEPHALOSPORIN_DRUG = DrugRef(
+    reference_id="CFX-500", generic_name="Cefixime", drug_class="Cephalosporin"
+)
+
+
+def test_cross_reactive_class_allergy_is_critical_not_hard_block():
+    """Penicillin allergy flags a cephalosporin as a dismissible critical alert, not a block."""
+    ctx = SafetyContext(
+        allergies=[
+            PatientAllergy(
+                allergen_name="Amoxicillin", drug_reference_id="AMOX-500", drug_class="Penicillin"
+            )
+        ]
+    )
+    flags = evaluate_drug_safety(CEPHALOSPORIN_DRUG, ctx)
+    assert not has_hard_block(flags)
+    assert len(flags) == 1
+    assert flags[0].check_type == "allergy_conflict"
+    assert flags[0].severity == "critical"
+    assert flags[0].details["match_type"] == "cross_reactivity"
+
+
+def test_unrelated_class_allergy_has_no_cross_reactivity_flag():
+    ctx = SafetyContext(
+        allergies=[
+            PatientAllergy(
+                allergen_name="Amoxicillin", drug_reference_id="AMOX-500", drug_class="Penicillin"
+            )
+        ]
+    )
+    assert evaluate_drug_safety(METFORMIN, ctx) == []
+
+
+def test_exact_same_class_allergy_still_hard_blocks_over_cross_reactivity():
+    """Exact drug-class match takes the hard-block path, not the softer cross-reactivity one."""
+    ctx = SafetyContext(
+        allergies=[
+            PatientAllergy(
+                allergen_name="Ceftriaxone",
+                drug_reference_id="CTX-1000",
+                drug_class="Cephalosporin",
+            )
+        ]
+    )
+    flags = evaluate_drug_safety(CEPHALOSPORIN_DRUG, ctx)
+    assert has_hard_block(flags)
+    assert flags[0].details["match_type"] == "cross_class"
+
+
+# --- Guideline adherence (informational-only nudge, never a hard block) ---
+
+STATIN = DrugRef(reference_id="ATOR-10", generic_name="Atorvastatin", drug_class="Statin")
+ACE_INHIBITOR = DrugRef(
+    reference_id="ENA-5-GL", generic_name="Enalapril", drug_class="ACE Inhibitor"
+)
+BETA_BLOCKER = DrugRef(reference_id="ATEN-50", generic_name="Atenolol", drug_class="Beta Blocker")
+
+
+def test_off_first_line_drug_for_matching_condition_is_informational():
+    ctx = SafetyContext(conditions=[PatientCondition(condition_name="Hypertension")])
+    flags = check_guideline_adherence(BETA_BLOCKER, ctx)
+    assert len(flags) == 1
+    assert flags[0].check_type == "guideline_deviation"
+    assert flags[0].severity == "info"
+    assert not flags[0].is_hard_block
+    assert flags[0].details["condition"] == "Hypertension"
+
+
+def test_first_line_drug_for_matching_condition_has_no_flag():
+    ctx = SafetyContext(conditions=[PatientCondition(condition_name="Hypertension")])
+    assert check_guideline_adherence(ACE_INHIBITOR, ctx) == []
+
+
+def test_unrelated_drug_for_condition_has_no_guideline_flag():
+    """A statin is out of the hypertension therapeutic domain entirely — no noisy false flag."""
+    ctx = SafetyContext(conditions=[PatientCondition(condition_name="Hypertension")])
+    assert check_guideline_adherence(STATIN, ctx) == []
+
+
+def test_no_flag_when_condition_not_in_curated_table():
+    ctx = SafetyContext(conditions=[PatientCondition(condition_name="Migraine")])
+    assert check_guideline_adherence(BETA_BLOCKER, ctx) == []
+
+
+def test_guideline_deviation_never_a_hard_block_even_alongside_other_flags():
+    ctx = SafetyContext(
+        conditions=[PatientCondition(condition_name="Hypertension")],
+        allergies=[PatientAllergy(allergen_name="Atenolol", drug_reference_id="ATEN-50")],
+    )
+    flags = evaluate_drug_safety(BETA_BLOCKER, ctx)
+    types = {f.check_type for f in flags}
+    assert "guideline_deviation" in types
+    assert "allergy_conflict" in types
+    deviation = next(f for f in flags if f.check_type == "guideline_deviation")
+    assert not deviation.is_hard_block

@@ -101,9 +101,7 @@ async def run_reasoning(
     )
 
 
-async def _account_from_query_or_header(
-    request: Request, db: AsyncSession
-) -> Account:
+async def _account_from_query_or_header(request: Request, db: AsyncSession) -> Account:
     """SSE auth: browsers' EventSource can't set headers, so accept ?token= as a fallback."""
     auth = request.headers.get("Authorization", "")
     token = auth.split(" ", 1)[1].strip() if auth.startswith("Bearer ") else None

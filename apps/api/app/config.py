@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     jwt_refresh_ttl_days: int = 7
     bcrypt_rounds: int = 12
     jwt_algorithm: str = "HS256"
+    # A refresh token not used to mint a new access token within this window is treated as an
+    # abandoned/idle session and rejected on its next use, even though its absolute
+    # jwt_refresh_ttl_days expiry hasn't passed yet.
+    session_idle_timeout_minutes: int = 30
+
+    # --- Field-level encryption (patient PII at rest) ---
+    # When unset, a key is derived from app_secret_key (dev convenience). Set explicitly in
+    # production so rotating app_secret_key doesn't also break decryption of stored PII.
+    field_encryption_key: str = ""
 
     # --- Uploads ---
     max_upload_bytes: int = 20 * 1024 * 1024  # 20 MB

@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 from typing import Any
 
-from sqlalchemy import CHAR, String
+from sqlalchemy import CHAR, String, Text
 from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.types import JSON, TypeDecorator
+
+from app.core.crypto import InvalidToken, decrypt_str, encrypt_str
 
 
 class GUID(TypeDecorator):
@@ -67,3 +70,59 @@ class INETType(TypeDecorator):
 
 def dumps(value: Any) -> str:
     return json.dumps(value, default=str)
+
+
+class EncryptedString(TypeDecorator):
+    """Fernet-encrypted text column (application-level encryption at rest).
+
+    Stored as ciphertext (base64 token, longer than the plaintext) so the underlying column
+    must be ``Text``, not a bounded ``String`` — length constraints on the plaintext (e.g.
+    ``full_name`` max 500 chars) stay enforced at the Pydantic schema layer instead.
+
+    A value that fails to decrypt (wrong/rotated key, or a legacy plaintext row written before
+    encryption was enabled on this column) is returned as-is rather than raising, matching this
+    project's "never crash the UI on bad stored data" policy — the field just reads back
+    un-decrypted instead of taking the whole request down.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> str | None:
+        if value is None:
+            return None
+        return encrypt_str(str(value))
+
+    def process_result_value(self, value: Any, dialect: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            return decrypt_str(value)
+        except (InvalidToken, ValueError):
+            return value
+
+
+class EncryptedDate(TypeDecorator):
+    """Fernet-encrypted date column. See ``EncryptedString`` for the decrypt-failure policy."""
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = date.fromisoformat(value)
+        return encrypt_str(value.isoformat())
+
+    def process_result_value(self, value: Any, dialect: Any) -> date | None:
+        if value is None:
+            return None
+        try:
+            raw = decrypt_str(value)
+        except (InvalidToken, ValueError):
+            return None
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            return None

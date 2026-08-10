@@ -131,9 +131,7 @@ def create_app() -> FastAPI:
         # field_validator that raises a bare ValueError (the standard Pydantic v2 idiom) puts
         # the raw exception instance in error["ctx"]["error"], which plain json.dumps (what
         # JSONResponse uses) cannot serialize -- jsonable_encoder coerces it to a string first.
-        return JSONResponse(
-            status_code=422, content={"detail": jsonable_encoder(exc.errors())}
-        )
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     app.include_router(health.router)
     for module in (
@@ -148,6 +146,7 @@ def create_app() -> FastAPI:
         validation,
     ):
         app.include_router(module.router, prefix=API_PREFIX)
+    app.include_router(records.labs_router, prefix=API_PREFIX)
 
     return app
 

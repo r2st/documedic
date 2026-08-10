@@ -26,6 +26,7 @@ from app.services.audit_service import AuditService
 from app.services.extraction import ExtractionPipeline
 from app.services.filetype import sniff_file_type
 from app.services.graph_service import GraphService
+from app.services.lab_safety_service import LabSafetyService
 from app.services.storage import compute_sha256, get_storage
 
 
@@ -267,6 +268,13 @@ class DocumentService:
         counts = await GraphService(self.db).merge_entities(
             patient=patient, document=document, entities=merge_payload
         )
+
+        if counts.get("lab_results"):
+            # Deterministic, offline critical/panic-value backstop — runs regardless of what
+            # reference range (if any) the source document carried. See lab_safety_service.
+            await LabSafetyService(self.db).check_patient_labs(
+                account_id=account_id, patient_id=patient_id
+            )
 
         meta["approved"] = True
         meta["entities"] = raw_entities
