@@ -154,6 +154,22 @@ class Settings(BaseSettings):
 DEFAULT_SECRET_KEY = "dev-insecure-secret-change-me"
 
 
+def _is_malformed_origin(origin: str) -> bool:
+    """True for an entry a browser's ``Origin`` header can never equal.
+
+    An Origin is exactly ``scheme://host[:port]`` — no path, no trailing slash, no query.
+    Starlette compares the header to these strings literally, so ``https://app.example.com/``
+    silently matches nothing. ``*`` and ``null`` are reported by their own dedicated checks,
+    which say something more useful than "malformed".
+    """
+    if origin.lower() in ("*", "null"):
+        return False
+    scheme, separator, rest = origin.partition("://")
+    if not separator or scheme not in ("http", "https") or not rest:
+        return True
+    return any(character in rest for character in "/?#")
+
+
 def production_config_errors(cfg: "Settings") -> list[str]:
     """Configuration that is safe in dev but unacceptable in production.
 
@@ -183,6 +199,20 @@ def production_config_errors(cfg: "Settings") -> list[str]:
         )
     if any(o.startswith("http://") and "localhost" not in o for o in cfg.cors_origin_list):
         problems.append("CORS_ORIGINS contains a non-local http:// origin; use https://.")
+    if any(o.lower() == "null" for o in cfg.cors_origin_list):
+        problems.append(
+            "CORS_ORIGINS contains the `null` origin — sandboxed iframes and file:// pages "
+            "send `Origin: null`, so allowing it grants any local HTML file credentialed "
+            "access to patient data."
+        )
+    malformed = [o for o in cfg.cors_origin_list if _is_malformed_origin(o)]
+    if malformed:
+        problems.append(
+            "CORS_ORIGINS entries must be bare scheme://host[:port] with no path or trailing "
+            f"slash (browsers send the Origin header in that form): {', '.join(malformed)}. "
+            "As written these match nothing, which looks like a broken frontend and invites "
+            "someone to 'fix' it with a wildcard."
+        )
     if not cfg.field_encryption_key:
         problems.append(
             "FIELD_ENCRYPTION_KEY must be set explicitly in production so rotating "

@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from app.config import settings
+from app.exceptions import DocumentNotFoundError
 
 # Only a plain alphanumeric extension is carried over from the uploaded name; anything else
 # (separators, dot segments, control characters, a 400-character "extension") is dropped so a
@@ -39,6 +40,26 @@ class LocalStorage:
         shard = sha256[:2]
         return self.base / patient_id / shard / f"{sha256}{safe_suffix(file_name)}"
 
+    def _confined(self, storage_path: str) -> Path:
+        """Resolve ``storage_path`` and refuse anything that lands outside the storage root.
+
+        Defence in depth, not a fix for a live hole: today every ``documents.storage_path``
+        was produced by :meth:`_path_for` from a UUID and a hex digest, so none of them can
+        point outside. But ``read`` is reached from an authenticated download endpoint that
+        returns the bytes verbatim, which makes it a ready-made confused deputy the moment
+        that column stops being trustworthy — a restored/migrated backup, a hand-edited row,
+        an injection elsewhere, or simply a future backend that writes paths differently.
+        Confining here means the blast radius of any of those is a 404, not arbitrary file
+        disclosure over HTTP.
+
+        ``resolve()`` also collapses symlinks, so a link planted inside the tree that points
+        at ``/etc/passwd`` fails the check too.
+        """
+        resolved = Path(storage_path).resolve()
+        if not resolved.is_relative_to(self.base.resolve()):
+            raise DocumentNotFoundError("Document is not available")
+        return resolved
+
     def write(self, patient_id: str, sha256: str, file_name: str, data: bytes) -> str:
         path = self._path_for(patient_id, sha256, file_name)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,10 +68,13 @@ class LocalStorage:
         return str(path)
 
     def read(self, storage_path: str) -> bytes:
-        return Path(storage_path).read_bytes()
+        return self._confined(storage_path).read_bytes()
 
     def exists(self, storage_path: str) -> bool:
-        return Path(storage_path).exists()
+        try:
+            return self._confined(storage_path).exists()
+        except DocumentNotFoundError:
+            return False
 
 
 def get_storage() -> LocalStorage:

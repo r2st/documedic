@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.exceptions import DocumentNotFoundError
 from app.services.document_service import MAX_FILE_NAME_CHARS
 from app.services.storage import LocalStorage, compute_sha256, safe_suffix
 from tests.conftest import create_patient
@@ -71,6 +72,98 @@ def test_write_and_read_round_trip_under_the_storage_root(tmp_path):
     assert Path(written).resolve().is_relative_to(tmp_path.resolve())
     assert storage.exists(written)
     assert storage.read(written) == data
+
+
+@pytest.mark.parametrize(
+    "escape",
+    [
+        "/etc/passwd",
+        "../../../../etc/passwd",
+        "{root}/../outside.txt",
+        "{root}/../../etc/passwd",
+        "{root}/patient/../../../secrets.env",
+    ],
+)
+def test_reading_a_path_outside_the_storage_root_is_refused(tmp_path, escape):
+    """``documents.storage_path`` is trusted input today; ``read`` must not depend on that.
+
+    The download route hands whatever ``read`` returns straight to an authenticated caller,
+    so a storage_path that ever stops being machine-generated (restored backup, edited row,
+    injection elsewhere, a future backend) would turn it into arbitrary file disclosure.
+    """
+    root = tmp_path / "storage"
+    storage = LocalStorage(str(root))
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"secret")
+
+    target = escape.format(root=root)
+    with pytest.raises(DocumentNotFoundError):
+        storage.read(target)
+    assert storage.exists(target) is False
+
+
+def test_a_symlink_out_of_the_storage_root_is_refused(tmp_path):
+    """``resolve()`` collapses symlinks, so a link planted inside the tree fails the check."""
+    root = tmp_path / "storage"
+    root.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"top secret")
+    link = root / "link.pdf"
+    link.symlink_to(secret)
+
+    storage = LocalStorage(str(root))
+    with pytest.raises(DocumentNotFoundError):
+        storage.read(str(link))
+
+
+def test_confinement_does_not_break_ordinary_reads(tmp_path):
+    """The guard must be invisible to every path the service itself produces."""
+    storage = LocalStorage(str(tmp_path))
+    data = b"real document bytes"
+    sha = compute_sha256(data)
+    written = storage.write(str(uuid.uuid4()), sha, "scan.pdf", data)
+
+    assert storage.exists(written)
+    assert storage.read(written) == data
+
+
+def test_a_missing_file_inside_the_root_is_still_a_plain_miss(tmp_path):
+    """Absent-but-legitimate must not be conflated with escaped-the-root."""
+    storage = LocalStorage(str(tmp_path))
+    inside = str(tmp_path / "aa" / f"{SHA}.pdf")
+
+    assert storage.exists(inside) is False
+    with pytest.raises(FileNotFoundError):
+        storage.read(inside)
+
+
+@pytest.mark.asyncio
+async def test_a_tampered_storage_path_yields_404_not_the_file(auth_client, db, tmp_path):
+    """End-to-end: the download route refuses a row pointing outside the storage root."""
+    from sqlalchemy import select
+
+    from app.models.document import Document
+
+    patient = await create_patient(auth_client)
+    upload = await auth_client.post(
+        f"/api/v1/patients/{patient['id']}/documents",
+        files={"file": ("scan.png", PNG, "image/png")},
+    )
+    assert upload.status_code == 201, upload.text
+    doc_id = upload.json()["id"]
+
+    secret = tmp_path / "id_rsa"
+    secret.write_bytes(b"-----BEGIN PRIVATE KEY-----")
+    document = (
+        await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    ).scalar_one()
+    document.storage_path = str(secret)
+    await db.commit()
+
+    resp = await auth_client.get(f"/api/v1/patients/{patient['id']}/documents/{doc_id}/file")
+
+    assert resp.status_code == 404
+    assert b"PRIVATE KEY" not in resp.content
 
 
 def test_identical_bytes_share_one_path(tmp_path):

@@ -246,3 +246,116 @@ async def test_unknown_refresh_token_does_not_trigger_reuse_machinery(client, db
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "not-a-real-token"})
     assert resp.status_code == 401
     assert "auth_refresh_token_reuse_detected" not in await _actions(db)
+
+
+# --- Response-shape uniformity (oracles other than timing) ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_every_refresh_failure_is_byte_identical(client, db):
+    """Unknown, revoked, and absolutely-expired refresh tokens must be indistinguishable.
+
+    A distinguishable response is an oracle even when the timings match: it tells a holder
+    of a stolen token whether the token was ever real, whether it has already been rotated
+    (i.e. whether the victim is still active), and therefore whether to burn it now. All
+    three are "invalid or expired" and nothing more.
+    """
+    # One account per failure mode: presenting a revoked token mass-revokes that account's
+    # whole session family (reuse detection), which would otherwise clobber the expiry case.
+    revoked_tokens = await _signup(client, email="uniform-revoked@example.com")
+    rotated = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": revoked_tokens["refresh_token"]}
+    )
+    assert rotated.status_code == 200
+    revoked = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": revoked_tokens["refresh_token"]}
+    )
+
+    expired_tokens = await _signup(client, email="uniform-expired@example.com")
+    session = (
+        await db.execute(
+            select(Session)
+            .join(Account, Account.id == Session.account_id)
+            .where(Account.email == "uniform-expired@example.com")
+        )
+    ).scalar_one()
+    session.expires_at = datetime.now(UTC) - timedelta(days=1)
+    await db.commit()
+    expired = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": expired_tokens["refresh_token"]}
+    )
+
+    unknown = await client.post("/api/v1/auth/refresh", json={"refresh_token": "0" * 64})
+
+    responses = (unknown, revoked, expired)
+    assert {r.status_code for r in responses} == {401}
+    bodies = [r.json() for r in responses]
+    assert bodies[0] == bodies[1] == bodies[2], bodies
+
+
+@pytest.mark.asyncio
+async def test_logout_does_not_reveal_whether_the_token_existed(client):
+    """Logout is idempotent and silent about validity.
+
+    Otherwise it is a free token-validity check that needs no credentials at all.
+    """
+    tokens = await _signup(client, email="quietlogout@example.com")
+
+    real = await client.post("/api/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]})
+    fake = await client.post("/api/v1/auth/logout", json={"refresh_token": "0" * 64})
+    again = await client.post(
+        "/api/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}
+    )
+
+    assert real.status_code == fake.status_code == again.status_code
+    assert real.json() == fake.json() == again.json()
+
+
+@pytest.mark.asyncio
+async def test_the_dummy_hash_costs_the_same_as_a_real_one(db):
+    """The enumeration defence only works while the dummy hash matches real hashes' cost.
+
+    ``_DUMMY_PASSWORD_HASH`` is built once at import from ``settings.bcrypt_rounds``. If it
+    ever drifts from the cost factor stored on real accounts, "unknown email" becomes
+    measurably faster (or slower) than "wrong password" and the oracle is back — with no
+    test failing to say so.
+    """
+    from app.core.security import hash_password
+    from app.services import auth_service as auth_module
+
+    account = await auth_module.AuthService(db).signup("costcheck@example.com", "password123", None)
+    await db.commit()
+
+    def cost(bcrypt_hash: str) -> str:
+        # "$2b$<rounds>$<salt+digest>"
+        return bcrypt_hash.split("$")[2]
+
+    assert cost(auth_module._DUMMY_PASSWORD_HASH) == cost(account.password_hash)
+    assert cost(auth_module._DUMMY_PASSWORD_HASH) == cost(hash_password("anything"))
+
+
+@pytest.mark.asyncio
+async def test_signup_of_a_taken_email_does_not_hash_the_password(monkeypatch, db):
+    """Documents a deliberate asymmetry rather than asserting it away.
+
+    Signup answers 409 ``email_exists`` — it is an enumeration oracle by design, because a
+    registration form has to tell you the address is taken. Since the *status code* already
+    says so, skipping bcrypt on that path costs nothing and denies an unauthenticated
+    caller a free ~100ms of CPU per request. This test pins that reasoning in place so the
+    skipped hash is never mistaken for the login path's carefully preserved symmetry.
+    """
+    from app.exceptions import EmailAlreadyExistsError
+    from app.services import auth_service as auth_module
+
+    await auth_module.AuthService(db).signup("taken@example.com", "password123", None)
+    await db.commit()
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        auth_module, "hash_password", lambda plain: calls.append(plain) or "$2b$04$x"
+    )
+
+    with pytest.raises(EmailAlreadyExistsError):
+        await auth_module.AuthService(db).signup("taken@example.com", "password123", None)
+
+    assert calls == []
