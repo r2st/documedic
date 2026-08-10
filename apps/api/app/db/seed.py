@@ -66,13 +66,14 @@ async def seed_interactions(db: AsyncSession) -> int:
 
 
 async def seed_contraindications(db: AsyncSession) -> int:
-    existing = set(
-        (
+    existing = {
+        (drug_reference_id, condition_name)
+        for (drug_reference_id, condition_name) in (
             await db.execute(
                 select(Contraindication.drug_reference_id, Contraindication.condition_name)
             )
         ).all()
-    )
+    }
     added = 0
     for row in _load("contraindications.json"):
         key = (row["drug_reference_id"], row["condition_name"])

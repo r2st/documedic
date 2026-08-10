@@ -127,15 +127,16 @@ async def ingest(
 ) -> int:
     """Upsert the corpus into ``guideline_chunks``. Returns the number of new chunks."""
     version = corpus_version or settings.guideline_corpus_version
-    existing = set(
-        (
+    existing = {
+        (source, section_id)
+        for (source, section_id) in (
             await db.execute(
                 select(GuidelineChunk.source, GuidelineChunk.section_id).where(
                     GuidelineChunk.corpus_version == version
                 )
             )
         ).all()
-    )
+    }
     records = load_corpus(path)
     embeddings = _maybe_embed([r["content"] for r in records]) if push_qdrant else None
 
@@ -162,7 +163,7 @@ async def ingest(
 def _maybe_embed(texts: list[str]) -> list[list[float]] | None:
     """Embed with sentence-transformers if available; otherwise return None (lexical fallback)."""
     try:
-        from sentence_transformers import SentenceTransformer  # type: ignore
+        from sentence_transformers import SentenceTransformer
     except Exception:
         return None
     model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -172,8 +173,8 @@ def _maybe_embed(texts: list[str]) -> list[list[float]] | None:
 def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]]) -> None:
     """Index chunks into Qdrant if the client is available (best-effort)."""
     try:
-        from qdrant_client import QdrantClient  # type: ignore
-        from qdrant_client.models import Distance, PointStruct, VectorParams  # type: ignore
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, PointStruct, VectorParams
     except Exception:
         return
     client = QdrantClient(url=settings.qdrant_url)

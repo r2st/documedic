@@ -48,8 +48,8 @@ def _provider_order() -> list[str]:
     With OpenRouter primary the slow OpenAI/Anthropic retries only happen if OpenRouter
     itself fails, so the common path returns without that latency.
     """
-    primary = settings.llm_provider
-    order = [primary]
+    primary: str = settings.llm_provider
+    order: list[str] = [primary]
     if settings.llm_fallback_enabled:
         for provider in ("openai", "anthropic"):
             if provider not in order:

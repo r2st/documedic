@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,36 @@ def _iso_utc(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC).isoformat()
+
+
+def _canonical_for(row: AuditLog) -> str:
+    """Canonical hashed representation of a stored row, matching what append() hashed."""
+    return canonical_payload(
+        sequence=row.sequence,
+        action=row.action,
+        account_id=str(row.account_id) if row.account_id else None,
+        patient_id=str(row.patient_id) if row.patient_id else None,
+        entity_type=row.entity_type,
+        entity_id=str(row.entity_id) if row.entity_id else None,
+        payload=row.payload,
+        created_at=_iso_utc(row.created_at),
+    )
+
+
+def _chain_entry(row: AuditLog) -> dict[str, Any]:
+    """Row rendered as the dict shape :func:`verify_chain` consumes."""
+    return {
+        "sequence": row.sequence,
+        "action": row.action,
+        "account_id": str(row.account_id) if row.account_id else None,
+        "patient_id": str(row.patient_id) if row.patient_id else None,
+        "entity_type": row.entity_type,
+        "entity_id": str(row.entity_id) if row.entity_id else None,
+        "payload": row.payload,
+        "created_at": _iso_utc(row.created_at),
+        "prev_hash": row.prev_hash,
+        "record_hash": row.record_hash,
+    }
 
 
 class AuditService:
@@ -120,59 +151,15 @@ class AuditService:
             .order_by(AuditLog.sequence.asc())
         )
         rows = list(result.scalars().all())
-        entries = [
-            {
-                "sequence": r.sequence,
-                "action": r.action,
-                "account_id": str(r.account_id) if r.account_id else None,
-                "patient_id": str(r.patient_id) if r.patient_id else None,
-                "entity_type": r.entity_type,
-                "entity_id": str(r.entity_id) if r.entity_id else None,
-                "payload": r.payload,
-                "created_at": _iso_utc(r.created_at),
-                "prev_hash": r.prev_hash,
-                "record_hash": r.record_hash,
-            }
-            for r in rows
-        ]
         # Per-patient slice: validate each record's own hash recomputes; chain linkage is
         # validated globally. Here we recompute each record's hash from its stored prev_hash.
         valid = all(
-            compute_record_hash(
-                e["prev_hash"],
-                canonical_payload(
-                    sequence=e["sequence"],
-                    action=e["action"],
-                    account_id=e["account_id"],
-                    patient_id=e["patient_id"],
-                    entity_type=e["entity_type"],
-                    entity_id=e["entity_id"],
-                    payload=e["payload"],
-                    created_at=e["created_at"],
-                ),
-            )
-            == e["record_hash"]
-            for e in entries
+            compute_record_hash(r.prev_hash, _canonical_for(r)) == r.record_hash for r in rows
         )
-        return len(entries), valid
+        return len(rows), valid
 
     async def verify_full_chain(self) -> tuple[int, bool]:
         """Verify the entire global chain is unbroken (genesis -> latest)."""
         result = await self.db.execute(select(AuditLog).order_by(AuditLog.sequence.asc()))
-        rows = list(result.scalars().all())
-        entries = [
-            {
-                "sequence": r.sequence,
-                "action": r.action,
-                "account_id": str(r.account_id) if r.account_id else None,
-                "patient_id": str(r.patient_id) if r.patient_id else None,
-                "entity_type": r.entity_type,
-                "entity_id": str(r.entity_id) if r.entity_id else None,
-                "payload": r.payload,
-                "created_at": _iso_utc(r.created_at),
-                "prev_hash": r.prev_hash,
-                "record_hash": r.record_hash,
-            }
-            for r in rows
-        ]
+        entries = [_chain_entry(r) for r in result.scalars().all()]
         return len(entries), verify_chain(entries)

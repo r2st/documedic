@@ -197,7 +197,9 @@ def _extract_anthropic(file_bytes: bytes, file_type: str) -> str:
         api_key=settings.anthropic_api_key, timeout=settings.llm_request_timeout_seconds
     )
 
-    content: list[dict] = [{"type": "text", "text": "Extract structured clinical data."}]
+    # list[Any] rather than list[dict]: the SDK types ``content`` as an iterable of block
+    # TypedDicts, and a plain dict literal list is not assignable to that union.
+    content: list[Any] = [{"type": "text", "text": "Extract structured clinical data."}]
     if file_type in _MEDIA_TYPES:
         content.append(
             {
