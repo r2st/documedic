@@ -54,6 +54,13 @@ class GraphService:
         source_doc_id = document.id if document else None
         new_lab_results: list[LabResult] = []
 
+        # Load each dedup key set once instead of re-querying per entity (a 12-line
+        # prescription used to issue 12 full scans of the patient's medications). Keys added
+        # during this merge are folded back in, so a document that lists the same drug or
+        # condition twice no longer creates two rows — autoflush is off, so the earlier
+        # db.add() would not have been visible to a follow-up SELECT.
+        seen = await self._existing_keys(patient)
+
         for entity in entities:
             etype = entity.get("entity_type")
             fields = entity.get("fields", {})
@@ -61,7 +68,9 @@ class GraphService:
             confidence = entity.get("confidence", {})
 
             if etype == "medication":
-                if await self._merge_medication(patient, source_doc_id, fields, region, confidence):
+                if await self._merge_medication(
+                    patient, source_doc_id, fields, region, confidence, seen["medications"]
+                ):
                     counts["medications"] += 1
             elif etype == "lab_result":
                 lab = await self._merge_lab(patient, source_doc_id, fields, region, confidence)
@@ -69,10 +78,14 @@ class GraphService:
                     counts["lab_results"] += 1
                     new_lab_results.append(lab)
             elif etype == "condition":
-                if await self._merge_condition(patient, source_doc_id, fields, region, confidence):
+                if self._merge_condition(
+                    patient, source_doc_id, fields, region, confidence, seen["conditions"]
+                ):
                     counts["conditions"] += 1
             elif etype == "allergy":
-                if await self._merge_allergy(patient, source_doc_id, fields, region, confidence):
+                if await self._merge_allergy(
+                    patient, source_doc_id, fields, region, confidence, seen["allergies"]
+                ):
                     counts["allergies"] += 1
 
         await self.db.flush()
@@ -80,27 +93,46 @@ class GraphService:
         await self.db.flush()
         return counts
 
-    async def _merge_medication(self, patient, source_doc_id, fields, region, confidence) -> bool:
-        brand = fields.get("brand_name_raw") or fields.get("generic_name")
-        resolved = await self.resolver.resolve(brand)
-        generic = resolved.generic_name if resolved else fields.get("generic_name")
-        vocab_id = resolved.vocabulary_id if resolved else None
-
-        # Dedup: same generic + dose + not deleted already current.
-        existing = await self.db.execute(
-            select(MedicationEvent).where(
+    async def _existing_keys(self, patient: Patient) -> dict[str, set]:
+        """Dedup keys already in the record: current meds, conditions, allergies."""
+        meds = await self.db.execute(
+            select(MedicationEvent.generic_name, MedicationEvent.dose).where(
                 MedicationEvent.patient_id == patient.id,
                 MedicationEvent.is_deleted.is_(False),
                 MedicationEvent.is_current.is_(True),
             )
         )
-        for med in existing.scalars().all():
-            if (
-                (med.generic_name or "").lower() == (generic or "").lower()
-                and (med.dose or "") == (fields.get("dose") or "")
-                and generic
-            ):
-                return False  # duplicate of an existing current medication
+        conditions = await self.db.execute(
+            select(Condition.condition_name).where(
+                Condition.patient_id == patient.id,
+                Condition.is_deleted.is_(False),
+            )
+        )
+        allergies = await self.db.execute(
+            select(Allergy.allergen_name).where(
+                Allergy.patient_id == patient.id,
+                Allergy.is_deleted.is_(False),
+            )
+        )
+        return {
+            "medications": {((generic or "").lower(), dose or "") for generic, dose in meds.all()},
+            "conditions": {name.lower() for (name,) in conditions.all() if name},
+            "allergies": {name.lower() for (name,) in allergies.all() if name},
+        }
+
+    async def _merge_medication(
+        self, patient, source_doc_id, fields, region, confidence, seen: set
+    ) -> bool:
+        brand = fields.get("brand_name_raw") or fields.get("generic_name")
+        resolved = await self.resolver.resolve(brand)
+        generic = resolved.generic_name if resolved else fields.get("generic_name")
+        vocab_id = resolved.vocabulary_id if resolved else None
+
+        # Dedup: same generic + dose among the patient's current medications.
+        key = ((generic or "").lower(), fields.get("dose") or "")
+        if generic and key in seen:
+            return False
+        seen.add(key)
 
         med = MedicationEvent(
             patient_id=patient.id,
@@ -166,19 +198,15 @@ class GraphService:
         self.db.add(lab)
         return lab
 
-    async def _merge_condition(self, patient, source_doc_id, fields, region, confidence) -> bool:
+    def _merge_condition(
+        self, patient, source_doc_id, fields, region, confidence, seen: set
+    ) -> bool:
         name = fields.get("condition_name")
         if not name:
             return False
-        existing = await self.db.execute(
-            select(Condition).where(
-                Condition.patient_id == patient.id,
-                Condition.is_deleted.is_(False),
-            )
-        )
-        for cond in existing.scalars().all():
-            if cond.condition_name.lower() == name.lower():
-                return False
+        if name.lower() in seen:
+            return False
+        seen.add(name.lower())
         cond = Condition(
             patient_id=patient.id,
             source_document_id=source_doc_id,
@@ -194,19 +222,15 @@ class GraphService:
         self.db.add(cond)
         return True
 
-    async def _merge_allergy(self, patient, source_doc_id, fields, region, confidence) -> bool:
+    async def _merge_allergy(
+        self, patient, source_doc_id, fields, region, confidence, seen: set
+    ) -> bool:
         name = fields.get("allergen_name")
         if not name:
             return False
-        existing = await self.db.execute(
-            select(Allergy).where(
-                Allergy.patient_id == patient.id,
-                Allergy.is_deleted.is_(False),
-            )
-        )
-        for allergy in existing.scalars().all():
-            if allergy.allergen_name.lower() == name.lower():
-                return False
+        if name.lower() in seen:
+            return False
+        seen.add(name.lower())
         allergen_type = fields.get("allergen_type") or "drug"
         vocab_id = None
         if allergen_type == "drug":

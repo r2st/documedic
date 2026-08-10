@@ -112,3 +112,35 @@ async def test_approve_can_reject_entities(auth_client):
         json={"corrections": [], "rejected_entity_indexes": [allergy_idx]},
     )
     assert approve.json()["merged"]["allergies"] == 0
+
+
+@pytest.mark.asyncio
+async def test_listing_documents_for_another_accounts_patient_is_not_found(client):
+    """Listing used to answer 200 with [] for a patient the caller does not own, while
+    every other patient-scoped route 404s. Consistency matters: a 200 confirms the route
+    reached the patient scope at all."""
+    resp = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "docs-owner@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 201, resp.text
+    client.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+    patient = await create_patient(client)
+
+    resp = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "docs-intruder@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 201, resp.text
+    client.headers["Authorization"] = f"Bearer {resp.json()['access_token']}"
+
+    resp = await client.get(f"/api/v1/patients/{patient['id']}/documents")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_listing_documents_for_an_unknown_patient_is_not_found(auth_client):
+    import uuid
+
+    resp = await auth_client.get(f"/api/v1/patients/{uuid.uuid4()}/documents")
+    assert resp.status_code == 404

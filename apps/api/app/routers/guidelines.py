@@ -20,7 +20,8 @@ router = APIRouter(tags=["guidelines"])
 
 @router.get("/guidelines/search", response_model=list[CitationOut])
 async def search_guidelines(
-    q: str = Query(..., min_length=2),
+    # Bounded so a pathological query cannot drive an unbounded retrieval/embedding cost.
+    q: str = Query(..., min_length=2, max_length=500),
     k: int = Query(default=10, ge=1, le=25),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),

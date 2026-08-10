@@ -21,7 +21,7 @@ router = APIRouter(prefix="/patients/{patient_id}/audit", tags=["audit"])
 @router.get("", response_model=PaginatedResponse[AuditEntryResponse])
 async def patient_audit(
     patient_id: uuid.UUID,
-    action: str | None = Query(default=None),
+    action: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     account: Account = Depends(get_current_account),

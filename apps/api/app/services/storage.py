@@ -7,13 +7,25 @@ a path and deduplication is trivial. Storage paths are never public URLs.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from app.config import settings
 
+# Only a plain alphanumeric extension is carried over from the uploaded name; anything else
+# (separators, dot segments, control characters, a 400-character "extension") is dropped so a
+# hostile filename can never influence where the bytes land.
+_SAFE_SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
+
 
 def compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def safe_suffix(file_name: str) -> str:
+    """The uploaded file's extension if it is unambiguously safe, else ``""``."""
+    suffix = Path(file_name).suffix
+    return suffix if _SAFE_SUFFIX.match(suffix) else ""
 
 
 class LocalStorage:
@@ -22,10 +34,10 @@ class LocalStorage:
         self.base.mkdir(parents=True, exist_ok=True)
 
     def _path_for(self, patient_id: str, sha256: str, file_name: str) -> Path:
-        # storage/<patient>/<aa>/<sha256>__<original-name>
-        suffix = Path(file_name).suffix
+        # storage/<patient>/<aa>/<sha256><ext> — every path component is derived from a
+        # UUID or a hex digest, so the tree shape is not user-controllable.
         shard = sha256[:2]
-        return self.base / patient_id / shard / f"{sha256}{suffix}"
+        return self.base / patient_id / shard / f"{sha256}{safe_suffix(file_name)}"
 
     def write(self, patient_id: str, sha256: str, file_name: str, data: bytes) -> str:
         path = self._path_for(patient_id, sha256, file_name)

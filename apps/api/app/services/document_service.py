@@ -30,6 +30,10 @@ from app.services.lab_safety_service import LabSafetyService
 from app.services.storage import compute_sha256, get_storage
 
 
+# Comfortably longer than any real scan filename, short enough to be a bounded column value.
+MAX_FILE_NAME_CHARS = 255
+
+
 def _band(score: float) -> str:
     if score >= settings.confirmation_confidence_threshold:
         return "high"
@@ -59,6 +63,10 @@ class DocumentService:
         data: bytes,
     ) -> Document:
         await self._get_patient(account_id, patient_id)  # ownership + existence check
+
+        # The client controls this string; it is persisted and echoed into the audit payload,
+        # so cap it rather than storing an arbitrarily long name.
+        file_name = (file_name or "upload")[:MAX_FILE_NAME_CHARS]
 
         if len(data) > settings.max_upload_bytes:
             raise FileTooLargeError(f"File exceeds maximum of {settings.max_upload_bytes} bytes")
@@ -181,6 +189,10 @@ class DocumentService:
         return document
 
     async def list(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> list[Document]:
+        # Ownership check first: every other patient-scoped route 404s for a patient the
+        # caller does not own, and listing must not be the one endpoint that answers 200
+        # (with an empty list) for someone else's patient id.
+        await self._get_patient(account_id, patient_id)
         result = await self.db.execute(
             select(Document)
             .where(
