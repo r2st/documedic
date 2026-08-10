@@ -202,3 +202,52 @@ def test_mean_confidence_of_an_empty_extraction_is_zero():
 
 def test_infer_doc_type_of_nothing_is_none():
     assert ExtractionPipeline._infer_doc_type([]) is None
+
+
+# --- The two "nothing found" exits -------------------------------------------------------
+# Illegible bytes and legible-but-unparseable text are the same outcome for the caller, so
+# they share one exit. These pin that they really do agree, in both demo and non-demo mode.
+
+
+def test_legible_text_with_no_entities_ends_the_same_way_as_illegible_bytes(no_providers):
+    illegible = ExtractionPipeline().run(b"\xff\xfe\x00\x01", "application/octet-stream")
+    unparseable = ExtractionPipeline().run(b"", "pdf", raw_text="Dear patient, get well soon.")
+
+    assert unparseable.entities == illegible.entities == []
+    assert unparseable.document_type is illegible.document_type is None
+    assert unparseable.model is illegible.model is None
+
+
+def test_legible_text_with_no_entities_reaches_the_demo_net_too(monkeypatch):
+    """The demo net is a net under *both* exits, not only under illegible bytes."""
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "openrouter_api_key", "")
+    monkeypatch.setattr(settings, "llm_demo_fallback", True)
+
+    result = ExtractionPipeline().run(b"", "pdf", raw_text="Dear patient, get well soon.")
+    assert result.entities
+    assert result.model and claude_client.demo_data.DEMO_TAG in result.model
+
+
+def test_the_ocr_flag_survives_an_empty_parse(no_providers, monkeypatch):
+    """OCR ran and produced text; the parser just found nothing in it. Both facts must survive.
+
+    Losing the flag here would report a Tesseract-derived (lower-trust) reading as if it came
+    from a clean text layer.
+    """
+    monkeypatch.setattr(
+        "app.services.extraction.pipeline._tesseract_text",
+        lambda data, ftype: "Dear patient, get well soon.",
+    )
+    result = ExtractionPipeline().run(b"\x89PNG\r\n\x1a\n", "image/png")
+    assert result.entities == []
+    assert result.ocr_fallback_used is True
+
+
+def test_a_pdf_with_no_text_layer_falls_back_to_decoding_the_bytes(no_providers, monkeypatch):
+    """A '.pdf' upload that is really plain text still gets read rather than dropped."""
+    monkeypatch.setattr("app.services.extraction.pipeline._pdf_text", lambda data: "")
+    result = ExtractionPipeline().run(PRESCRIPTION_TEXT.encode(), "pdf")
+    assert result.entities
+    assert result.ocr_fallback_used is False

@@ -102,6 +102,63 @@ async def test_resolve_reference_id_returns_none_for_an_id_not_in_the_vocabulary
     assert await DrugResolver(db).resolve_reference_id("ref-does-not-exist") is None
 
 
+async def test_resolver_prefers_a_brand_match_over_a_generic_one(db):
+    """Brand names are checked before generics, so a name that is both resolves as a brand.
+
+    Real vocabularies do collide this way (a brand marketed under another drug's INN), and the
+    precedence is what stops the collision silently changing which product is resolved.
+    """
+    ref_brand = f"ref-{uuid.uuid4().hex}"
+    ref_generic = f"ref-{uuid.uuid4().hex}"
+    collision = f"zz{uuid.uuid4().hex[:8]}"
+    db.add(DrugVocabulary(brand_name=collision, generic_name="Amoxicillin", reference_id=ref_brand))
+    db.add(DrugVocabulary(generic_name=collision, reference_id=ref_generic))
+    await db.flush()
+
+    resolved = await DrugResolver(db).resolve(collision)
+
+    assert resolved is not None
+    assert resolved.match_type == "exact_brand"
+    assert resolved.reference_id == ref_brand
+
+
+async def test_resolver_is_first_row_wins_when_two_rows_share_a_name(db):
+    """Duplicate names must resolve deterministically, not by dict-insertion accident."""
+    name = f"dup{uuid.uuid4().hex[:8]}"
+    first = f"ref-{uuid.uuid4().hex}"
+    db.add(DrugVocabulary(generic_name=name, reference_id=first))
+    await db.flush()
+    db.add(DrugVocabulary(generic_name=name, reference_id=f"ref-{uuid.uuid4().hex}"))
+    await db.flush()
+
+    resolver = DrugResolver(db)
+    assert (await resolver.resolve(name)).reference_id == first
+    # Same answer on a second call: the index is reused, not rebuilt from a different order.
+    assert (await resolver.resolve(name)).reference_id == first
+
+
+async def test_resolver_reads_the_vocabulary_once_however_many_lookups_it_serves(db, engine):
+    """The index is built once per resolver; lookups after that cost no SQL at all.
+
+    Resolution runs for every medication and every allergy of every safety check, so a
+    per-lookup vocabulary read is a per-drug round-trip in production.
+    """
+    from tests.test_query_efficiency import counting_queries
+
+    resolver = DrugResolver(db)
+    await resolver.resolve("Paracetamol")  # warm the index
+
+    with counting_queries(engine) as counter:
+        for name in ("Metformin", "Aspirin", "Crocin", "Glycomett", "not-a-drug-at-all"):
+            await resolver.resolve(name)
+        await resolver.resolve_reference_id("ref-does-not-exist")
+
+    vocabulary_reads = [s for s in counter["statements"] if "drug_vocabulary" in s]
+    assert (
+        vocabulary_reads == []
+    ), f"six lookups against a warm resolver cost {len(vocabulary_reads)} vocabulary reads"
+
+
 # --------------------------------------------------------------- deterministic lab safety
 
 
