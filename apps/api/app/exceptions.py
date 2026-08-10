@@ -31,6 +31,12 @@ class DocumentNotFoundError(NotFoundError):
     code = "document_not_found"
 
 
+class PathwayNotFoundError(NotFoundError):
+    """No curated clinical pathway exists for this condition."""
+
+    code = "pathway_not_found"
+
+
 class AuthError(AetherError):
     status_code = 401
     code = "unauthorized"

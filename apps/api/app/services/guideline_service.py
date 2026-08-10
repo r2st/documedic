@@ -102,6 +102,29 @@ class GuidelineService:
         """Public guideline search (no threshold filter) for the management/citation UI."""
         return await self.retrieve(query, k)
 
+    async def get_by_section_ids(
+        self, section_ids: list[str], *, corpus_version: str | None = None
+    ) -> list[dict]:
+        """Fetch specific chunks by section_id, deterministically (no relevance scoring).
+
+        Used by the clinical-pathway feature, which cites known section ids rather than
+        lexical/dense search, so callers always get the exact grounding chunk rather than
+        whatever a query happens to rank highest.
+        """
+        if not section_ids:
+            return []
+        version = corpus_version or settings.guideline_corpus_version
+        result = await self.db.execute(
+            select(GuidelineChunk).where(
+                GuidelineChunk.corpus_version == version,
+                GuidelineChunk.section_id.in_(section_ids),
+            )
+        )
+        chunks = {c.section_id: c for c in result.scalars().all()}
+        # Preserve caller order; silently skip ids the corpus doesn't (yet) have -- pathway
+        # stage text stands on its own even without a live citation attached.
+        return [self._to_dict(chunks[sid], 1.0) for sid in section_ids if sid in chunks]
+
     async def count(self, corpus_version: str | None = None) -> int:
         chunks = await self._chunks(corpus_version)
         return len(chunks)

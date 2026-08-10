@@ -42,8 +42,8 @@ class PatientCreate(BaseModel):
     date_of_birth: date | None = None
     sex: Sex | None = None
     phone: str | None = Field(default=None, max_length=20)
-    address_text: str | None = None
-    notes: str | None = None
+    address_text: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=10000)
     consent_given: bool = Field(
         ..., description="Must be true before clinical data is stored (DPDP Act)."
     )
@@ -57,8 +57,8 @@ class PatientUpdate(BaseModel):
     date_of_birth: date | None = None
     sex: Sex | None = None
     phone: str | None = Field(default=None, max_length=20)
-    address_text: str | None = None
-    notes: str | None = None
+    address_text: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=10000)
     consent_given: bool | None = None
 
     _check_dob = field_validator("date_of_birth")(_validate_dob)

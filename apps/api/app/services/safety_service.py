@@ -23,11 +23,12 @@ from app.core.safety import (
     evaluate_drug_safety,
     has_hard_block,
 )
-from app.exceptions import PatientNotFoundError, ValidationError
+from app.exceptions import NotFoundError, PatientNotFoundError, ValidationError
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
 from app.models.drug_safety_check import DrugSafetyCheck
+from app.models.drug_safety_override import DrugSafetyOverride
 from app.models.drug_vocabulary import Contraindication, DrugInteraction, DrugVocabulary
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
@@ -202,7 +203,7 @@ class SafetyService:
         patient_id: uuid.UUID,
         drug_reference_id: str | None,
         drug_name: str | None,
-    ) -> tuple[DrugVocabulary, SafetyContext, list[SafetyFlag]]:
+    ) -> tuple[DrugVocabulary, SafetyContext, list[SafetyFlag], list[uuid.UUID]]:
         await self._patient(account_id, patient_id)
 
         vocab: DrugVocabulary | None = None
@@ -227,8 +228,8 @@ class SafetyService:
             drug_class=vocab.drug_class,
         )
         flags = evaluate_drug_safety(proposed, ctx)
-        await self._persist(account_id, patient_id, vocab, flags)
-        return vocab, ctx, flags
+        check_ids = await self._persist(account_id, patient_id, vocab, flags)
+        return vocab, ctx, flags, check_ids
 
     async def _persist(
         self,
@@ -236,23 +237,25 @@ class SafetyService:
         patient_id: uuid.UUID,
         vocab: DrugVocabulary,
         flags: list[SafetyFlag],
-    ) -> None:
-        for flag in flags:
-            self.db.add(
-                DrugSafetyCheck(
-                    patient_id=patient_id,
-                    account_id=account_id,
-                    drug_vocabulary_id=vocab.id,
-                    check_type=flag.check_type,
-                    severity=flag.severity,
-                    is_hard_block=flag.is_hard_block,
-                    summary=flag.summary,
-                    details=flag.details,
-                    drug_interaction_id=_to_uuid(flag.drug_interaction_id),
-                    contraindication_id=_to_uuid(flag.contraindication_id),
-                    allergy_id=_to_uuid(flag.allergy_id),
-                )
+    ) -> list[uuid.UUID]:
+        rows = [
+            DrugSafetyCheck(
+                patient_id=patient_id,
+                account_id=account_id,
+                drug_vocabulary_id=vocab.id,
+                check_type=flag.check_type,
+                severity=flag.severity,
+                is_hard_block=flag.is_hard_block,
+                summary=flag.summary,
+                details=flag.details,
+                drug_interaction_id=_to_uuid(flag.drug_interaction_id),
+                contraindication_id=_to_uuid(flag.contraindication_id),
+                allergy_id=_to_uuid(flag.allergy_id),
             )
+            for flag in flags
+        ]
+        for row in rows:
+            self.db.add(row)
         await self.db.flush()
         await self.audit.record(
             action="drug_safety_check",
@@ -268,6 +271,65 @@ class SafetyService:
             },
         )
         await self.db.commit()
+        return [row.id for row in rows]
+
+    async def override_hard_block(
+        self,
+        *,
+        account_id: uuid.UUID,
+        patient_id: uuid.UUID,
+        drug_safety_check_id: uuid.UUID,
+        reasoning: str,
+    ) -> DrugSafetyOverride:
+        """Record a clinician's documented override of a hard-blocked check.
+
+        Does not delete or mutate the original DrugSafetyCheck (append-only, rule #7 spirit) --
+        it adds a separate, linked, equally immutable override record and audits the action.
+        The hard block itself is never silently bypassed: this is the only sanctioned path
+        past one, and it always requires non-trivial documented reasoning (rule #3).
+        """
+        await self._patient(account_id, patient_id)
+        check = await self.db.get(DrugSafetyCheck, drug_safety_check_id)
+        if check is None or check.patient_id != patient_id:
+            raise NotFoundError("Drug safety check not found")
+        if not check.is_hard_block:
+            raise ValidationError("Only hard-blocked checks require an override")
+
+        override = DrugSafetyOverride(
+            account_id=account_id,
+            patient_id=patient_id,
+            drug_vocabulary_id=check.drug_vocabulary_id,
+            drug_safety_check_id=check.id,
+            reasoning=reasoning.strip(),
+        )
+        self.db.add(override)
+        await self.db.flush()
+        await self.audit.record(
+            action="drug_safety_hard_block_overridden",
+            account_id=account_id,
+            patient_id=patient_id,
+            entity_type="drug_safety_check",
+            entity_id=check.id,
+            payload={
+                "check_type": check.check_type,
+                "summary": check.summary,
+                "reasoning": override.reasoning,
+            },
+        )
+        await self.db.commit()
+        await self.db.refresh(override)
+        return override
+
+    async def list_overrides(
+        self, *, account_id: uuid.UUID, patient_id: uuid.UUID
+    ) -> list[DrugSafetyOverride]:
+        await self._patient(account_id, patient_id)
+        result = await self.db.execute(
+            select(DrugSafetyOverride)
+            .where(DrugSafetyOverride.patient_id == patient_id)
+            .order_by(DrugSafetyOverride.created_at.desc())
+        )
+        return list(result.scalars().all())
 
     async def active_flags(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID

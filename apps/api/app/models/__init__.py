@@ -8,6 +8,7 @@ from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
 from app.models.document import Document
 from app.models.drug_safety_check import DrugSafetyCheck
+from app.models.drug_safety_override import DrugSafetyOverride
 from app.models.drug_vocabulary import Contraindication, DrugInteraction, DrugVocabulary
 from app.models.encounter import Encounter
 from app.models.guideline import GuidelineChunk
@@ -35,6 +36,7 @@ __all__ = [
     "DrugInteraction",
     "Contraindication",
     "DrugSafetyCheck",
+    "DrugSafetyOverride",
     "AuditLog",
     "ReasoningSession",
     "IntakeQuestion",

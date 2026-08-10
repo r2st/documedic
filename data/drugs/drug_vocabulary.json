@@ -36,5 +36,17 @@
   {"brand_name": "Wysolone", "generic_name": "Prednisolone", "reference_id": "PRD-10", "atc_code": "H02AB06", "drug_class": "Corticosteroid", "strength": "10mg", "form": "tablet"},
   {"brand_name": "Eptoin", "generic_name": "Phenytoin", "reference_id": "PHT-100", "atc_code": "N03AB02", "drug_class": "Anticonvulsant", "strength": "100mg", "form": "tablet"},
   {"brand_name": "Shelcal", "generic_name": "Calcium + Vitamin D3", "reference_id": "CAL-D3-500", "atc_code": "A12AX", "drug_class": "Supplement", "strength": "500mg+250IU", "form": "tablet"},
-  {"brand_name": "Fefol-Z", "generic_name": "Ferrous fumarate + Folic acid + Zinc", "reference_id": "FE-FOL-Z", "atc_code": "B03AD", "drug_class": "Supplement", "strength": "150mg+0.5mg+22.5mg", "form": "capsule"}
+  {"brand_name": "Fefol-Z", "generic_name": "Ferrous fumarate + Folic acid + Zinc", "reference_id": "FE-FOL-Z", "atc_code": "B03AD", "drug_class": "Supplement", "strength": "150mg+0.5mg+22.5mg", "form": "capsule"},
+  {"brand_name": "Aldactone", "generic_name": "Spironolactone", "reference_id": "SPIRO-25", "atc_code": "C03DA01", "drug_class": "Potassium-sparing diuretic", "strength": "25mg", "form": "tablet"},
+  {"brand_name": "Unicontin", "generic_name": "Theophylline", "reference_id": "THEO-300", "atc_code": "R03DA04", "drug_class": "Methylxanthine", "strength": "300mg", "form": "tablet"},
+  {"brand_name": null, "generic_name": "Iodinated contrast media", "reference_id": "CONTRAST-IODINE", "atc_code": "V08AB02", "drug_class": "Radiocontrast agent", "strength": null, "form": "injection"},
+  {"brand_name": "Warf", "generic_name": "Warfarin", "reference_id": "WARF-5", "atc_code": "B01AA03", "drug_class": "Vitamin K antagonist", "strength": "5mg", "form": "tablet"},
+  {"brand_name": "Lanoxin", "generic_name": "Digoxin", "reference_id": "DIG-0.25", "atc_code": "C01AA05", "drug_class": "Cardiac glycoside", "strength": "0.25mg", "form": "tablet"},
+  {"brand_name": "Lasix", "generic_name": "Furosemide", "reference_id": "FUR-40", "atc_code": "C03CA01", "drug_class": "Loop diuretic", "strength": "40mg", "form": "tablet"},
+  {"brand_name": "Licab", "generic_name": "Lithium carbonate", "reference_id": "LIT-400", "atc_code": "N05AN01", "drug_class": "Mood stabilizer", "strength": "400mg", "form": "tablet"},
+  {"brand_name": "Manforce", "generic_name": "Sildenafil", "reference_id": "SIL-50", "atc_code": "G04BE03", "drug_class": "PDE5 Inhibitor", "strength": "50mg", "form": "tablet"},
+  {"brand_name": "Monotrate", "generic_name": "Isosorbide mononitrate", "reference_id": "ISMN-20", "atc_code": "C01DA14", "drug_class": "Nitrate", "strength": "20mg", "form": "tablet"},
+  {"brand_name": "Folitrax", "generic_name": "Methotrexate", "reference_id": "MTX-7.5", "atc_code": "L04AX03", "drug_class": "Antimetabolite (DMARD)", "strength": "7.5mg", "form": "tablet"},
+  {"brand_name": "Omez", "generic_name": "Omeprazole", "reference_id": "OME-20", "atc_code": "A02BC01", "drug_class": "PPI", "strength": "20mg", "form": "tablet"},
+  {"brand_name": "Septran DS", "generic_name": "Cotrimoxazole", "reference_id": "TMP-SMX-960", "atc_code": "J01EE01", "drug_class": "Sulfonamide antibiotic", "strength": "160mg+800mg", "form": "tablet"}
 ]

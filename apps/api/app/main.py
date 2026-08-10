@@ -21,6 +21,7 @@ from app.routers import (
     documents,
     guidelines,
     health,
+    pathways,
     patients,
     reasoning,
     records,
@@ -133,6 +134,28 @@ def create_app() -> FastAPI:
         # JSONResponse uses) cannot serialize -- jsonable_encoder coerces it to a string first.
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
+    @app.exception_handler(Exception)
+    async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Last-resort handler for anything not already an AetherError/RequestValidationError.
+
+        Without this, Starlette's default 500 path is plain text (inconsistent with every
+        other error response's {code, message} JSON shape) and the exception is only ever
+        visible in process stderr with no request correlation. This logs it against the
+        request id (already on every response via RequestContextMiddleware) and never leaks
+        internal exception text to the client -- an unhandled exception can easily be
+        carrying patient data in its message/args (e.g. a DB constraint error), which must
+        never reach the response body.
+        """
+        request_id = getattr(request.state, "request_id", None)
+        logger.exception("Unhandled exception (request_id=%s)", request_id)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": "internal_error",
+                "message": "An unexpected error occurred. Please try again.",
+            },
+        )
+
     app.include_router(health.router)
     for module in (
         auth,
@@ -143,6 +166,7 @@ def create_app() -> FastAPI:
         audit,
         reasoning,
         guidelines,
+        pathways,
         validation,
     ):
         app.include_router(module.router, prefix=API_PREFIX)

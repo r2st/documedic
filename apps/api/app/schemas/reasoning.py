@@ -38,7 +38,7 @@ class IntakeAnswerIn(BaseModel):
 
 
 class SubmitAnswersRequest(BaseModel):
-    answers: list[IntakeAnswerIn]
+    answers: list[IntakeAnswerIn] = Field(..., max_length=50)
 
 
 class ReasoningSessionOut(BaseModel):

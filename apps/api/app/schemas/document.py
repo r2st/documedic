@@ -52,12 +52,12 @@ class ExtractionResult(BaseModel):
 
 class FieldCorrection(BaseModel):
     entity_index: int
-    field_name: str
+    field_name: str = Field(..., max_length=200)
     value: Any
 
 
 class ExtractionApproval(BaseModel):
     """Clinician confirms (optionally corrected) extraction; triggers graph merge."""
 
-    corrections: list[FieldCorrection] = Field(default_factory=list)
-    rejected_entity_indexes: list[int] = Field(default_factory=list)
+    corrections: list[FieldCorrection] = Field(default_factory=list, max_length=500)
+    rejected_entity_indexes: list[int] = Field(default_factory=list, max_length=500)

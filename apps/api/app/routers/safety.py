@@ -13,6 +13,8 @@ from app.dependencies import get_current_account
 from app.models.user import Account
 from app.schemas.safety import (
     ActiveFlagsResponse,
+    DrugSafetyOverrideRequest,
+    DrugSafetyOverrideResponse,
     SafetyCheckRequest,
     SafetyCheckResponse,
     SafetyFlagResponse,
@@ -22,8 +24,9 @@ from app.services.safety_service import SafetyService
 router = APIRouter(prefix="/patients/{patient_id}/drug-safety", tags=["drug-safety"])
 
 
-def _flag_to_response(flag) -> SafetyFlagResponse:
+def _flag_to_response(flag, check_id: uuid.UUID | None = None) -> SafetyFlagResponse:
     return SafetyFlagResponse(
+        id=check_id,
         check_type=flag.check_type,
         severity=flag.severity,
         is_hard_block=flag.is_hard_block,
@@ -49,7 +52,7 @@ async def check_medication(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> SafetyCheckResponse:
-    vocab, ctx, flags = await SafetyService(db).check_medication(
+    vocab, ctx, flags, check_ids = await SafetyService(db).check_medication(
         account_id=account.id,
         patient_id=patient_id,
         drug_reference_id=body.drug_reference_id,
@@ -68,7 +71,7 @@ async def check_medication(
             "conditions": len(ctx.conditions),
             "egfr_available": ctx.egfr is not None,
         },
-        flags=[_flag_to_response(f) for f in flags],
+        flags=[_flag_to_response(f, cid) for f, cid in zip(flags, check_ids, strict=True)],
     )
 
 
@@ -83,3 +86,29 @@ async def active_flags(
     for _vocab, flag_list in results:
         flags.extend(_flag_to_response(f) for f in flag_list)
     return ActiveFlagsResponse(patient_id=patient_id, flags=flags)
+
+
+@router.post("/override", response_model=DrugSafetyOverrideResponse, status_code=201)
+async def override_hard_block(
+    patient_id: uuid.UUID,
+    body: DrugSafetyOverrideRequest,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> DrugSafetyOverrideResponse:
+    override = await SafetyService(db).override_hard_block(
+        account_id=account.id,
+        patient_id=patient_id,
+        drug_safety_check_id=body.drug_safety_check_id,
+        reasoning=body.reasoning,
+    )
+    return DrugSafetyOverrideResponse.model_validate(override, from_attributes=True)
+
+
+@router.get("/overrides", response_model=list[DrugSafetyOverrideResponse])
+async def list_overrides(
+    patient_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> list[DrugSafetyOverrideResponse]:
+    overrides = await SafetyService(db).list_overrides(account_id=account.id, patient_id=patient_id)
+    return [DrugSafetyOverrideResponse.model_validate(o, from_attributes=True) for o in overrides]
