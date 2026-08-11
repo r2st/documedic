@@ -434,8 +434,11 @@ def test_patient_update_accepts_an_explicitly_absent_dob_and_phone():
     assert update.date_of_birth is None
     assert update.phone is None
 
+    # A whitespace-only phone is an empty phone field, and normalises to None. It used to be
+    # returned verbatim, so a chart was stored with phone="      " — which displays as "we have
+    # a number for this patient" and matches a search for a single space.
     blank = PatientUpdate(phone="   ")
-    assert blank.phone == "   "  # whitespace-only is passed through unvalidated
+    assert blank.phone is None
 
 
 def test_patient_update_still_rejects_a_future_dob_and_a_junk_phone():
