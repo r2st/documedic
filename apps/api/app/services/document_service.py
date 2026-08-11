@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -28,6 +29,8 @@ from app.services.filetype import describe_unsupported, sniff_file_type
 from app.services.graph_service import GraphService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.storage import compute_sha256, get_storage
+
+logger = logging.getLogger(__name__)
 
 # Comfortably longer than any real scan filename, short enough to be a bounded column value.
 MAX_FILE_NAME_CHARS = 255
@@ -149,11 +152,33 @@ class DocumentService:
         return document
 
     async def _run_extraction(self, account_id: uuid.UUID, document: Document, data: bytes) -> None:
+        """Extract into ``document``, or mark it ``failed`` and leave the upload intact.
+
+        The pipeline degrades internally — a vision error falls through to the deterministic
+        parser, an unreadable scan yields zero entities — so reaching the handler below means
+        something genuinely unexpected broke. That must not take the upload with it.
+
+        It did. ``upload`` writes the file to storage *before* opening the transaction that
+        holds the row, so an exception here rolled the ``documents`` row back while the bytes
+        stayed on disk: an orphaned blob, no record of it, and a clinician looking at a 500
+        with a scan that is nowhere in the chart. Re-uploading the same file could not recover
+        it either — the dedup lookup is by ``(patient_id, sha256)`` against rows that no longer
+        existed, so every retry wrote another orphan.
+
+        ``failed`` was already in the ``ck_documents_extraction_status`` check constraint and
+        nothing ever set it. This is the state it was for: the document is kept, the clinician
+        can still download the original and enter the values by hand, and the failure is on the
+        audit trail rather than only in a server log.
+        """
         document.extraction_status = "processing"
         document.extraction_started_at = datetime.now(UTC)
         await self.db.flush()
 
-        result = self.pipeline.run(data, document.file_type)
+        try:
+            result = self.pipeline.run(data, document.file_type)
+        except Exception as exc:  # noqa: BLE001 — the upload survives any extraction failure
+            await self._mark_extraction_failed(account_id, document, exc)
+            return
         entities_meta = []
         confirmation_required = 0
         for ent in result.entities:
@@ -202,6 +227,41 @@ class DocumentService:
                 "ocr_fallback_used": result.ocr_fallback_used,
                 "status": document.extraction_status,
             },
+        )
+
+    async def _mark_extraction_failed(
+        self, account_id: uuid.UUID, document: Document, exc: Exception
+    ) -> None:
+        """Record the failure on the document and on the audit trail. See ``_run_extraction``."""
+        logger.exception(
+            "Extraction failed for document %s (file_type=%s); the document is kept and marked "
+            "failed for manual entry.",
+            document.id,
+            document.file_type,
+        )
+        document.extraction_status = "failed"
+        document.extraction_completed_at = datetime.now(UTC)
+        # An empty entity list, not a missing key: build_extraction_result and the approval path
+        # both read `entities`, and a failed document is still fetchable and still listed.
+        document.extraction_metadata = {
+            "document_type": None,
+            "model": None,
+            "ocr_fallback_used": False,
+            "entities": [],
+            "confirmation_required_count": 0,
+            "approved": False,
+            # Type only. The exception's message can quote the document's contents (a parser
+            # error carries the text it choked on), and extraction_metadata is not encrypted.
+            "failure_type": type(exc).__name__,
+        }
+        await self.db.flush()
+        await self.audit.record(
+            action="extraction_failed",
+            account_id=account_id,
+            patient_id=document.patient_id,
+            entity_type="document",
+            entity_id=document.id,
+            payload={"failure_type": type(exc).__name__},
         )
 
     async def get(
