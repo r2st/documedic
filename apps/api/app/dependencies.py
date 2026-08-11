@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_token
@@ -12,8 +13,25 @@ from app.db.session import get_db
 from app.exceptions import TokenError
 from app.models.user import Account
 
+# Declared purely so the OpenAPI schema records that these routes take a bearer token: without
+# a security scheme in the dependency tree, the generated spec claimed every patient route was
+# open, /docs offered no Authorize button, and a generated client had no idea to send the
+# header. ``auto_error=False`` keeps it documentation-only -- it returns None instead of
+# raising its own bare 403, leaving the parsing and the clinician-facing 401 below untouched.
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="AccessToken",
+    description=(
+        "Short-lived access token from `POST /api/v1/auth/login`, sent as `Bearer <token>`."
+    ),
+)
 
-async def get_current_account(request: Request, db: AsyncSession = Depends(get_db)) -> Account:
+
+async def get_current_account(
+    request: Request,
+    _credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> Account:
     """Resolve the authenticated account from the Bearer access token."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):

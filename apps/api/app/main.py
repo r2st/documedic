@@ -16,6 +16,7 @@ from app.config import assert_production_config, settings
 from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
 from app.middleware import RequestContextMiddleware
+from app.openapi import TAGS_METADATA
 from app.routers import (
     audit,
     auth,
@@ -112,8 +113,21 @@ def create_app() -> FastAPI:
         description=(
             "Clinician-facing diagnostic & management decision-support: patient graph + "
             "deterministic drug safety (P1), 8-agent reasoning engine + Reasoning Theatre (P2), "
-            "guideline RAG with cited management (P3), validation/regulatory/pilot (P4)."
+            "guideline RAG with cited management (P3), validation/regulatory/pilot (P4).\n\n"
+            "**The clinician decides.** Nothing here prescribes. Every clinical output is a "
+            "suggestion carrying an autonomy tier, traceable to patient data or a cited "
+            "guideline, and it has passed the Verifier agent — there is no route around that "
+            "and no flag that skips it.\n\n"
+            "**Errors** are `{code, message}` (see the `ErrorResponse` schema). Match on "
+            "`code`; `message` is clinician-facing prose and gets rewritten. Request-validation "
+            "failures are the one exception and return FastAPI's `{detail: [...]}` — with the "
+            "rejected input stripped out, since for a missing-field error that input is the "
+            "whole submitted body.\n\n"
+            "**Auth** is a bearer access token from `POST /api/v1/auth/login`. A record "
+            "belonging to another account returns 404, not 403, so the API never confirms that "
+            "a chart it will not show you exists."
         ),
+        openapi_tags=TAGS_METADATA,
         lifespan=lifespan,
     )
 

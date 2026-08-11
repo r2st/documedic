@@ -11,6 +11,7 @@ from app.config import settings
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
+from app.openapi import AUTH_ERRORS, errors
 from app.schemas.reasoning import CitationOut, ClinicalSuggestionOut
 from app.services.guideline_service import GuidelineService
 from app.services.reasoning_service import ReasoningService
@@ -18,14 +19,30 @@ from app.services.reasoning_service import ReasoningService
 router = APIRouter(tags=["guidelines"])
 
 
-@router.get("/guidelines/search", response_model=list[CitationOut])
+@router.get(
+    "/guidelines/search",
+    response_model=list[CitationOut],
+    summary="Search the curated guideline corpus",
+    responses=AUTH_ERRORS,
+)
 async def search_guidelines(
     # Bounded so a pathological query cannot drive an unbounded retrieval/embedding cost.
-    q: str = Query(..., min_length=2, max_length=500),
-    k: int = Query(default=10, ge=1, le=25),
+    q: str = Query(
+        ...,
+        min_length=2,
+        max_length=500,
+        description="Free-text clinical query, e.g. `metformin in renal impairment`.",
+    ),
+    k: int = Query(default=10, ge=1, le=25, description="Maximum passages to return."),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> list[CitationOut]:
+    """Retrieval over ICMR/WHO/NICE, returning passages with their citations.
+
+    Nothing here is generated. Each result names its source document, section and page range,
+    so anything quoted from it can be traced back to the guideline it came from — and an empty
+    list means the corpus has no answer, not that one should be invented.
+    """
     results = await GuidelineService(db).search(q, k)
     return [
         CitationOut(
@@ -42,11 +59,21 @@ async def search_guidelines(
     ]
 
 
-@router.get("/guidelines/corpus")
+@router.get(
+    "/guidelines/corpus",
+    summary="Which guideline corpus is loaded",
+    responses=AUTH_ERRORS,
+)
 async def corpus_info(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """Corpus version, chunk count and retrieval thresholds.
+
+    `corpus_version` is what a citation is relative to — a suggestion cited months ago was
+    grounded in whatever version was loaded then, which is why it is recorded rather than
+    assumed.
+    """
     count = await GuidelineService(db).count()
     return {
         "corpus_version": settings.guideline_corpus_version,
@@ -59,12 +86,19 @@ async def corpus_info(
 @router.get(
     "/reasoning/{session_id}/management-options",
     response_model=list[ClinicalSuggestionOut],
+    summary="Guideline-cited management options from a reasoning session",
+    responses=errors(401, 404),
 )
 async def management_options(
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> list[ClinicalSuggestionOut]:
+    """The `management` subset of the session's verified suggestions.
+
+    Options with citations, carrying an autonomy tier — never instructions. The clinician
+    prescribes; this endpoint reports what the guidelines support considering.
+    """
     suggestions = await ReasoningService(db).list_suggestions(account.id, session_id)
     return [
         ClinicalSuggestionOut.model_validate(s)

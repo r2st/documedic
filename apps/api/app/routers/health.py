@@ -13,6 +13,7 @@ from app.agents.llm import (
 )
 from app.config import settings
 from app.db.session import get_db
+from app.openapi import errors
 
 router = APIRouter(tags=["health"])
 
@@ -26,8 +27,15 @@ def _llm_mode() -> str:
     return "offline"
 
 
-@router.get("/health")
+@router.get("/health", summary="Service status and how reasoning is currently powered")
 async def health() -> dict:
+    """Unauthenticated status probe.
+
+    `llm_mode` is the operationally interesting field: `live` (a provider key is configured),
+    `demo` (clinical output is simulated `[DEMO MODE]` sample text, never real reasoning), or
+    `offline` (no provider — the engine is paused). Deterministic drug-safety and lab checks
+    run in all three, so `offline` does not mean unsafe, it means un-reasoned.
+    """
     mode = _llm_mode()
     return {
         "status": "ok",
@@ -39,19 +47,30 @@ async def health() -> dict:
     }
 
 
-@router.get("/health/live")
+@router.get("/health/live", summary="Liveness probe")
 async def live() -> dict:
+    """Answers as long as the process is up. Touches nothing — a restart-me signal only."""
     return {"status": "alive"}
 
 
-@router.get("/health/ready")
+@router.get("/health/ready", summary="Readiness probe", responses=errors(500))
 async def ready(db: AsyncSession = Depends(get_db)) -> dict:
+    """Ready to serve traffic: the database answers a trivial query.
+
+    Fails loudly (500) rather than reporting a degraded state, because a request that cannot
+    reach the patient graph has nothing useful to fall back on.
+    """
     await db.execute(text("SELECT 1"))
     return {"status": "ready"}
 
 
-@router.get("/health/dependencies")
+@router.get("/health/dependencies", summary="Per-dependency detail for operators")
 async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
+    """Which backing services and LLM providers are reachable and configured.
+
+    Always 200, including when a dependency is down — the point is to report the state, not to
+    gate traffic on it. Use `/health/ready` for that.
+    """
     db_ok = True
     try:
         await db.execute(text("SELECT 1"))

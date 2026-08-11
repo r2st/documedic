@@ -18,6 +18,7 @@ from app.exceptions import TokenError
 from app.models.intake import IntakeQuestion
 from app.models.reasoning_session import ReasoningSession
 from app.models.user import Account
+from app.openapi import errors
 from app.schemas.reasoning import (
     ClinicalSuggestionOut,
     DecisionOut,
@@ -34,6 +35,10 @@ from app.services.reasoning_service import ReasoningService
 
 router = APIRouter(tags=["reasoning"])
 
+# Every route here is scoped to one session or one patient, and a session belonging to another
+# account is a 404 rather than a 403 — the same rule the patient routes follow.
+_SESSION_ERRORS = errors(401, 404)
+
 
 def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) -> IntakeStateOut:
     return IntakeStateOut(
@@ -43,47 +48,87 @@ def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) 
     )
 
 
-@router.post("/patients/{patient_id}/reasoning", response_model=IntakeStateOut, status_code=201)
+@router.post(
+    "/patients/{patient_id}/reasoning",
+    response_model=IntakeStateOut,
+    status_code=201,
+    summary="Open a reasoning session on a presenting complaint",
+    responses=_SESSION_ERRORS,
+)
 async def start_reasoning(
     patient_id: uuid.UUID,
     body: StartReasoningRequest,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> IntakeStateOut:
+    """Start the pipeline at intake and return the Triage agent's first questions.
+
+    Intake comes before reasoning by design: the Triage agent asks rather than guessing at
+    what is missing, so `pending_questions` is usually non-empty here and `intake_complete` is
+    false. Answer them at `POST /reasoning/{session_id}/intake/answers`, then run the engine.
+    """
     service = ReasoningService(db)
     session, questions = await service.start(account.id, patient_id, body.presenting_complaint)
     return _intake_state(session, questions)
 
 
-@router.get("/reasoning/{session_id}", response_model=ReasoningSessionOut)
+@router.get(
+    "/reasoning/{session_id}",
+    response_model=ReasoningSessionOut,
+    summary="A reasoning session's current state",
+    responses=_SESSION_ERRORS,
+)
 async def get_session(
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> ReasoningSessionOut:
+    """Status, presenting complaint, and the accumulated case state.
+
+    `status` moves `created` → `intake` → `intake_complete` → `reasoning` → `completed`, and
+    can land on `failed` or `offline_paused` — the latter when no LLM provider is reachable,
+    which pauses reasoning without touching the deterministic safety checks.
+    """
     session = await ReasoningService(db).get_session(account.id, session_id)
     return ReasoningSessionOut.model_validate(session)
 
 
-@router.get("/reasoning/{session_id}/intake", response_model=list[IntakeQuestionOut])
+@router.get(
+    "/reasoning/{session_id}/intake",
+    response_model=list[IntakeQuestionOut],
+    summary="Clarifying questions still awaiting an answer",
+    responses=_SESSION_ERRORS,
+)
 async def get_intake(
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> list[IntakeQuestionOut]:
+    """Unanswered questions only. Each carries a `question_type` — `red_flag` questions probe
+    for time-critical presentations and are the ones worth surfacing first."""
     service = ReasoningService(db)
     await service.get_session(account.id, session_id)
     pending = await service.pending_questions(session_id)
     return [IntakeQuestionOut.model_validate(q) for q in pending]
 
 
-@router.post("/reasoning/{session_id}/intake/answers", response_model=IntakeStateOut)
+@router.post(
+    "/reasoning/{session_id}/intake/answers",
+    response_model=IntakeStateOut,
+    summary="Answer clarifying questions",
+    responses=_SESSION_ERRORS,
+)
 async def submit_answers(
     session_id: uuid.UUID,
     body: SubmitAnswersRequest,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> IntakeStateOut:
+    """Submit answers and get back whatever the Triage agent still wants to know.
+
+    Iterative: answers can raise follow-up questions, so `pending_questions` may be non-empty
+    again. When `intake_complete` is true the engine can be run.
+    """
     service = ReasoningService(db)
     session, questions = await service.submit_answers(
         account.id, session_id, [a.model_dump() for a in body.answers]
@@ -91,12 +136,31 @@ async def submit_answers(
     return _intake_state(session, questions)
 
 
-@router.post("/reasoning/{session_id}/run", response_model=ReasoningResultOut)
+@router.post(
+    "/reasoning/{session_id}/run",
+    response_model=ReasoningResultOut,
+    summary="Run the eight-agent pipeline and return its verified output",
+    responses=_SESSION_ERRORS,
+)
 async def run_reasoning(
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> ReasoningResultOut:
+    """Run the whole panel to completion and return the immutable suggestions it produced.
+
+    The specialist panel reasons independently, the can't-miss sentinel and the devil's
+    advocate run regardless of what the panel concluded, and the Verifier gates everything —
+    there is no path around it and no flag that skips it. Where agents disagreed, the more
+    conservative autonomy tier is the one that survives into the output.
+
+    Suggestions are `ClinicalSuggestion` records: written to the audit trail before they are
+    returned, and never subsequently edited or deleted. A correction is a new record pointing
+    at the one it supersedes.
+
+    Blocking, and the panel is slow. `GET ../stream` runs the same pipeline over SSE and emits
+    each agent's contribution as it lands, which is what the Reasoning Theatre uses.
+    """
     service = ReasoningService(db)
     session, suggestions = await service.run(account.id, session_id)
     return ReasoningResultOut(
@@ -154,7 +218,12 @@ async def _account_from_query_or_header(
     return account
 
 
-@router.post("/reasoning/{session_id}/stream-token", response_model=StreamTokenOut)
+@router.post(
+    "/reasoning/{session_id}/stream-token",
+    response_model=StreamTokenOut,
+    summary="Mint a short-lived token for the SSE stream",
+    responses=_SESSION_ERRORS,
+)
 async def mint_stream_token(
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
@@ -172,13 +241,34 @@ async def mint_stream_token(
     )
 
 
-@router.get("/reasoning/{session_id}/stream")
+@router.get(
+    "/reasoning/{session_id}/stream",
+    summary="Stream the pipeline as it runs (Server-Sent Events)",
+    response_class=StreamingResponse,
+    responses=_SESSION_ERRORS
+    | {
+        200: {
+            "description": (
+                "An SSE stream. Each agent's contribution arrives as its own named event as "
+                "the pipeline produces it, terminated by `event: done`."
+            ),
+            "content": {"text/event-stream": {}},
+        }
+    },
+)
 async def stream_reasoning(
     session_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
-    """Run the pipeline and stream Reasoning Theatre events over Server-Sent Events."""
+    """Run the pipeline and stream Reasoning Theatre events over Server-Sent Events.
+
+    Authenticated by the usual `Authorization: Bearer <access>` header, or — because a
+    browser's `EventSource` cannot set headers — by `?token=` carrying a **stream** token from
+    `POST ../stream-token`. That token is bound to this one session and expires in minutes,
+    which is the point: query strings are recorded verbatim by proxy logs and browser history,
+    so what ends up there must grant nothing but this stream.
+    """
     account = await _account_from_query_or_header(request, db, session_id)
     service = ReasoningService(db)
     await service.get_session(account.id, session_id)
@@ -200,12 +290,23 @@ async def stream_reasoning(
     )
 
 
-@router.get("/reasoning/{session_id}/suggestions", response_model=list[ClinicalSuggestionOut])
+@router.get(
+    "/reasoning/{session_id}/suggestions",
+    response_model=list[ClinicalSuggestionOut],
+    summary="Every clinical suggestion this session produced",
+    responses=_SESSION_ERRORS,
+)
 async def list_suggestions(
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> list[ClinicalSuggestionOut]:
+    """The full verified set — differentials, can't-miss diagnoses, investigations, management.
+
+    Includes the dissent. The devil's advocate's counter-argument and the sentinel's
+    low-ranked-but-dangerous entries are part of this list by design and must not be filtered
+    out, collapsed by default, or sorted below the leading hypothesis in a client.
+    """
     suggestions = await ReasoningService(db).list_suggestions(account.id, session_id)
     return [ClinicalSuggestionOut.model_validate(s) for s in suggestions]
 
@@ -214,6 +315,8 @@ async def list_suggestions(
     "/reasoning/{session_id}/suggestions/{suggestion_id}/decision",
     response_model=DecisionOut,
     status_code=201,
+    summary="Record what the clinician did with a suggestion",
+    responses=_SESSION_ERRORS,
 )
 async def record_decision(
     session_id: uuid.UUID,
@@ -222,6 +325,14 @@ async def record_decision(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> DecisionOut:
+    """`acknowledged`, `accepted`, `dismissed` or `overridden`, with an optional reason.
+
+    The clinician is the decision-maker and this is where that is written down. It is also the
+    signal the Phase 4 validation harness measures against — an accepted suggestion and a
+    dismissed one say very different things about whether the engine is useful.
+
+    The suggestion itself is untouched: this is a separate audited record, not an edit.
+    """
     record = await ReasoningService(db).record_decision(
         account.id, session_id, suggestion_id, body.decision.value, body.reason
     )

@@ -120,9 +120,30 @@ class PaginatedResponse[T](BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    code: str = Field(..., description="Stable machine-readable error code")
-    message: str
-    detail: dict | None = None
+    """The body of every domain error — see ``main.aether_error_handler``.
+
+    It used to declare a ``detail`` field, which the API has never returned. ``detail`` is the
+    internal cause (``AetherError.detail``), and ``aether_error_handler`` deliberately keeps it
+    in the log only: it names internals, and on a 401 storm the difference between causes is
+    exactly what an attacker would like echoed back. Advertising it invited clients to read a
+    field that is never populated, so it is gone.
+    """
+
+    code: str = Field(
+        ...,
+        description=(
+            "Stable machine-readable error code. Match on this, not on `message` — the message "
+            "is clinician-facing prose and is rewritten whenever it reads badly."
+        ),
+    )
+    message: str = Field(..., description="What the clinician should do next, in plain language")
+    request_id: str | None = Field(
+        default=None,
+        description=(
+            "Set on 500 only: the reference that correlates this response with the server log "
+            "line. Also on every response as the `X-Request-Id` header."
+        ),
+    )
 
 
 class MessageResponse(BaseModel):

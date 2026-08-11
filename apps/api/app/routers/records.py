@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
+from app.openapi import PATIENT_ERRORS
 from app.schemas.record import CriticalLabFlagItem, CriticalLabFlagsResponse, LongitudinalRecord
 from app.services.audit_service import AuditService
 from app.services.lab_safety_service import LabSafetyService
@@ -20,12 +21,23 @@ router = APIRouter(prefix="/patients/{patient_id}/record", tags=["records"])
 labs_router = APIRouter(prefix="/patients/{patient_id}/labs", tags=["records"])
 
 
-@router.get("", response_model=LongitudinalRecord)
+@router.get(
+    "",
+    response_model=LongitudinalRecord,
+    summary="The assembled longitudinal record",
+    responses=PATIENT_ERRORS,
+)
 async def get_record(
     patient_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> LongitudinalRecord:
+    """Everything approved into the patient graph: medications, labs, conditions, allergies,
+    encounters and derived markers, in one timeline.
+
+    The widest clinical read in the API, and audited as `patient_record_viewed` for that
+    reason. Reads the graph directly — no LLM, so it is unaffected when reasoning is offline.
+    """
     # Ownership check (raises if not found / not owned) plus a PHI-access audit entry: this
     # returns the whole longitudinal record, the widest clinical read in the API.
     await PatientService(db).get(account.id, patient_id)
@@ -41,7 +53,12 @@ async def get_record(
     return record
 
 
-@labs_router.get("/critical-flags", response_model=CriticalLabFlagsResponse)
+@labs_router.get(
+    "/critical-flags",
+    response_model=CriticalLabFlagsResponse,
+    summary="Panic/critical values in the patient's latest labs",
+    responses=PATIENT_ERRORS,
+)
 async def critical_lab_flags(
     patient_id: uuid.UUID,
     account: Account = Depends(get_current_account),

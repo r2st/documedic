@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.exceptions import FileTooLargeError
 from app.models.user import Account
+from app.openapi import PATIENT_ERRORS
 from app.schemas.document import (
     DocumentResponse,
     ExtractionApproval,
@@ -84,13 +85,29 @@ async def _read_capped(file: UploadFile, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-@router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a prescription, lab report or scan",
+    responses=PATIENT_ERRORS,
+)
 async def upload_document(
     patient_id: uuid.UUID,
     file: UploadFile = File(...),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
+    """Store the file and run extraction over it. Multipart; one file per request.
+
+    The type is decided by magic bytes, not by the filename or the client's content type, and
+    anything that is not a PDF or a JPEG/PNG/WebP/HEIC image is a 422 (`unsupported_file_type`).
+    Oversized bodies are aborted mid-stream with 422 `file_too_large` rather than buffered whole.
+
+    Extraction runs inline and its failure is not this endpoint's failure: the document is
+    stored either way and the response reports `extraction_status`. Nothing extracted touches
+    the patient graph until a clinician approves it at `POST /{doc_id}/approve`.
+    """
     data = await _read_capped(file, settings.max_upload_bytes)
     document = await DocumentService(db).upload(
         account_id=account.id,
@@ -101,40 +118,69 @@ async def upload_document(
     return DocumentResponse.model_validate(document)
 
 
-@router.get("", response_model=list[DocumentResponse])
+@router.get(
+    "",
+    response_model=list[DocumentResponse],
+    summary="Every document in this patient's chart",
+    responses=PATIENT_ERRORS,
+)
 async def list_documents(
     patient_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> list[DocumentResponse]:
+    """Metadata only, newest first — the file bytes come from `GET /{doc_id}/file`.
+
+    Unpaginated, because a chart's document count is bounded by the patient's history.
+    """
     docs = await DocumentService(db).list(account.id, patient_id)
     return [DocumentResponse.model_validate(d) for d in docs]
 
 
-@router.get("/{doc_id}", response_model=DocumentResponse)
+@router.get(
+    "/{doc_id}",
+    response_model=DocumentResponse,
+    summary="One document's metadata",
+    responses=PATIENT_ERRORS,
+)
 async def get_document(
     patient_id: uuid.UUID,
     doc_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
+    """404 (`document_not_found`) if the id is unknown, deleted, or belongs to another chart."""
     document = await DocumentService(db).get(account.id, patient_id, doc_id)
     return DocumentResponse.model_validate(document)
 
 
-@router.get("/{doc_id}/extraction", response_model=ExtractionResult)
+@router.get(
+    "/{doc_id}/extraction",
+    response_model=ExtractionResult,
+    summary="What was extracted from a document, pending review",
+    responses=PATIENT_ERRORS,
+)
 async def get_extraction(
     patient_id: uuid.UUID,
     doc_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> ExtractionResult:
+    """The proposed entities and their per-field confidence — this is the review queue.
+
+    A field below the confidence threshold carries `needs_confirmation`, and
+    `confirmation_required_count` totals them. None of it is in the patient graph yet.
+    """
     service = DocumentService(db)
     document = await service.get(account.id, patient_id, doc_id)
     return service.build_extraction_result(document)
 
 
-@router.post("/{doc_id}/approve")
+@router.post(
+    "/{doc_id}/approve",
+    summary="Merge a reviewed extraction into the patient graph",
+    responses=PATIENT_ERRORS,
+)
 async def approve_extraction(
     patient_id: uuid.UUID,
     doc_id: uuid.UUID,
@@ -142,19 +188,49 @@ async def approve_extraction(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """The clinician's sign-off — the only path from an extraction into the longitudinal record.
+
+    `corrections` overwrite individual field values (and are audited per field);
+    `rejected_entity_indexes` drop entities entirely. Everything else is merged, deduplicated
+    against what the chart already holds. Returns the per-entity-type counts actually written.
+
+    Merging labs re-runs the deterministic critical-value check, so a panic value in an
+    approved report raises its flag here rather than waiting for someone to open the chart.
+    """
     counts = await DocumentService(db).approve(
         account_id=account.id, patient_id=patient_id, doc_id=doc_id, approval=body
     )
     return {"merged": counts}
 
 
-@router.get("/{doc_id}/file")
+@router.get(
+    "/{doc_id}/file",
+    summary="Download the original scan",
+    response_class=Response,
+    responses=PATIENT_ERRORS
+    | {
+        200: {
+            "description": (
+                "The stored file, byte for byte. `Content-Type` is the magic-byte-verified "
+                "type. Images are served `inline`; PDFs are always `attachment` — a browser's "
+                "PDF viewer executes embedded JavaScript, which inline rendering would run "
+                "against this API's own origin."
+            ),
+            "content": {"application/pdf": {}, "image/jpeg": {}, "image/png": {}},
+        }
+    },
+)
 async def download_file(
     patient_id: uuid.UUID,
     doc_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
+    """The archived original, which is the primary clinical source.
+
+    The widest PHI disclosure in the API — it hands over the scan itself rather than an
+    extracted summary — so the retrieval is audited as `document_downloaded`.
+    """
     service = DocumentService(db)
     document = await service.get(account.id, patient_id, doc_id)
     data = service.storage.read(document.storage_path)
