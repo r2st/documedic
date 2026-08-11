@@ -249,9 +249,9 @@ async def test_a_colleagues_prescription_is_visible_to_the_next_check_immediatel
     await _ingest(auth_client, pid, _document(medications=("Warfarin 5mg OD",)), "rx.pdf")
 
     after = await _check(colleague_client, pid, "Aspirin")
-    assert _by_type(
-        after, "drug_interaction"
-    ), "the second clinician's check did not see the first clinician's prescription"
+    assert _by_type(after, "drug_interaction"), (
+        "the second clinician's check did not see the first clinician's prescription"
+    )
 
 
 @pytest.mark.asyncio

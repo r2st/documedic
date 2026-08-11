@@ -164,6 +164,6 @@ def test_no_mutation_of_immutable_clinical_tables(path: Path):
         body = _DOLLAR_QUOTED.sub("", sql)  # RAISE EXCEPTION text mentions these words
         for table in immutable:
             forbidden = re.search(rf"\b(DELETE\s+FROM|UPDATE)\s+{table}\b", body, re.I)
-            assert (
-                not forbidden
-            ), f"{path.name} mutates the append-only table {table}: {forbidden.group(0)!r}"
+            assert not forbidden, (
+                f"{path.name} mutates the append-only table {table}: {forbidden.group(0)!r}"
+            )
