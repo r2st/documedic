@@ -275,6 +275,46 @@ class SafetyService:
             for r in result.scalars().all()
         ]
 
+    async def _reject_if_multiple_drugs(self, drug_name: str) -> None:
+        """Refuse a proposal that names more than one drug, instead of checking one of them.
+
+        ``DrugResolver`` scores with ``fuzz.WRatio``, whose partial-ratio path scores 90 — above
+        the 86 acceptance threshold — whenever the query merely *contains* a candidate name.
+        That is deliberate and load-bearing: "Augmentin Duo 625 Tablet" and "Tab. Crocin 500 BD
+        x 5 days" are exactly what a clinician types and what OCR lifts off a prescription, and
+        both must resolve through the trade name to the INN.
+
+        The same leniency turned a two-drug string into a one-drug answer. "Warfarin, Aspirin"
+        resolved to Aspirin at 90 and the endpoint replied ``is_blocked: false`` — for the one
+        pair that is the textbook major interaction. The warfarin the clinician typed was never
+        evaluated, and nothing in the verdict said so. Every worse variant of that answer is
+        reachable the same way: any second drug in the string is dropped, and dropping the
+        allergen is how a hard block silently becomes a clean bill of health.
+
+        So ambiguity is refused rather than resolved, which is the rule this module already
+        applies to a low fuzzy score: an unresolved drug is excluded from evaluation, and a wrong
+        guess is worse than no answer (CLAUDE.md pitfall #4). Picking one of two named drugs is a
+        guess, and it is the kind that reads as a completed check.
+
+        Only at this boundary — a clinician proposing a drug and getting a verdict about that
+        input. Names already in the record go through ``resolve`` untouched; see
+        ``DrugResolver.drugs_named_in`` for why refusing there would make things worse.
+        """
+        named = await self.resolver.drugs_named_in(drug_name)
+        if len(named) < 2:
+            return
+        listed = ", ".join(sorted(named.values()))
+        raise ValidationError(
+            f"“{drug_name}” names more than one drug ({listed}), so no safety check was run — "
+            "this is not the same as “no interactions found”. Check one proposed medication at "
+            "a time: a single check evaluates a single drug, and checking this as one would have "
+            "reported on only one of them.",
+            detail=(
+                f"ambiguous proposal name={drug_name!r} matched "
+                f"{sorted(named)} — refused rather than resolved to one"
+            ),
+        )
+
     async def check_medication(
         self,
         *,
@@ -289,6 +329,7 @@ class SafetyService:
         if drug_reference_id:
             vocab = await self.resolver.resolve_reference_id(drug_reference_id)
         if vocab is None and drug_name:
+            await self._reject_if_multiple_drugs(drug_name)
             resolved = await self.resolver.resolve(drug_name)
             if resolved:
                 vocab = await self.resolver.resolve_reference_id(resolved.reference_id)

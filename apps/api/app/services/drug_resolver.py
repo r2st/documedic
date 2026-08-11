@@ -26,8 +26,9 @@ reference id within one request still cost no SQL at all.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz, process
 from sqlalchemy import Select, func, or_, select
@@ -37,6 +38,15 @@ from app.models.drug_vocabulary import DrugVocabulary
 
 # Minimum fuzzy score (0-100) to accept a non-exact match.
 FUZZY_THRESHOLD = 86.0
+
+# Alphanumeric runs. Splitting on everything else is what makes "Crocin + Augmentin",
+# "Warfarin, Aspirin" and "Crocin\nAugmentin" all tokenize the same way, so no single
+# separator has to be enumerated.
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(_TOKEN_RE.findall(text.lower()))
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,12 @@ class _FuzzyIndex:
     rows: list[DrugVocabulary]
     candidates: dict[str, DrugVocabulary]  # brand + generic names, lower-cased
     keys: list[str]  # rapidfuzz wants a sequence; materialised once
+    # First token of a candidate name -> that name's full token sequence and its row. Lets
+    # `drugs_named_in` consider only the candidates that could start at each position in the
+    # query, instead of testing the whole corpus name by name.
+    by_first_token: dict[str, list[tuple[tuple[str, ...], DrugVocabulary]]] = field(
+        default_factory=dict
+    )
 
     @classmethod
     def build(cls, rows: list[DrugVocabulary]) -> _FuzzyIndex:
@@ -84,7 +100,41 @@ class _FuzzyIndex:
             if row.brand_name:
                 candidates.setdefault(row.brand_name.lower(), row)
             candidates.setdefault(row.generic_name.lower(), row)
-        return cls(rows=rows, candidates=candidates, keys=list(candidates.keys()))
+        by_first_token: dict[str, list[tuple[tuple[str, ...], DrugVocabulary]]] = {}
+        for name, row in candidates.items():
+            if tokens := _tokens(name):
+                by_first_token.setdefault(tokens[0], []).append((tokens, row))
+        return cls(
+            rows=rows,
+            candidates=candidates,
+            keys=list(candidates.keys()),
+            by_first_token=by_first_token,
+        )
+
+    def drugs_named_in(self, query: str) -> dict[str, str]:
+        """Distinct vocabulary drugs whose name appears *whole* inside ``query``.
+
+        Maps reference id -> generic name, so the caller can name them back to the clinician.
+        Matching is on whole tokens (a candidate's token sequence appearing contiguously in the
+        query's), not on raw substrings: "Crocin" must not be found inside "Crocinex", and
+        "Amoxicillin + Clavulanic acid" must match across whatever punctuation separates its
+        words. A typo like "Crocine" matches nothing here and is left to the fuzzy tier, which
+        is the whole point — this answers "how many drugs did they *name*", not "what did they
+        probably mean".
+
+        Keyed by reference id, so a query naming a brand and its own generic ("Crocin
+        (Paracetamol) 500") counts as the one drug it is, while two different molecules count as
+        two. Colliding rows that share a generic name are already collapsed by ``candidates``
+        (first row wins), so "Aspirin" resolving against both ASP-75 and ASP-150 counts once.
+        """
+        query_tokens = _tokens(query)
+        found: dict[str, str] = {}
+        for position, token in enumerate(query_tokens):
+            for candidate_tokens, row in self.by_first_token.get(token, ()):
+                span = query_tokens[position : position + len(candidate_tokens)]
+                if span == candidate_tokens:
+                    found[row.reference_id] = row.generic_name
+        return found
 
 
 class DrugResolver:
@@ -238,6 +288,25 @@ class DrugResolver:
         if best and best[1] >= FUZZY_THRESHOLD:
             return self._make(index.candidates[best[0]], "fuzzy", float(best[1]))
         return None
+
+    async def drugs_named_in(self, name: str | None) -> dict[str, str]:
+        """Which distinct vocabulary drugs ``name`` names, as reference id -> generic name.
+
+        Exists so a caller can tell "I don't recognise this" apart from "you named more than one
+        drug" — two failures that need opposite advice from the clinician. See
+        :meth:`_FuzzyIndex.drugs_named_in` for the matching rule.
+
+        Note what this deliberately is *not*: it is not consulted by :meth:`resolve`. Resolution
+        also runs over names already in the patient's record, where an Indian combination product
+        stored as one row ("Amlodipine + Atenolol") resolving to its first molecule is a partial
+        safety check, but refusing to resolve it at all would drop it from the evaluation
+        entirely — see ``SafetyService._current_meds``, which silently skips what it cannot
+        resolve. Ambiguity is refused at the boundary where a clinician proposes a drug and gets
+        a verdict back about that input, not everywhere a stored name is looked up.
+        """
+        if not name or not name.strip():
+            return {}
+        return (await self._load()).drugs_named_in(name.strip().lower())
 
     async def resolve_reference_id(self, reference_id: str) -> DrugVocabulary | None:
         """The active vocabulary row with this exact reference id, or ``None``.
