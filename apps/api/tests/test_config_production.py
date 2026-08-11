@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import (
+    DEFAULT_DATABASE_URL,
     DEFAULT_SECRET_KEY,
     InsecureProductionConfigError,
     Settings,
@@ -13,6 +14,7 @@ from app.config import (
 )
 
 _SAFE_KEY = "a" * 64
+_SAFE_DATABASE_URL = "postgresql+asyncpg://aether_prod:s3cret@db.internal:5432/aether"
 
 
 def _prod(**overrides) -> Settings:
@@ -22,6 +24,8 @@ def _prod(**overrides) -> Settings:
         "app_debug": False,
         "cors_origins": "https://documedic.aiknol.com",
         "field_encryption_key": "k" * 44,
+        "llm_demo_fallback": False,
+        "database_url": _SAFE_DATABASE_URL,
     }
     base.update(overrides)
     return Settings(**base)
@@ -137,8 +141,80 @@ def test_default_minio_secret_rejected_only_for_s3_backend():
     )
     assert any(
         "S3_SECRET_KEY" in p
-        for p in production_config_errors(_prod(storage_backend="s3", s3_secret_key="minioadmin"))
+        for p in production_config_errors(
+            _prod(storage_backend="s3", s3_access_key="prod-key", s3_secret_key="minioadmin")
+        )
     )
+
+
+def test_default_minio_access_key_is_rejected():
+    """The access key is half the credential; a default one is as reachable as a default secret."""
+    problems = production_config_errors(
+        _prod(storage_backend="s3", s3_access_key="minioadmin", s3_secret_key="prod-secret")
+    )
+    assert any("S3_ACCESS_KEY" in p for p in problems), problems
+
+
+def test_both_default_minio_credentials_reported_in_one_problem():
+    problems = production_config_errors(
+        _prod(storage_backend="s3", s3_access_key="minioadmin", s3_secret_key="minioadmin")
+    )
+    named = [p for p in problems if "S3_ACCESS_KEY" in p and "S3_SECRET_KEY" in p]
+    assert len(named) == 1, problems
+
+
+def test_custom_s3_credentials_are_not_flagged():
+    problems = production_config_errors(
+        _prod(storage_backend="s3", s3_access_key="prod-key", s3_secret_key="prod-secret")
+    )
+    assert problems == []
+
+
+# ------------------------------------------------------------- simulated clinical reasoning
+
+
+def test_llm_demo_fallback_is_rejected_in_production():
+    """Serving fabricated '[DEMO MODE]' reasoning about a real patient is worse than an outage."""
+    problems = production_config_errors(_prod(llm_demo_fallback=True))
+    assert any("LLM_DEMO_FALLBACK" in p for p in problems), problems
+    assert any("SIMULATED" in p for p in problems), problems
+
+
+def test_llm_demo_fallback_is_allowed_outside_production():
+    for env in ("development", "staging", "test"):
+        cfg = Settings(app_env=env, llm_demo_fallback=True)
+        assert production_config_errors(cfg) == []
+
+
+def test_llm_demo_fallback_is_flagged_even_with_a_provider_key():
+    """A key today does not stop the net firing the moment that provider is unreachable."""
+    problems = production_config_errors(_prod(llm_demo_fallback=True, openai_api_key="sk-live"))
+    assert any("LLM_DEMO_FALLBACK" in p for p in problems), problems
+
+
+# ------------------------------------------------------------------------------- database
+
+
+def test_default_database_url_is_rejected():
+    problems = production_config_errors(_prod(database_url=DEFAULT_DATABASE_URL))
+    assert any("DATABASE_URL" in p and "development default" in p for p in problems), problems
+
+
+def test_sqlite_database_url_is_rejected_in_production():
+    problems = production_config_errors(_prod(database_url="sqlite+aiosqlite:///./aether.db"))
+    assert any("DATABASE_URL" in p and "PostgreSQL" in p for p in problems), problems
+    assert any("sqlite+aiosqlite" in p for p in problems), problems
+
+
+def test_non_default_postgres_url_is_accepted():
+    problems = production_config_errors(_prod(database_url=_SAFE_DATABASE_URL))
+    assert problems == []
+
+
+def test_default_database_url_reported_once_not_also_as_wrong_scheme():
+    """The default URL *is* PostgreSQL — report the leaked credential, not a bogus scheme error."""
+    problems = production_config_errors(_prod(database_url=DEFAULT_DATABASE_URL))
+    assert len([p for p in problems if "DATABASE_URL" in p]) == 1, problems
 
 
 def test_demo_mode_is_allowed_in_production():

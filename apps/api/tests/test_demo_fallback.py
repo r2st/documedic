@@ -12,7 +12,9 @@ import pytest
 from app.agents import demo_data
 from app.agents.llm import (
     LLMClient,
+    LLMUnavailable,
     available_providers,
+    demo_fallback_enabled,
     is_available,
     using_simulated_llm,
 )
@@ -207,6 +209,54 @@ async def test_health_reports_demo_mode(client, demo_llm):
     assert body["llm_mode"] == "demo"
     assert body["llm_demo_fallback"] is True
     assert body["llm_simulated"] is True
+
+
+# ------------------------------------------------- production never serves simulated reasoning
+
+
+def test_demo_fallback_is_disabled_in_production_even_when_the_flag_is_on(demo_llm, monkeypatch):
+    """Defence in depth behind the startup config gate.
+
+    ``assert_production_config`` refuses to start production with LLM_DEMO_FALLBACK=true, but it
+    runs in the app lifespan. Any path that skips lifespan must still never hand a clinician
+    fabricated ``[DEMO MODE]`` reasoning about a real patient.
+    """
+    monkeypatch.setattr(settings, "app_env", "production")
+    assert demo_fallback_enabled() is False
+    assert using_simulated_llm() is False
+    assert is_available() is False
+
+
+def test_complete_json_raises_in_production_instead_of_simulating(demo_llm, monkeypatch):
+    monkeypatch.setattr(settings, "app_env", "production")
+    with pytest.raises(LLMUnavailable):
+        LLMClient().complete_json(HYPOTHESIS_PANEL, "central chest pain")
+
+
+def test_production_provider_failure_degrades_rather_than_simulating(monkeypatch):
+    """With a key configured but every call failing, production degrades — it does not invent."""
+    monkeypatch.setattr(settings, "openai_api_key", "sk-live")
+    monkeypatch.setattr(settings, "llm_demo_fallback", True)
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "llm_retry_backoff_base_seconds", 0.0)
+    monkeypatch.setattr(
+        "app.agents.llm._complete_openai",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("upstream 503")),
+    )
+    with pytest.raises(LLMUnavailable):
+        LLMClient().complete_json(HYPOTHESIS_PANEL, "central chest pain")
+
+
+@pytest.mark.asyncio
+async def test_health_reports_offline_not_demo_in_production(client, demo_llm, monkeypatch):
+    monkeypatch.setattr(settings, "app_env", "production")
+    body = (await client.get("/health")).json()
+    assert body["llm_mode"] == "offline"
+    assert body["llm_simulated"] is False
+
+    body = (await client.get("/health/dependencies")).json()
+    assert body["llm_demo_fallback"] is False
+    assert body["llm_simulated"] is False
 
 
 # --------------------------------------------------------------------- unit: demo payload shaping

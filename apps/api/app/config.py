@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     llm_openrouter_fallback: bool = True
     # Final safety net: when NO LLM provider can be reached (no key / offline / every
     # provider call failed), serve realistic simulated "[DEMO MODE]" clinical responses
-    # instead of raising, so the product is always demonstrable. Default on.
+    # instead of raising, so the product is always demonstrable. Default on — but REFUSED in
+    # production (see production_config_errors and app.agents.llm.demo_fallback_enabled):
+    # showing a clinician fabricated reasoning about a real patient is worse than an outage.
     llm_demo_fallback: bool = True
     # Per-request timeout (seconds) for each provider SDK call. Without this a hung upstream
     # connection blocks the worker thread indefinitely instead of failing over.
@@ -152,6 +154,8 @@ class Settings(BaseSettings):
 
 
 DEFAULT_SECRET_KEY = "dev-insecure-secret-change-me"
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://aether:aether@localhost:5432/aether_clinician"
+DEFAULT_MINIO_CREDENTIAL = "minioadmin"
 
 
 def _is_malformed_origin(origin: str) -> bool:
@@ -218,8 +222,64 @@ def production_config_errors(cfg: "Settings") -> list[str]:
             "FIELD_ENCRYPTION_KEY must be set explicitly in production so rotating "
             "APP_SECRET_KEY does not make stored patient PII undecryptable."
         )
-    if cfg.storage_backend == "s3" and cfg.s3_secret_key == "minioadmin":
-        problems.append("S3_SECRET_KEY is still the MinIO development default.")
+    if cfg.storage_backend == "s3":
+        default_s3_keys = [
+            name
+            for name, value in (
+                ("S3_ACCESS_KEY", cfg.s3_access_key),
+                ("S3_SECRET_KEY", cfg.s3_secret_key),
+            )
+            if value == DEFAULT_MINIO_CREDENTIAL
+        ]
+        if default_s3_keys:
+            problems.append(
+                f"{' and '.join(default_s3_keys)} still the MinIO development default "
+                f"({DEFAULT_MINIO_CREDENTIAL!r}) — anyone who can reach the object store can "
+                "read every uploaded prescription and lab report."
+            )
+    problems.extend(_llm_demo_fallback_errors(cfg))
+    problems.extend(_database_url_errors(cfg))
+    return problems
+
+
+def _llm_demo_fallback_errors(cfg: "Settings") -> list[str]:
+    """Reject the simulated-reasoning safety net in production.
+
+    ``LLM_DEMO_FALLBACK`` makes the reasoning engine return realistic ``[DEMO MODE]`` sample
+    differentials, dissent, and guideline citations when no provider can be reached, so the
+    product is always demonstrable. In production that turns an outage into something far worse
+    than an outage: a clinician is shown fabricated clinical reasoning about a real patient,
+    and the only signal is a field on ``/health`` that nobody reads mid-consultation.
+
+    Production must degrade to the deterministic offline path (deterministic safety checks,
+    "AI reasoning paused" indicator) instead — a visibly absent answer, never an invented one.
+    """
+    if not cfg.is_production or not cfg.llm_demo_fallback:
+        return []
+    return [
+        "LLM_DEMO_FALLBACK must be false in production. When enabled it serves SIMULATED "
+        "'[DEMO MODE]' clinical reasoning — fabricated differentials and citations about a "
+        "real patient — whenever no LLM provider can be reached. Set LLM_DEMO_FALLBACK=false "
+        "so unreachable providers degrade to the deterministic offline path instead."
+    ]
+
+
+def _database_url_errors(cfg: "Settings") -> list[str]:
+    """Reject a DATABASE_URL that is the dev default or cannot keep the audit-log guarantees."""
+    problems: list[str] = []
+    if cfg.database_url == DEFAULT_DATABASE_URL:
+        problems.append(
+            "DATABASE_URL is the built-in development default (user/password aether@localhost) "
+            "— set it to the production PostgreSQL instance, whose credentials are not in the "
+            "source tree."
+        )
+    elif not cfg.database_url.startswith("postgresql"):
+        problems.append(
+            "DATABASE_URL must point at PostgreSQL in production "
+            f"(got scheme {cfg.database_url.split('://', 1)[0]!r}). The patient graph and the "
+            "append-only audit log rely on PostgreSQL semantics; SQLite in particular cannot "
+            "serve concurrent clinicians and is not a supported store for patient data."
+        )
     return problems
 
 

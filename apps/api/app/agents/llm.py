@@ -75,8 +75,15 @@ def available_providers() -> list[str]:
 
 
 def demo_fallback_enabled() -> bool:
-    """Whether the simulated-response safety net is allowed to kick in."""
-    return settings.llm_demo_fallback
+    """Whether the simulated-response safety net is allowed to kick in.
+
+    Never in production, whatever ``LLM_DEMO_FALLBACK`` says. ``assert_production_config``
+    already refuses to start a production process with the flag on, but that gate lives in the
+    app lifespan — a worker that skips lifespan, or any code path importing the agents directly,
+    would otherwise still be able to hand a clinician fabricated ``[DEMO MODE]`` reasoning about
+    a real patient. Production degrades to the deterministic offline path instead.
+    """
+    return settings.llm_demo_fallback and not settings.is_production
 
 
 def using_simulated_llm() -> bool:
