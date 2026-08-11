@@ -432,3 +432,84 @@ def test_parse_datetime_assumes_utc_when_no_offset_is_given():
 def test_parse_datetime_returns_none_for_unparseable_input():
     assert _parse_datetime("smudged") is None
     assert _parse_datetime(None) is None
+
+
+# --- Ragged field types ----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_numeric_drug_name_is_merged_instead_of_crashing_the_approval(db):
+    """The merge treats every extracted field as text, and nothing upstream guaranteed that.
+
+    A vision model emitting an unquoted value gives ``brand_name_raw: 500``. That reached
+    ``DrugResolver.resolve(500)``, which calls ``.strip()`` — an AttributeError, an unhandled
+    500, and the clinician's whole approval rolled back over a field shape the module
+    docstring above already promises to be forgiving of.
+
+    ``_resolvable_names`` guarded its half with an ``isinstance`` check all along, so the
+    prefetch survived what the merge did not; ``_as_text`` now normalises both.
+    """
+    patient = await _patient(db)
+
+    counts = await GraphService(db).merge_entities(
+        patient=patient,
+        document=None,
+        entities=[
+            _entity("medication", brand_name_raw=500, dose=250, dose_unit=True),
+            _entity("condition", condition_name=42),
+            _entity("allergy", allergen_name=7, allergen_type="drug"),
+        ],
+    )
+
+    assert counts["medications"] == 1
+    assert counts["conditions"] == 1
+    assert counts["allergies"] == 1
+
+    med = (await _rows(db, MedicationEvent, patient))[0]
+    # Stored as text, so the String column takes it on PostgreSQL as well as SQLite.
+    assert med.brand_name_raw == "500"
+    assert med.dose == "250"
+    assert (await _rows(db, Condition, patient))[0].condition_name == "42"
+    assert (await _rows(db, Allergy, patient))[0].allergen_name == "7"
+
+
+@pytest.mark.asyncio
+async def test_coercing_fields_to_text_leaves_the_numeric_lab_columns_intact(db):
+    """The numeric paths read the same fields, via ``Decimal(str(value))`` — unchanged by it."""
+    patient = await _patient(db)
+
+    await GraphService(db).merge_entities(
+        patient=patient,
+        document=None,
+        entities=[
+            _entity(
+                "lab_result",
+                marker_name="Creatinine",
+                value_numeric=1.4,
+                unit="mg/dL",
+                reference_range_low=0.6,
+                reference_range_high=1.2,
+            )
+        ],
+    )
+
+    lab = (await _rows(db, LabResult, patient))[0]
+    assert lab.value_numeric == Decimal("1.4")
+    assert lab.is_abnormal is True
+    assert lab.abnormality_direction == "high"
+
+
+@pytest.mark.asyncio
+async def test_a_none_field_stays_none_rather_than_the_string_none(db):
+    """``str(None)`` would write the literal "None" into the chart as if it were a value."""
+    patient = await _patient(db)
+
+    await GraphService(db).merge_entities(
+        patient=patient,
+        document=None,
+        entities=[_entity("medication", brand_name_raw="Crocin", dose=None, route=None)],
+    )
+
+    med = (await _rows(db, MedicationEvent, patient))[0]
+    assert med.dose is None
+    assert med.route is None

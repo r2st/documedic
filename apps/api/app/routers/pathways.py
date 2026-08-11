@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -20,6 +20,10 @@ from app.schemas.pathway import ClinicalPathwayOut, PatientPathwaysResponse
 from app.services.pathway_service import PathwayService
 
 router = APIRouter(tags=["pathways"])
+
+# Comfortably longer than any curated condition name ("type_2_diabetes_mellitus"), which is
+# what this segment is matched against — anything longer cannot be a hit.
+MAX_CONDITION_NAME_CHARS = 120
 
 
 @router.get(
@@ -43,7 +47,9 @@ async def list_pathways(
     responses=errors(401, 404),
 )
 async def get_pathway(
-    condition_name: str,
+    # Bounded because the not-found message quotes the requested name back, so an unbounded
+    # path segment is reflected into the response at whatever size the URL carried it.
+    condition_name: str = Path(..., min_length=1, max_length=MAX_CONDITION_NAME_CHARS),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> ClinicalPathwayOut:

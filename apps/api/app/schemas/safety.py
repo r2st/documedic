@@ -7,15 +7,39 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
 
+# The longest INN in the WHO list is around 60 characters; Indian brand names with a strength
+# qualifier ("Augmentin Duo 625 Tablet") are shorter still. 200 is generous for anything a
+# clinician or an OCR pass produces, and short enough that neither of the two things this
+# string reaches can be driven by its length -- see the class docstring.
+MAX_DRUG_NAME_CHARS = 200
+# reference_id is a curated internal key ("DRUG-0042"), not user-authored text.
+MAX_DRUG_REFERENCE_ID_CHARS = 64
+
 
 class SafetyCheckRequest(BaseModel):
-    """Check a proposed medication against the patient's record."""
+    """Check a proposed medication against the patient's record.
+
+    Both fields are length-bounded, and neither bound is cosmetic. An unresolved name is
+    quoted back verbatim in the "could not be matched" message — deliberately, because the
+    clinician needs to see what was actually looked up — so an unbounded name is reflected
+    into a clinician-facing toast and into the response body at whatever size it arrived.
+    Before the cap a 60 KB name produced a 60 KB error.
+
+    It is also the more expensive half. A name that misses the exact tier falls through to
+    rapidfuzz, which scores the query against every brand and generic in the corpus at a cost
+    proportional to the query's length — on an endpoint any authenticated clinician can call,
+    with a corpus that grows with the product's market coverage.
+    """
 
     drug_reference_id: str | None = Field(
-        default=None, description="Canonical drug_vocabulary.reference_id"
+        default=None,
+        max_length=MAX_DRUG_REFERENCE_ID_CHARS,
+        description="Canonical drug_vocabulary.reference_id",
     )
     drug_name: str | None = Field(
-        default=None, description="Brand or generic name; resolved via DrugVocabulary"
+        default=None,
+        max_length=MAX_DRUG_NAME_CHARS,
+        description="Brand or generic name; resolved via DrugVocabulary",
     )
 
     @model_validator(mode="after")

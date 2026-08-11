@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 class DocumentResponse(BaseModel):
@@ -50,10 +50,29 @@ class ExtractionResult(BaseModel):
     confirmation_required_count: int
 
 
+# The widest text column an extracted field lands in (medication brand/generic name) is
+# String(500), so a longer value cannot be stored. PostgreSQL rejects it outright — an
+# unhandled DataError at flush, a 500, and the clinician's whole approval rolled back — while
+# SQLite silently keeps it, which is why the test suite never noticed.
+MAX_FIELD_VALUE_CHARS = 500
+
+# An extracted clinical field is a scalar: a drug name, a dose, a lab number, a date as text.
+# ``value`` used to be ``Any``, which let a client submit a dict or a list and have it merged
+# into the patient graph — where the drug resolver calls ``.strip()`` on it and the request
+# dies with an AttributeError-turned-500 instead of a 422 naming the bad field.
+CorrectedValue = (
+    Annotated[str, StringConstraints(max_length=MAX_FIELD_VALUE_CHARS)] | int | float | bool | None
+)
+
+
 class FieldCorrection(BaseModel):
-    entity_index: int
+    """A clinician's amendment to one extracted field, applied before the graph merge."""
+
+    entity_index: int = Field(..., ge=0)
     field_name: str = Field(..., max_length=200)
-    value: Any
+    value: CorrectedValue = Field(
+        ..., description="Scalar replacement value; see CorrectedValue for the bounds and why."
+    )
 
 
 class ExtractionApproval(BaseModel):

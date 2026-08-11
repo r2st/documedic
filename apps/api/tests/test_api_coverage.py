@@ -117,7 +117,6 @@ async def test_a_correction_naming_an_out_of_range_entity_is_ignored(db, auth_cl
         approval=ExtractionApproval(
             corrections=[
                 FieldCorrection(entity_index=999, field_name="brand_name_raw", value="Nonsense"),
-                FieldCorrection(entity_index=-1, field_name="brand_name_raw", value="Nonsense"),
             ]
         ),
     )
@@ -130,6 +129,21 @@ async def test_a_correction_naming_an_out_of_range_entity_is_ignored(db, auth_cl
         for f in ent["fields"]
     ]
     assert "Nonsense" not in values
+
+
+def test_a_negative_entity_index_never_reaches_the_service():
+    """It used to, and the service's ``0 <= index`` check quietly dropped it.
+
+    Quietly is the problem: the clinician made a correction, watched it apply to nothing, and
+    got a 200. The schema rejects it now, so the client is told which field was wrong instead.
+    """
+    import pytest
+    from pydantic import ValidationError as PydanticValidationError
+
+    from app.schemas.document import FieldCorrection
+
+    with pytest.raises(PydanticValidationError):
+        FieldCorrection(entity_index=-1, field_name="brand_name_raw", value="Nonsense")
 
 
 async def test_a_correction_naming_an_unknown_field_leaves_the_entity_untouched(db, auth_client):

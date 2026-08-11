@@ -54,6 +54,26 @@ def _resolvable_names(entities: list[dict]) -> list[str]:
     return names
 
 
+def _as_text(value: object) -> object:
+    """Render a non-string scalar as text, leaving strings and ``None`` alone.
+
+    The merge treats extracted fields as text throughout — ``name.lower()``, ``.strip()`` in
+    the drug resolver, assignment into ``String(500)`` columns — but nothing upstream had
+    guaranteed that. A field that arrived as a number (a clinician correcting a dose to ``500``
+    rather than ``"500"``, or a vision model emitting an unquoted value) reached
+    ``resolve(500)`` and died on ``AttributeError: 'int' object has no attribute 'strip'``, an
+    unhandled 500 that rolled the whole approval back.
+
+    ``_resolvable_names`` already guarded its half of this with an ``isinstance`` check, which
+    is why the prefetch survived what the merge did not. Normalising once at the entry to the
+    merge covers every consumer instead of one, and costs the downstream numeric paths nothing:
+    they are ``Decimal(str(value))`` and ``dtparser.parse(str(value))`` already.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
+
+
 def _to_decimal(value: object) -> Decimal | None:
     if value is None:
         return None
@@ -93,7 +113,8 @@ class GraphService:
 
         for entity in entities:
             etype = entity.get("entity_type")
-            fields = entity.get("fields", {})
+            # Every merge below treats these as text; see _as_text for what used to arrive.
+            fields = {k: _as_text(v) for k, v in entity.get("fields", {}).items()}
             region = entity.get("region")
             confidence = entity.get("confidence", {})
 
