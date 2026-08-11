@@ -20,6 +20,7 @@ from app.schemas.safety import (
     SafetyCheckResponse,
     SafetyFlagResponse,
 )
+from app.services.audit_service import AuditService
 from app.services.safety_service import SafetyService
 
 router = APIRouter(prefix="/patients/{patient_id}/drug-safety", tags=["drug-safety"])
@@ -110,11 +111,26 @@ async def active_flags(
     result approved a minute ago can move a drug into a renal contraindication. Flags here
     carry no `id`: they are a live view, not the persisted check records that `POST /check`
     writes and that an override refers to.
+
+    Reading it discloses the patient's whole current medication list and every allergy that
+    bears on it, so the access is audited as `drug_safety_flags_viewed`.
     """
     results = await SafetyService(db).active_flags(account_id=account.id, patient_id=patient_id)
     flags: list[SafetyFlagResponse] = []
     for _vocab, flag_list in results:
         flags.extend(_flag_to_response(f) for f in flag_list)
+    # After the check, immediately before the commit: the append lock is transaction-scoped
+    # on PostgreSQL, so auditing first would hold it across the whole re-evaluation.
+    await AuditService(db).record(
+        action="drug_safety_flags_viewed",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        # What was disclosed, in counts. Drug names and flag summaries are clinical content.
+        payload={"drugs_evaluated": len(results), "flag_count": len(flags)},
+    )
+    await db.commit()
     return ActiveFlagsResponse(patient_id=patient_id, flags=flags)
 
 

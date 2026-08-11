@@ -131,9 +131,25 @@ async def list_documents(
 ) -> list[DocumentResponse]:
     """Metadata only, newest first — the file bytes come from `GET /{doc_id}/file`.
 
-    Unpaginated, because a chart's document count is bounded by the patient's history.
+    Unpaginated, because a chart's document count is bounded by the patient's history. The
+    listing is a PHI disclosure in itself — file names and dates describe the patient's care —
+    so it is audited as `document_list_viewed`.
     """
     docs = await DocumentService(db).list(account.id, patient_id)
+    # Appended after the read and immediately before the commit: on PostgreSQL the append
+    # lock is transaction-scoped and only released at COMMIT, so auditing first and reading
+    # afterwards would hold the global lock for the length of the read.
+    await AuditService(db).record(
+        action="document_list_viewed",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        # A count, not the file names — those routinely carry the patient's own name, and
+        # audit_logs.payload is unencrypted, immutable and never pruned.
+        payload={"document_count": len(docs)},
+    )
+    await db.commit()
     return [DocumentResponse.model_validate(d) for d in docs]
 
 
@@ -170,10 +186,28 @@ async def get_extraction(
 
     A field below the confidence threshold carries `needs_confirmation`, and
     `confirmation_required_count` totals them. None of it is in the patient graph yet.
+
+    Nothing here is in the chart, but all of it was read off the patient's own scan — drugs,
+    doses, lab values — so the disclosure is audited as `extraction_viewed`.
     """
     service = DocumentService(db)
     document = await service.get(account.id, patient_id, doc_id)
-    return service.build_extraction_result(document)
+    result = service.build_extraction_result(document)
+    await AuditService(db).record(
+        action="extraction_viewed",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="document",
+        entity_id=doc_id,
+        # Counts and status only. The extracted values themselves are the clinical content
+        # and do not belong in an unencrypted table that is never pruned.
+        payload={
+            "extraction_status": document.extraction_status,
+            "entity_count": len(result.entities),
+        },
+    )
+    await db.commit()
+    return result
 
 
 @router.post(

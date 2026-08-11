@@ -10,8 +10,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.types import GUID, JSONBType
 from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
 
-# Recognised action types written to the immutable trail. Authentication events are part of
-# the access trail (who reached patient data, and every failed/blocked attempt to).
+# Every action type written to the immutable trail, and nothing else. Authentication events
+# are part of the access trail (who reached patient data, and every failed/blocked attempt
+# to), and so are the ``*_viewed`` reads: under the DPDP Act the question asked of this trail
+# months later is "who saw this patient's data", which a write-only trail cannot answer.
+#
+# Held to the code by ``tests/test_audit_actions.py``, in both directions. A missing entry
+# means an action nobody can look up; a spare one describes disclosure the system never makes.
 AUDIT_ACTIONS = (
     "auth_signup",
     "auth_login_success",
@@ -29,11 +34,12 @@ AUDIT_ACTIONS = (
     "patient_deleted",
     "document_uploaded",
     "extraction_completed",
+    "extraction_failed",
     "extraction_approved",
     "field_corrected",
     "graph_merged",
     "drug_safety_check",
-    "record_exported",
+    "drug_safety_hard_block_overridden",
     "reasoning_session_started",
     "reasoning_intake_answered",
     "reasoning_session_completed",
@@ -44,6 +50,16 @@ AUDIT_ACTIONS = (
     "validation_run_executed",
     "safety_report_filed",
     "regulatory_dossier_generated",
+    # PHI disclosures. Every endpoint that returns a patient's clinical data to a clinician
+    # records one of these, so the trail answers "who saw this" and not only "who changed it".
+    "patient_viewed",
+    "patient_record_viewed",
+    "document_downloaded",
+    "document_list_viewed",
+    "extraction_viewed",
+    "drug_safety_flags_viewed",
+    "clinical_suggestions_viewed",
+    "patient_pathways_viewed",
 )
 
 

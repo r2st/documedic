@@ -13,6 +13,7 @@ from app.dependencies import get_current_account
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, errors
 from app.schemas.reasoning import CitationOut, ClinicalSuggestionOut
+from app.services.audit_service import AuditService
 from app.services.guideline_service import GuidelineService
 from app.services.reasoning_service import ReasoningService
 
@@ -98,10 +99,25 @@ async def management_options(
 
     Options with citations, carrying an autonomy tier — never instructions. The clinician
     prescribes; this endpoint reports what the guidelines support considering.
+
+    A filtered view of the same clinical output as `GET ../suggestions`, and audited the same
+    way (`clinical_suggestions_viewed`, with the subset named in the payload). Auditing one
+    route and not the other would leave the disclosure reachable without a record of it.
     """
-    suggestions = await ReasoningService(db).list_suggestions(account.id, session_id)
-    return [
-        ClinicalSuggestionOut.model_validate(s)
-        for s in suggestions
+    service = ReasoningService(db)
+    session = await service.get_session(account.id, session_id)
+    suggestions = [
+        s
+        for s in await service.list_suggestions(account.id, session_id)
         if s.output_type == "management"
     ]
+    await AuditService(db).record(
+        action="clinical_suggestions_viewed",
+        account_id=account.id,
+        patient_id=session.patient_id,
+        entity_type="reasoning_session",
+        entity_id=session_id,
+        payload={"subset": "management", "suggestion_count": len(suggestions)},
+    )
+    await db.commit()
+    return [ClinicalSuggestionOut.model_validate(s) for s in suggestions]

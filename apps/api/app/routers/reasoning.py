@@ -31,6 +31,7 @@ from app.schemas.reasoning import (
     StreamTokenOut,
     SubmitAnswersRequest,
 )
+from app.services.audit_service import AuditService
 from app.services.reasoning_service import ReasoningService
 
 router = APIRouter(tags=["reasoning"])
@@ -306,8 +307,24 @@ async def list_suggestions(
     Includes the dissent. The devil's advocate's counter-argument and the sentinel's
     low-ranked-but-dangerous entries are part of this list by design and must not be filtered
     out, collapsed by default, or sorted below the leading hypothesis in a client.
+
+    This is the engine's clinical output about a named patient, so the read is audited as
+    `clinical_suggestions_viewed` against that patient's trail.
     """
-    suggestions = await ReasoningService(db).list_suggestions(account.id, session_id)
+    service = ReasoningService(db)
+    session = await service.get_session(account.id, session_id)
+    suggestions = await service.list_suggestions(account.id, session_id)
+    # Recorded against the session's patient, not the session alone — the trail is read per
+    # patient, and a disclosure that only names a session id is invisible from that view.
+    await AuditService(db).record(
+        action="clinical_suggestions_viewed",
+        account_id=account.id,
+        patient_id=session.patient_id,
+        entity_type="reasoning_session",
+        entity_id=session_id,
+        payload={"suggestion_count": len(suggestions)},
+    )
+    await db.commit()
     return [ClinicalSuggestionOut.model_validate(s) for s in suggestions]
 
 

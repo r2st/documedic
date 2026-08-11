@@ -17,6 +17,7 @@ from app.dependencies import get_current_account
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, PATIENT_ERRORS, errors
 from app.schemas.pathway import ClinicalPathwayOut, PatientPathwaysResponse
+from app.services.audit_service import AuditService
 from app.services.pathway_service import PathwayService
 
 router = APIRouter(tags=["pathways"])
@@ -78,6 +79,23 @@ async def patient_pathways(
 
     A lookup, not a recommendation: it reports which pathways exist for what is already
     documented, and says nothing about what the patient should be given.
+
+    The pathways themselves are public reference material, but which ones come back — and the
+    `unmapped_conditions` list beside them — is the patient's diagnosis list, so the access is
+    audited as `patient_pathways_viewed`.
     """
     result = await PathwayService(db).for_patient(account.id, patient_id)
+    await AuditService(db).record(
+        action="patient_pathways_viewed",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        # Counts only: the matched condition names are the diagnosis list itself.
+        payload={
+            "matched_pathways": len(result["pathways"]),
+            "unmapped_conditions": len(result["unmapped_conditions"]),
+        },
+    )
+    await db.commit()
     return PatientPathwaysResponse(**result)
