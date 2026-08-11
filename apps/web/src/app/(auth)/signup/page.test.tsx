@@ -94,6 +94,8 @@ describe('SignupPage', () => {
     await user.type(screen.getByLabelText(/Password/), 'longenoughpw');
     await user.click(screen.getByRole('button', { name: 'Create account' }));
 
-    expect(await screen.findByText('Sign up failed')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so your sign-up may not have completed/),
+    ).toBeInTheDocument();
   });
 });

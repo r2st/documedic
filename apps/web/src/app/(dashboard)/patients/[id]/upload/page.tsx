@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import type { ExtractionResult } from '@/lib/types';
 import { Button, Card, ConfidenceBadge, ErrorBanner } from '@/components/ui';
 
@@ -31,7 +32,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
       const doc = await api.uploadDocument(id, file);
       setReviewed({ docId: doc.id, extraction: await api.getExtraction(id, doc.id) });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Upload failed');
+      setError(requestErrorMessage(err, 'the upload'));
     } finally {
       setBusy(false);
     }
@@ -60,7 +61,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
       await api.approveExtraction(id, docId, [...rejected]);
       router.push(`/patients/${id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Approval failed');
+      setError(requestErrorMessage(err, 'the approval of these extracted details'));
     } finally {
       setBusy(false);
     }

@@ -24,13 +24,36 @@ from app.schemas.document import (
 )
 from app.services.audit_service import AuditService
 from app.services.extraction import ExtractionPipeline
-from app.services.filetype import sniff_file_type
+from app.services.filetype import describe_unsupported, sniff_file_type
 from app.services.graph_service import GraphService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.storage import compute_sha256, get_storage
 
 # Comfortably longer than any real scan filename, short enough to be a bounded column value.
 MAX_FILE_NAME_CHARS = 255
+
+_BYTES_PER_MB = 1024 * 1024
+
+
+def file_too_large_message(limit_bytes: int, actual_bytes: int | None = None) -> str:
+    """Message for a rejected oversized upload, in megabytes and with a way out.
+
+    ``actual_bytes`` is omitted on the streaming path, which aborts one chunk past the limit and
+    so never learns the real size. Byte counts are what the limit is configured in, but nobody
+    reading a toast mid-clinic converts 20971520 to anything; and "too large" without the fix
+    (split the pages, or re-scan smaller) just sends the clinician back to the same scanner
+    settings that produced the file.
+    """
+    limit_mb = limit_bytes / _BYTES_PER_MB
+    if actual_bytes is None:
+        size = f"This file is over the {limit_mb:.0f} MB limit."
+    else:
+        actual_mb = actual_bytes / _BYTES_PER_MB
+        size = f"This file is {actual_mb:.1f} MB; the limit is {limit_mb:.0f} MB."
+    return (
+        f"{size} Upload the pages as separate files, or re-scan at 200-300 dpi in greyscale — "
+        "that is enough resolution for the text to be read."
+    )
 
 
 def _band(score: float) -> str:
@@ -68,10 +91,16 @@ class DocumentService:
         file_name = (file_name or "upload")[:MAX_FILE_NAME_CHARS]
 
         if len(data) > settings.max_upload_bytes:
-            raise FileTooLargeError(f"File exceeds maximum of {settings.max_upload_bytes} bytes")
+            raise FileTooLargeError(
+                file_too_large_message(settings.max_upload_bytes, len(data)),
+                detail=f"upload {len(data)}B over limit {settings.max_upload_bytes}B",
+            )
         file_type = sniff_file_type(data)
         if file_type is None:
-            raise UnsupportedFileTypeError("Only PDF and JPEG/PNG/WebP/HEIC images are supported")
+            raise UnsupportedFileTypeError(
+                f"{UnsupportedFileTypeError().message} {describe_unsupported(data)}",
+                detail=f"unrecognised magic bytes: {data[:12]!r}",
+            )
 
         sha256 = compute_sha256(data)
 

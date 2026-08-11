@@ -42,7 +42,7 @@ vi.mock('@/components/reasoning/SuggestionCard', () => ({
   ),
 }));
 
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import EncounterPage from './page';
 
 function question(id: string): IntakeQuestion {
@@ -218,18 +218,30 @@ describe('EncounterPage', () => {
     ]);
   });
 
-  it('reports a failed start without advancing past the complaint step', async () => {
-    vi.mocked(api.startReasoning).mockRejectedValue(new Error('Reasoning engine unavailable'));
+  it('surfaces the API\'s own message and stays on the complaint step', async () => {
+    vi.mocked(api.startReasoning).mockRejectedValue(
+      new ApiError(422, 'validation_error', 'A presenting complaint is required.'),
+    );
     await enterComplaint();
 
-    expect(await screen.findByText('Reasoning engine unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('A presenting complaint is required.')).toBeInTheDocument();
     expect(screen.getByLabelText('Presenting complaint')).toBeInTheDocument();
   });
 
-  it('falls back to a generic message when the thrown value is not an Error', async () => {
+  it('reports an unreachable server as unreachable, not as a rejected run', async () => {
+    vi.mocked(api.startReasoning).mockRejectedValue(new TypeError('Failed to fetch'));
+    await enterComplaint();
+
+    expect(
+      await screen.findByText(/Could not reach the server, so the reasoning run/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Presenting complaint')).toBeInTheDocument();
+  });
+
+  it('handles a thrown value that is not an Error at all', async () => {
     vi.mocked(api.startReasoning).mockRejectedValue('boom');
     await enterComplaint();
-    expect(await screen.findByText('Failed to start')).toBeInTheDocument();
+    expect(await screen.findByText(/Could not reach the server/)).toBeInTheDocument();
   });
 
   it('links back to the patient record', () => {

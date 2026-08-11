@@ -76,7 +76,9 @@ describe('LoginPage', () => {
     await user.type(screen.getByLabelText('Password'), 'hunter2hunter2');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    expect(await screen.findByText('Login failed')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so your sign-in may not have completed/),
+    ).toBeInTheDocument();
   });
 
   it('disables the submit button while the request is in flight', async () => {

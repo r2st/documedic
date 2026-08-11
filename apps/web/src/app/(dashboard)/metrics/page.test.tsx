@@ -183,7 +183,9 @@ describe('MetricsPage', () => {
     await screen.findByText('42');
 
     await user.click(screen.getByRole('button', { name: 'Download CDSCO dossier' }));
-    expect(await screen.findByText(/Failed to download dossier/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so the regulatory dossier download/),
+    ).toBeInTheDocument();
   });
 
   it('files a safety report with the selected category and severity, then refreshes', async () => {
@@ -223,7 +225,9 @@ describe('MetricsPage', () => {
     await user.type(screen.getByLabelText('Description'), 'Something went wrong.');
     await user.click(screen.getByRole('button', { name: 'Submit report' }));
 
-    expect(await screen.findByText(/Failed to file safety report/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so filing the safety report/),
+    ).toBeInTheDocument();
   });
 
   it('lists filed safety reports with their severity and status', async () => {
@@ -250,7 +254,9 @@ describe('MetricsPage error and badge fallbacks', () => {
   it('shows a generic message when the metrics load fails outside the API contract', async () => {
     vi.mocked(api.performanceMetrics).mockRejectedValue(new TypeError('Failed to fetch'));
     render(<MetricsPage />);
-    expect(await screen.findByText(/Failed to load metrics/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so loading the metrics/),
+    ).toBeInTheDocument();
   });
 
   it('shows a generic message when the validation harness fails outside the API contract', async () => {
@@ -260,7 +266,9 @@ describe('MetricsPage error and badge fallbacks', () => {
     await screen.findByText('42');
 
     await user.click(screen.getByRole('button', { name: 'Run validation harness' }));
-    expect(await screen.findByText(/Validation harness failed/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so the validation run/),
+    ).toBeInTheDocument();
   });
 
   it('surfaces the server message when the dossier download is refused', async () => {

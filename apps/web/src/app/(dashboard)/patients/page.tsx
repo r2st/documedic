@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import type { PatientSummary } from '@/lib/types';
 import { Button, Card, ErrorBanner } from '@/components/ui';
 
@@ -171,7 +172,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
       });
       onCreated();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to create patient');
+      setError(requestErrorMessage(err, 'the new patient record'));
     }
   }
 

@@ -80,9 +80,12 @@ def decode_token(token: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, settings.app_secret_key, algorithms=[settings.jwt_algorithm])
     except jwt.ExpiredSignatureError as exc:
-        raise TokenError("Token has expired") from exc
+        raise TokenError(
+            "Your sign-in session has expired. Sign in again to continue.",
+            detail="jwt exp in the past",
+        ) from exc
     except jwt.PyJWTError as exc:
-        raise TokenError("Invalid token") from exc
+        raise TokenError(detail=f"jwt rejected: {type(exc).__name__}") from exc
 
 
 def generate_refresh_token() -> str:

@@ -293,7 +293,14 @@ class SafetyService:
             if resolved:
                 vocab = await self.resolver.resolve_reference_id(resolved.reference_id)
         if vocab is None:
-            raise ValidationError("Could not resolve the proposed drug via DrugVocabulary")
+            named = drug_name or drug_reference_id or ""
+            raise ValidationError(
+                f"“{named}” could not be matched to a known drug, so no safety check "
+                "was run — this is not the same as “no interactions found”. Try the "
+                "generic (INN) name, check the spelling of the brand name, or ask for the brand "
+                "to be added to the drug vocabulary.",
+                detail=f"unresolved drug reference_id={drug_reference_id!r} name={drug_name!r}",
+            )
 
         # The proposed drug's own reference id stays in current_meds if the patient is already
         # on it: check_duplicate_therapy needs to see it to detect "already an active order for
@@ -369,9 +376,18 @@ class SafetyService:
         await self._patient(account_id, patient_id)
         check = await self.db.get(DrugSafetyCheck, drug_safety_check_id)
         if check is None or check.patient_id != patient_id:
-            raise NotFoundError("Drug safety check not found")
+            raise NotFoundError(
+                "That safety check was not found on this patient's chart. Re-run the drug "
+                "safety check to get a current one before recording an override.",
+                detail=f"check {drug_safety_check_id} missing or on another patient",
+            )
         if not check.is_hard_block:
-            raise ValidationError("Only hard-blocked checks require an override")
+            raise ValidationError(
+                "This flag is advisory, not a hard block, so it needs no override — you can "
+                "proceed and record your reasoning in the encounter note. Only hard blocks "
+                "(documented allergy or contraindication) require a documented override.",
+                detail=f"check {drug_safety_check_id} is not a hard block",
+            )
 
         override = DrugSafetyOverride(
             account_id=account_id,

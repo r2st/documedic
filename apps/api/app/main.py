@@ -128,7 +128,23 @@ def create_app() -> FastAPI:
     )
 
     @app.exception_handler(AetherError)
-    async def aether_error_handler(_request: Request, exc: AetherError) -> JSONResponse:
+    async def aether_error_handler(request: Request, exc: AetherError) -> JSONResponse:
+        """Serialize a domain error, keeping its internal cause in the log only.
+
+        ``exc.detail`` exists so the clinician-facing ``message`` can stay actionable ("sign in
+        again") while operators still get the mechanism ("token type 'refresh', expected
+        'access'"), correlated by request id. It is deliberately never serialized: it names
+        internals, and for a 401 storm the distinction between causes is exactly what an
+        attacker would like echoed back.
+        """
+        if exc.detail:
+            logger.info(
+                "%s (%s): %s [request_id=%s]",
+                type(exc).__name__,
+                exc.code,
+                exc.detail,
+                getattr(request.state, "request_id", None),
+            )
         return JSONResponse(
             status_code=exc.status_code,
             content={"code": exc.code, "message": exc.message},
@@ -154,7 +170,14 @@ def create_app() -> FastAPI:
                     status_code=404,
                     content={
                         "code": "not_found",
-                        "message": "The requested resource was not found.",
+                        # The identifier in the URL is not even the shape of a record id, so this
+                        # is a truncated or hand-edited link rather than a deleted record —
+                        # saying so stops the clinician hunting for a chart that never existed.
+                        "message": (
+                            "That link does not point at a valid record — it may have been "
+                            "truncated when it was copied. Open the record from the patient "
+                            "list instead."
+                        ),
                     },
                 )
         # Default 422 for non-UUID validation errors (body, query, etc.), with the rejected
@@ -181,8 +204,24 @@ def create_app() -> FastAPI:
             status_code=500,
             content={
                 "code": "internal_error",
-                "message": "An unexpected error occurred. Please try again.",
+                # The request id is the only thing that connects the clinician's report to the
+                # log line above, so it goes in the body and not just the X-Request-Id header —
+                # nobody opens devtools mid-consultation. "Try again" is kept but qualified:
+                # get_db rolls the request's transaction back, so a retry is safe and no
+                # half-written clinical record is left behind, which is the clinician's real
+                # question here.
+                "message": (
+                    "This action did not complete and nothing was saved to the chart. Retrying "
+                    "is safe. If it keeps happening, report reference "
+                    f"{request_id or 'unknown'} to your administrator."
+                ),
+                "request_id": request_id,
             },
+            # Set explicitly: RequestContextMiddleware adds this header on the way out, but an
+            # unhandled exception is caught by Starlette's ServerErrorMiddleware, which sits
+            # *outside* it — so the one response where correlation matters most was the only
+            # one shipping without the header.
+            headers={"X-Request-Id": request_id} if request_id else None,
         )
 
     app.include_router(health.router)

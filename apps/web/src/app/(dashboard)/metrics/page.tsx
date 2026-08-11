@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
 import { Button, Card } from '@/components/ui';
 
@@ -81,7 +82,7 @@ export default function MetricsPage() {
       setActionSuccess('Dossier download started.');
     } catch (err) {
       setActionError(
-        err instanceof ApiError ? err.message : 'Failed to download dossier. Please try again.',
+        requestErrorMessage(err, 'the regulatory dossier download'),
       );
     } finally {
       setDownloading(false);
@@ -99,7 +100,7 @@ export default function MetricsPage() {
       setReports(reportsData);
     } catch (err) {
       setLoadError(
-        err instanceof ApiError ? err.message : 'Failed to load metrics. Please try again.',
+        requestErrorMessage(err, 'loading the metrics'),
       );
     } finally {
       setInitialLoading(false);
@@ -122,7 +123,7 @@ export default function MetricsPage() {
       setActionSuccess('Validation harness completed successfully.');
     } catch (err) {
       setActionError(
-        err instanceof ApiError ? err.message : 'Validation harness failed. Please try again.',
+        requestErrorMessage(err, 'the validation run'),
       );
     } finally {
       setRunning(false);
@@ -296,7 +297,7 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
       onFiled();
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : 'Failed to file safety report. Please try again.',
+        requestErrorMessage(err, 'filing the safety report'),
       );
     } finally {
       setSubmitting(false);

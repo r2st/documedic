@@ -17,19 +17,25 @@ async def get_current_account(request: Request, db: AsyncSession = Depends(get_d
     """Resolve the authenticated account from the Bearer access token."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
-        raise TokenError("Missing bearer token")
+        raise TokenError(
+            "You are not signed in. Sign in to open patient records.",
+            detail="request carried no Bearer authorization header",
+        )
     token = auth.split(" ", 1)[1].strip()
     payload = decode_token(token)
     if payload.get("type") != "access":
-        raise TokenError("Wrong token type")
+        raise TokenError(detail=f"token type {payload.get('type')!r}, expected 'access'")
     try:
         account_id = uuid.UUID(payload["sub"])
     except (KeyError, ValueError) as exc:
-        raise TokenError("Malformed token subject") from exc
+        raise TokenError(detail="token subject is missing or not a uuid") from exc
 
     account = await db.get(Account, account_id)
     if account is None or account.is_deleted:
-        raise TokenError("Account not found")
+        raise TokenError(
+            "This account is no longer active. Contact your administrator to restore access.",
+            detail=f"account {account_id} absent or soft-deleted",
+        )
     return account
 
 

@@ -36,6 +36,7 @@ from app.exceptions import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     NotFoundError,
+    SessionExpiredError,
     TokenError,
     TooManyAttemptsError,
 )
@@ -239,17 +240,24 @@ class AuthService:
         result = await self.db.execute(select(Session).where(Session.token_hash == token_hash))
         session = result.scalar_one_or_none()
         if session is None:
-            raise TokenError("Refresh token is invalid or expired")
+            raise TokenError(detail="no session row matches the presented refresh token hash")
         if session.is_revoked:
             # Reuse detection. Rotation revokes a refresh token the moment it is exchanged, so
             # a second presentation means the token was captured (or replayed after logout).
             # We cannot tell the attacker's copy from the legitimate one, so revoke every live
             # session for the account and force a fresh sign-in.
             await self._revoke_on_reuse(session)
-            raise TokenError("Refresh token is invalid or expired")
+            # Deliberately the same generic message (and code) as every other refresh failure.
+            # Saying "your sessions were signed out because a token was reused" would be kinder
+            # to the legitimate clinician but tells a holder of a stolen token that the token was
+            # real and already rotated -- i.e. that the victim is active and the copy is worth
+            # burning now. The detail below carries that to the log instead. See
+            # tests/test_auth_hardening.py::test_every_refresh_failure_is_byte_identical.
+            raise TokenError(detail=f"refresh token reuse detected on session {session.id}")
         now = datetime.now(UTC)
         if _aware(session.expires_at) < now:
-            raise TokenError("Refresh token is invalid or expired")
+            # Generic message too, for the same reason as the reuse branch above.
+            raise TokenError(detail=f"session {session.id} past its absolute expiry")
         idle_cutoff = _aware(session.last_used_at) + timedelta(
             minutes=settings.session_idle_timeout_minutes
         )
@@ -265,14 +273,17 @@ class AuthService:
                 payload={"ip_address": ip_address, "session_id": str(session.id)},
             )
             await self.db.commit()
-            raise TokenError("Session expired due to inactivity")
+            raise SessionExpiredError(detail=f"session {session.id} idle past the timeout")
 
         # Rotate: revoke the presented token, issue a new pair.
         session.is_revoked = True
         await self.db.flush()
         account = await self.db.get(Account, session.account_id)
         if account is None or account.is_deleted:
-            raise TokenError("Account no longer exists")
+            raise TokenError(
+                "This account is no longer active. Contact your administrator to restore access.",
+                detail=f"account {session.account_id} absent or soft-deleted",
+            )
         tokens = await self._issue_tokens(account, ip_address=ip_address, user_agent=user_agent)
         await self.audit.record(
             action="auth_token_refreshed",
@@ -339,7 +350,10 @@ class AuthService:
         """Revoke one of the account's own sessions (e.g. "sign out of that device")."""
         session = await self.db.get(Session, session_id)
         if session is None or session.account_id != account_id:
-            raise NotFoundError("Session not found")
+            raise NotFoundError(
+                "That sign-in session was not found — it may already have been signed out.",
+                detail=f"session {session_id} missing or owned by another account",
+            )
         session.is_revoked = True
         await self.db.flush()
         await self.audit.record(

@@ -7,11 +7,14 @@ a path and deduplication is trivial. Storage paths are never public URLs.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from pathlib import Path
 
 from app.config import settings
 from app.exceptions import DocumentNotFoundError
+
+logger = logging.getLogger(__name__)
 
 # Only a plain alphanumeric extension is carried over from the uploaded name; anything else
 # (separators, dot segments, control characters, a 400-character "extension") is dropped so a
@@ -57,7 +60,12 @@ class LocalStorage:
         """
         resolved = Path(storage_path).resolve()
         if not resolved.is_relative_to(self.base.resolve()):
-            raise DocumentNotFoundError("Document is not available")
+            logger.error(
+                "Refused a document read outside the storage root (path=%r) — the "
+                "documents.storage_path column is not trustworthy.",
+                storage_path,
+            )
+            raise DocumentNotFoundError(detail=f"storage_path escapes the storage root: {resolved}")
         return resolved
 
     def write(self, patient_id: str, sha256: str, file_name: str, data: bytes) -> str:
@@ -68,7 +76,30 @@ class LocalStorage:
         return str(path)
 
     def read(self, storage_path: str) -> bytes:
-        return self._confined(storage_path).read_bytes()
+        """Return the stored bytes for a document.
+
+        A document row whose file has gone missing (pruned volume, half-restored backup,
+        storage mounted elsewhere) used to surface as a generic 500 "please try again" — advice
+        that can never work, on a screen where the clinician is waiting for the original scan.
+        It is reported as an unavailable document instead, and logged at error level because the
+        record and the bytes have diverged and that is an operator's problem, not the user's.
+        """
+        path = self._confined(storage_path)
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            logger.error(
+                "Document row points at unreadable storage (path=%r): %s: %s",
+                storage_path,
+                type(exc).__name__,
+                exc,
+            )
+            raise DocumentNotFoundError(
+                "The original file for this document could not be read from storage. Its "
+                "extracted details are still in the chart; ask your administrator to check "
+                "document storage, or upload the file again.",
+                detail=f"{type(exc).__name__} reading {storage_path!r}",
+            ) from exc
 
     def exists(self, storage_path: str) -> bool:
         try:

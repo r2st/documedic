@@ -183,12 +183,14 @@ async def test_unhandled_exception_handler_returns_a_generic_500(app):
 
     assert resp.status_code == 500
     body = resp.json()
-    assert body == {
-        "code": "internal_error",
-        "message": "An unexpected error occurred. Please try again.",
-    }
+    assert body["code"] == "internal_error"
     assert "Ramesh" not in resp.text
     assert "uq_patients_phone" not in resp.text
+    # Actionable without leaking: says nothing was written (get_db rolled the request back), and
+    # hands over the request id so the clinician's report can be tied to the logged traceback.
+    assert "nothing was saved" in body["message"]
+    assert body["request_id"] == resp.headers["X-Request-Id"]
+    assert body["request_id"] in body["message"]
 
 
 def test_domain_exceptions_carry_their_own_status_and_code():

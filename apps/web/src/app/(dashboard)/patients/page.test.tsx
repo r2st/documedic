@@ -190,7 +190,9 @@ describe('PatientsPage edge cases', () => {
     await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: /Create patient/i }));
 
-    expect(await screen.findByText('Failed to create patient')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so the new patient record/),
+    ).toBeInTheDocument();
     expect(screen.getByText('Register new patient')).toBeInTheDocument();
   });
 });

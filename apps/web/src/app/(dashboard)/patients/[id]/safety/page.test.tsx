@@ -153,7 +153,9 @@ describe('SafetyPage', () => {
   it('falls back to a generic message for non-API failures', async () => {
     vi.mocked(api.checkDrugSafety).mockRejectedValue(new TypeError('Failed to fetch'));
     await runCheck();
-    expect(await screen.findByText('Check failed')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so the drug safety check/),
+    ).toBeInTheDocument();
   });
 
   it('links back to the patient record', () => {

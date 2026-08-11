@@ -124,23 +124,33 @@ async def _account_from_query_or_header(
     if header_token:
         payload = decode_token(header_token)
         if payload.get("type") != "access":
-            raise TokenError("Wrong token type")
+            raise TokenError(detail=f"header token type {payload.get('type')!r}, expected access")
     elif query_token:
         payload = decode_token(query_token)
         if payload.get("type") != "stream":
-            raise TokenError("Wrong token type")
+            raise TokenError(detail=f"query token type {payload.get('type')!r}, expected stream")
         if payload.get("sid") != str(session_id):
-            raise TokenError("Stream token is not valid for this session")
+            raise TokenError(
+                "This reasoning stream could not be reopened. Reload the Reasoning Theatre "
+                "to resume watching the agents deliberate.",
+                detail=f"stream token bound to session {payload.get('sid')!r}, not {session_id}",
+            )
     else:
-        raise TokenError("Missing access token")
+        raise TokenError(
+            "You are not signed in. Sign in to open the Reasoning Theatre.",
+            detail="SSE request carried neither a Bearer header nor a ?token= stream token",
+        )
 
     try:
         account_id = uuid.UUID(payload["sub"])
     except (KeyError, ValueError) as exc:
-        raise TokenError("Malformed token subject") from exc
+        raise TokenError(detail="token subject is missing or not a uuid") from exc
     account = await db.get(Account, account_id)
     if account is None or account.is_deleted:
-        raise TokenError("Account not found")
+        raise TokenError(
+            "This account is no longer active. Contact your administrator to restore access.",
+            detail=f"account {account_id} absent or soft-deleted",
+        )
     return account
 
 

@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import { useAuth } from '@/lib/auth';
 import { Button, ErrorBanner } from '@/components/ui';
 
@@ -24,7 +25,7 @@ export default function LoginPage() {
       await refresh();
       router.replace('/patients');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed');
+      setError(requestErrorMessage(err, 'your sign-in'));
     } finally {
       setBusy(false);
     }

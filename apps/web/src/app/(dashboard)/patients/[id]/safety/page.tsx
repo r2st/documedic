@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import type { SafetyCheckResponse } from '@/lib/types';
 import { Button, Card, ErrorBanner, SafetyFlagCard } from '@/components/ui';
 
@@ -21,7 +22,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
     try {
       setResult(await api.checkDrugSafety(id, { drug_name: drug }));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Check failed');
+      setError(requestErrorMessage(err, 'the drug safety check'));
     } finally {
       setBusy(false);
     }

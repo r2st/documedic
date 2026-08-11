@@ -207,7 +207,9 @@ describe('UploadPage', () => {
 
     await user.upload(fileInput(container), PDF);
 
-    expect(await screen.findByText('Upload failed')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so the upload may not have completed/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -228,7 +230,9 @@ describe('UploadPage approval guards', () => {
     await screen.findByText('Review extraction');
     await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
 
-    expect(await screen.findByText('Approval failed')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Could not reach the server, so the approval of these extracted details/),
+    ).toBeInTheDocument();
     expect(push).not.toHaveBeenCalled();
   });
 });

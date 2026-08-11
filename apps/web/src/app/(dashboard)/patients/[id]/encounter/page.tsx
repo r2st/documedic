@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import type { ClinicalSuggestion, IntakeQuestion } from '@/lib/types';
 import { Button, Card, ErrorBanner } from '@/components/ui';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
@@ -96,7 +97,7 @@ export default function EncounterPage() {
         setPhase('intake');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start');
+      setError(requestErrorMessage(e, 'the reasoning run'));
     }
   }
 

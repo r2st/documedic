@@ -127,14 +127,39 @@ def test_confinement_does_not_break_ordinary_reads(tmp_path):
     assert storage.read(written) == data
 
 
-def test_a_missing_file_inside_the_root_is_still_a_plain_miss(tmp_path):
-    """Absent-but-legitimate must not be conflated with escaped-the-root."""
+def test_a_missing_file_inside_the_root_reads_as_an_unavailable_document(tmp_path):
+    """A legitimate path whose bytes have gone is a document problem, not a crash.
+
+    It used to raise FileNotFoundError, which reached the clinician as a 500 "please try again"
+    — advice that can never work when the file is simply not on the volume any more.
+    """
     storage = LocalStorage(str(tmp_path))
     inside = str(tmp_path / "aa" / f"{SHA}.pdf")
 
     assert storage.exists(inside) is False
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(DocumentNotFoundError) as exc:
         storage.read(inside)
+    assert "could not be read from storage" in exc.value.message
+    assert "upload the file again" in exc.value.message.lower()
+    # Distinguishable from an escaped path in the log, though both are a 404 to the client.
+    assert "FileNotFoundError" in (exc.value.detail or "")
+
+
+def test_an_escaped_path_and_a_missing_file_are_both_404_but_logged_apart(tmp_path):
+    """Absent-but-legitimate must not be conflated with escaped-the-root — in the log.
+
+    The client gets the same document_not_found either way (never a hint that a path escaped);
+    the operator gets two different detail strings.
+    """
+    storage = LocalStorage(str(tmp_path))
+    with pytest.raises(DocumentNotFoundError) as escaped:
+        storage.read("/etc/passwd")
+    with pytest.raises(DocumentNotFoundError) as missing:
+        storage.read(str(tmp_path / "aa" / f"{SHA}.pdf"))
+
+    assert escaped.value.code == missing.value.code == "document_not_found"
+    assert "escapes the storage root" in (escaped.value.detail or "")
+    assert "escapes the storage root" not in (missing.value.detail or "")
 
 
 @pytest.mark.asyncio

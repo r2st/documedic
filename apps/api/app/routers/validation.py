@@ -53,7 +53,11 @@ async def get_validation_run(
 ) -> ValidationRunOut:
     run = await ValidationService(db).get_run(account.id, run_id)
     if run is None:
-        raise NotFoundError("Validation run not found")
+        raise NotFoundError(
+            "That validation run was not found. It may have been from a previous "
+            "deployment — start a new run from the metrics page.",
+            detail=f"validation run {run_id} absent",
+        )
     return ValidationRunOut.model_validate(run)
 
 

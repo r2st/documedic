@@ -22,7 +22,7 @@ from app.schemas.document import (
     ExtractionResult,
 )
 from app.services.audit_service import AuditService
-from app.services.document_service import DocumentService
+from app.services.document_service import DocumentService, file_too_large_message
 
 router = APIRouter(prefix="/patients/{patient_id}/documents", tags=["documents"])
 
@@ -76,7 +76,10 @@ async def _read_capped(file: UploadFile, limit: int) -> bytes:
     while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
         total += len(chunk)
         if total > limit:
-            raise FileTooLargeError(f"File exceeds maximum of {limit} bytes")
+            raise FileTooLargeError(
+                file_too_large_message(limit),
+                detail=f"streamed upload exceeded limit {limit}B and was aborted",
+            )
         chunks.append(chunk)
     return b"".join(chunks)
 
