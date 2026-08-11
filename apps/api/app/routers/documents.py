@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit
 from app.exceptions import FileTooLargeError
 from app.models.user import Account
-from app.openapi import PATIENT_ERRORS
+from app.openapi import PATIENT_ERRORS, errors
 from app.schemas.document import (
     DocumentResponse,
     ExtractionApproval,
@@ -37,6 +37,10 @@ _MIME_BY_TYPE = {
 
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Upload is the one route here that costs an LLM call (multimodal extraction over the scan), so
+# it is the one that is rate limited and the one that can answer 429.
+_UPLOAD_ERRORS = errors(401, 404, 429)
 
 # Anything outside this set is dropped from the ASCII fallback filename. Notably excludes the
 # double quote and the semicolon (which would end/extend the Content-Disposition parameter) and
@@ -90,7 +94,8 @@ async def _read_capped(file: UploadFile, limit: int) -> bytes:
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload a prescription, lab report or scan",
-    responses=PATIENT_ERRORS,
+    responses=_UPLOAD_ERRORS,
+    dependencies=[Depends(rate_limit("document_upload"))],
 )
 async def upload_document(
     patient_id: uuid.UUID,

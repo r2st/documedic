@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit_by_ip
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, errors
 from app.schemas.auth import (
@@ -36,7 +36,8 @@ def _client_meta(request: Request) -> tuple[str | None, str | None]:
     response_model=TokenResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a clinician account and sign in",
-    responses=errors(409),
+    responses=errors(409, 429),
+    dependencies=[Depends(rate_limit_by_ip("signup"))],
 )
 async def signup(
     body: SignupRequest, request: Request, db: AsyncSession = Depends(get_db)

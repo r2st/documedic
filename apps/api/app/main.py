@@ -162,6 +162,9 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={"code": exc.code, "message": exc.message},
+            # Almost always None. A 429 carries Retry-After here, because the status code alone
+            # does not tell a client how long to back off. See AetherError.headers.
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

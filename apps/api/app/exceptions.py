@@ -39,6 +39,16 @@ class AetherError(Exception):
         self.detail = detail
         super().__init__(self.message)
 
+    @property
+    def headers(self) -> dict[str, str] | None:
+        """Response headers this error must carry, serialized by ``main.aether_error_handler``.
+
+        Empty for almost every error — the ``{code, message}`` body is the contract. It exists
+        for the cases where the status code is only half the answer and the rest belongs in a
+        header a client already knows how to read, ``Retry-After`` on a 429 being the one.
+        """
+        return None
+
 
 class NotFoundError(AetherError):
     """That record was not found. It may have been removed, or the link may be out of date."""
@@ -105,6 +115,45 @@ class TooManyAttemptsError(AetherError):
 
     status_code = 429
     code = "too_many_attempts"
+
+
+class RateLimitExceededError(AetherError):
+    """This is being asked for faster than the system will run it. Wait a moment and try again —
+    nothing was saved to the chart, and the drug-safety checks are unaffected.
+
+    Distinct from ``TooManyAttemptsError`` despite sharing the 429: that one is a security
+    control against credential guessing and locks an account for minutes, this one is a capacity
+    control on work that costs an LLM call and clears in seconds. A client that cannot tell them
+    apart cannot decide between backing off and asking the clinician to sign in again, so they
+    carry different codes.
+
+    The second sentence is not filler. A clinician who hits this mid-consultation needs to know
+    the two things a bare "too many requests" leaves open: whether a half-written record was
+    left in the chart, and whether the deterministic allergy/interaction checks are still
+    answering. Both answers are reassuring, and neither is guessable from the status code.
+    """
+
+    status_code = 429
+    code = "rate_limited"
+
+    def __init__(
+        self,
+        retry_after: int,
+        message: str | None = None,
+        *,
+        detail: str | None = None,
+    ) -> None:
+        self.retry_after = retry_after
+        super().__init__(message, detail=detail)
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """``Retry-After``, so a client can back off correctly without parsing the prose.
+
+        The wait is also stated in ``message`` for the human, but no client should scrape it
+        from there — that text is clinician-facing and gets rewritten.
+        """
+        return {"Retry-After": str(self.retry_after)}
 
 
 class ConflictError(AetherError):

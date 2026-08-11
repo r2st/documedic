@@ -20,8 +20,27 @@ from sqlalchemy.pool import StaticPool
 from app.db import session as db_session
 from app.db.seed import seed_all
 from app.db.session import get_db
+from app.dependencies import limiter
 from app.main import create_app
 from app.models import Base
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Clear the process-wide rate-limit windows around every test.
+
+    ``app.dependencies.limiter`` is a module-level singleton whose state is intentionally not
+    per-request, so without this it accumulates across the whole session and tests start
+    failing on each other's traffic: the per-address signup ceiling alone would be spent by the
+    first handful of ``auth_client`` fixtures and every later test would 429 in setup.
+
+    Both sides of the yield: clearing on the way in gives a test a known-empty window
+    regardless of what ran before it, and clearing on the way out keeps a test that
+    deliberately exhausts a bucket from leaking that into the next one.
+    """
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture(autouse=True)

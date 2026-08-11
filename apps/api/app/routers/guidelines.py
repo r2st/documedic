@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, errors
 from app.schemas.reasoning import CitationOut, ClinicalSuggestionOut
@@ -24,7 +24,9 @@ router = APIRouter(tags=["guidelines"])
     "/guidelines/search",
     response_model=list[CitationOut],
     summary="Search the curated guideline corpus",
-    responses=AUTH_ERRORS,
+    # Embedding + vector search, so metered — see app/core/rate_limit.py.
+    responses=errors(401, 429),
+    dependencies=[Depends(rate_limit("guideline_search"))],
 )
 async def search_guidelines(
     # Bounded so a pathological query cannot drive an unbounded retrieval/embedding cost.

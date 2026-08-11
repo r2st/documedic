@@ -42,7 +42,13 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "drug-safety rule blocks the action (overridable only with documented reasoning), "
         "`email_exists` on duplicate signup, `conflict` otherwise."
     ),
-    429: "Too many failed attempts; the account is temporarily locked (`code: too_many_attempts`).",
+    429: (
+        "Rate limited. `code` is `rate_limited` when a per-account ceiling on work that costs "
+        "an LLM call was exceeded — back off for the seconds named in the `Retry-After` header "
+        "and retry, nothing was written. It is `too_many_attempts` for the sign-in lockout, "
+        "which is a security control and clears only after a cooldown of minutes; retrying is "
+        "not the fix there."
+    ),
     500: (
         "Unhandled server error (`code: internal_error`). The request's transaction is rolled "
         "back before this is returned, so nothing was half-written and a retry is safe. Carries "

@@ -131,6 +131,31 @@ class Settings(BaseSettings):
     login_attempt_window_minutes: int = 15
     login_lockout_minutes: int = 15
 
+    # --- Rate limiting (expensive clinical endpoints) ---
+    # Per-account ceilings on the routes that cost an LLM call, enforced in-process by
+    # app.core.rate_limit. Set any of these to 0 to disable that bucket alone, or
+    # rate_limit_enabled=false to disable all of them.
+    #
+    # The deterministic drug-safety and chart-read routes are deliberately absent: they are
+    # local and cheap, and a 429 on an allergy cross-check reads to a hurried clinician as "no
+    # conflict found". See app/core/rate_limit.py.
+    rate_limit_enabled: bool = True
+    # A full eight-agent panel. POST ../run and GET ../stream share this budget — they run the
+    # same pipeline, so a client must not be able to double its spend by alternating them.
+    rate_limit_reasoning_runs_per_minute: int = 10
+    # Session open + intake answers: one Triage agent call each, so cheaper than a full run but
+    # not free.
+    rate_limit_intake_per_minute: int = 30
+    # Upload: multimodal extraction over a scan, plus Tesseract fallback.
+    rate_limit_uploads_per_minute: int = 20
+    # Guideline search: embeds the query and hits Qdrant. No generation, so the cheapest of
+    # these — the ceiling is here to keep the vector store responsive.
+    rate_limit_searches_per_minute: int = 60
+    # Account creation, keyed by client IP over an hour. Without this the per-account ceilings
+    # above are bypassable by signing up repeatedly; DEMO_MODE removes the credential gate but
+    # not this one.
+    rate_limit_signups_per_hour: int = 10
+
     # --- Field-level encryption (patient PII at rest) ---
     # When unset, a key is derived from app_secret_key (dev convenience). Set explicitly in
     # production so rotating app_secret_key doesn't also break decryption of stored PII.

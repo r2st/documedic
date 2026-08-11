@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.security import create_stream_token, decode_token
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import enforce_rate_limit, get_current_account, rate_limit
 from app.exceptions import TokenError
 from app.models.intake import IntakeQuestion
 from app.models.reasoning_session import ReasoningSession
@@ -39,6 +39,8 @@ router = APIRouter(tags=["reasoning"])
 # Every route here is scoped to one session or one patient, and a session belonging to another
 # account is a 404 rather than a 403 — the same rule the patient routes follow.
 _SESSION_ERRORS = errors(401, 404)
+# The routes that spend an LLM call also advertise the 429 their rate limit can return.
+_METERED_SESSION_ERRORS = errors(401, 404, 429)
 
 
 def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) -> IntakeStateOut:
@@ -54,7 +56,8 @@ def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) 
     response_model=IntakeStateOut,
     status_code=201,
     summary="Open a reasoning session on a presenting complaint",
-    responses=_SESSION_ERRORS,
+    responses=_METERED_SESSION_ERRORS,
+    dependencies=[Depends(rate_limit("reasoning_intake"))],
 )
 async def start_reasoning(
     patient_id: uuid.UUID,
@@ -117,7 +120,8 @@ async def get_intake(
     "/reasoning/{session_id}/intake/answers",
     response_model=IntakeStateOut,
     summary="Answer clarifying questions",
-    responses=_SESSION_ERRORS,
+    responses=_METERED_SESSION_ERRORS,
+    dependencies=[Depends(rate_limit("reasoning_intake"))],
 )
 async def submit_answers(
     session_id: uuid.UUID,
@@ -141,7 +145,8 @@ async def submit_answers(
     "/reasoning/{session_id}/run",
     response_model=ReasoningResultOut,
     summary="Run the eight-agent pipeline and return its verified output",
-    responses=_SESSION_ERRORS,
+    responses=_METERED_SESSION_ERRORS,
+    dependencies=[Depends(rate_limit("reasoning_run"))],
 )
 async def run_reasoning(
     session_id: uuid.UUID,
@@ -246,7 +251,7 @@ async def mint_stream_token(
     "/reasoning/{session_id}/stream",
     summary="Stream the pipeline as it runs (Server-Sent Events)",
     response_class=StreamingResponse,
-    responses=_SESSION_ERRORS
+    responses=_METERED_SESSION_ERRORS
     | {
         200: {
             "description": (
@@ -269,8 +274,20 @@ async def stream_reasoning(
     `POST ../stream-token`. That token is bound to this one session and expires in minutes,
     which is the point: query strings are recorded verbatim by proxy logs and browser history,
     so what ends up there must grant nothing but this stream.
+
+    Metered against the same per-account budget as `POST ../run` — it is the same eight-agent
+    pipeline — and returns 429 with `Retry-After` when that is exhausted. This is the route the
+    ceiling exists for: a browser's `EventSource` reconnects automatically on every transport
+    error, so a tab left open on a failing network re-runs the whole panel on a loop with nobody
+    watching.
     """
     account = await _account_from_query_or_header(request, db, session_id)
+    # Enforced here rather than as a route dependency: `rate_limit()` resolves the account from
+    # the bearer header, and this route deliberately also accepts a `?token=` stream token that
+    # `get_current_account` rejects. Placed after auth so an unauthenticated reconnect cannot
+    # spend the account's budget, and before `get_session` so a throttled request costs one
+    # dictionary lookup rather than a query.
+    enforce_rate_limit("reasoning_run", str(account.id), subject="account")
     service = ReasoningService(db)
     await service.get_session(account.id, session_id)
 
