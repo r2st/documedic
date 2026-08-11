@@ -23,7 +23,7 @@ from app.schemas.document import (
     ExtractionField,
     ExtractionResult,
 )
-from app.services.audit_service import AuditService
+from app.services.audit_service import AuditDraft, AuditService
 from app.services.extraction import ExtractionPipeline
 from app.services.filetype import describe_unsupported, sniff_file_type
 from app.services.graph_service import GraphService
@@ -386,21 +386,25 @@ class DocumentService:
         document.extraction_status = "completed"
         await self.db.flush()
 
-        await self.audit.record(
-            action="extraction_approved",
-            account_id=account_id,
-            patient_id=patient_id,
-            entity_type="document",
-            entity_id=document.id,
-            payload={"merged": counts, "rejected_count": len(rejected)},
-        )
-        await self.audit.record(
-            action="graph_merged",
-            account_id=account_id,
-            patient_id=patient_id,
-            entity_type="patient",
-            entity_id=patient_id,
-            payload=counts,
+        await self.audit.record_many(
+            [
+                AuditDraft(
+                    action="extraction_approved",
+                    account_id=account_id,
+                    patient_id=patient_id,
+                    entity_type="document",
+                    entity_id=document.id,
+                    payload={"merged": counts, "rejected_count": len(rejected)},
+                ),
+                AuditDraft(
+                    action="graph_merged",
+                    account_id=account_id,
+                    patient_id=patient_id,
+                    entity_type="patient",
+                    entity_id=patient_id,
+                    payload=counts,
+                ),
+            ]
         )
         await self.db.commit()
         return counts

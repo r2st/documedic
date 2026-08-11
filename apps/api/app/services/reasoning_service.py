@@ -27,7 +27,7 @@ from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecision
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.patient import Patient
 from app.models.reasoning_session import ReasoningSession
-from app.services.audit_service import AuditService
+from app.services.audit_service import AuditDraft, AuditService
 from app.services.guideline_service import GuidelineService
 from app.services.record_service import RecordService
 from app.services.safety_service import SafetyService
@@ -334,29 +334,34 @@ class ReasoningService:
         session.completed_at = datetime.now(UTC)
         await self.db.flush()
 
-        await self.audit.record(
-            action="reasoning_session_completed",
-            account_id=account_id,
-            patient_id=session.patient_id,
-            entity_type="reasoning_session",
-            entity_id=session.id,
-            payload={
-                "autonomy_tier": state.autonomy_tier,
-                "verifier_status": state.verifier_status,
-                "degraded": state.degraded,
-                "suggestions": len(suggestions),
-                "hard_blocks": len(state.hard_blocks),
-            },
-        )
-        if state.hard_blocks:
-            await self.audit.record(
-                action="hard_block_triggered",
+        closing = [
+            AuditDraft(
+                action="reasoning_session_completed",
                 account_id=account_id,
                 patient_id=session.patient_id,
                 entity_type="reasoning_session",
                 entity_id=session.id,
-                payload={"hard_blocks": [b.summary for b in state.hard_blocks]},
+                payload={
+                    "autonomy_tier": state.autonomy_tier,
+                    "verifier_status": state.verifier_status,
+                    "degraded": state.degraded,
+                    "suggestions": len(suggestions),
+                    "hard_blocks": len(state.hard_blocks),
+                },
             )
+        ]
+        if state.hard_blocks:
+            closing.append(
+                AuditDraft(
+                    action="hard_block_triggered",
+                    account_id=account_id,
+                    patient_id=session.patient_id,
+                    entity_type="reasoning_session",
+                    entity_id=session.id,
+                    payload={"hard_blocks": [b.summary for b in state.hard_blocks]},
+                )
+            )
+        await self.audit.record_many(closing)
         await self.db.commit()
         return session, suggestions
 
@@ -389,21 +394,29 @@ class ReasoningService:
             self.db.add(row)
             rows.append(row)
         await self.db.flush()
-        for row in rows:
-            await self.audit.record(
-                action="clinical_suggestion_created",
-                account_id=account_id,
-                patient_id=session.patient_id,
-                entity_type="clinical_suggestion",
-                entity_id=row.id,
-                payload={
-                    "output_type": row.output_type,
-                    "autonomy_tier": row.autonomy_tier,
-                    "title": row.title,
-                    "is_hard_block": row.is_hard_block,
-                    "cant_miss_flag": row.cant_miss_flag,
-                },
-            )
+        # One batched append rather than one per suggestion. A run emits a suggestion per
+        # differential, per can't-miss finding, per investigation and per management option,
+        # so appending them individually made the audit cost — and the time the global append
+        # lock is held — grow with how much the engine had to say.
+        await self.audit.record_many(
+            [
+                AuditDraft(
+                    action="clinical_suggestion_created",
+                    account_id=account_id,
+                    patient_id=session.patient_id,
+                    entity_type="clinical_suggestion",
+                    entity_id=row.id,
+                    payload={
+                        "output_type": row.output_type,
+                        "autonomy_tier": row.autonomy_tier,
+                        "title": row.title,
+                        "is_hard_block": row.is_hard_block,
+                        "cant_miss_flag": row.cant_miss_flag,
+                    },
+                )
+                for row in rows
+            ]
+        )
         return rows
 
     async def stream(

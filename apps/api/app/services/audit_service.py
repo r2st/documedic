@@ -9,6 +9,8 @@ the chain stays linear under concurrency; on SQLite (tests) execution is already
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -71,11 +73,40 @@ def _chain_entry(row: AuditLog) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class AuditDraft:
+    """One entry to append, before the chain assigns it a sequence and a hash.
+
+    Exists so a caller that produces several entries can hand them over together — see
+    :meth:`AuditService.record_many` for why appending them one at a time is expensive.
+    """
+
+    action: str
+    account_id: uuid.UUID | None = None
+    patient_id: uuid.UUID | None = None
+    entity_type: str | None = None
+    entity_id: uuid.UUID | None = None
+    payload: dict = field(default_factory=dict)
+
+
 class AuditService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
     async def _lock(self) -> None:
+        """Serialize appends across connections. PostgreSQL only; a no-op elsewhere.
+
+        ``pg_advisory_xact_lock`` is held until the caller's transaction *commits*, not until
+        the append returns — there is no unlock. That makes lock hold time a property of the
+        whole request rather than of this method: a request that appends early and then does a
+        second of clinical work holds the global append lock for that second, and every other
+        request that wants to audit anything queues behind it.
+
+        Two consequences the call sites are written around. An entry that describes a *read*
+        is appended after the read, immediately before the commit, so the hold is
+        microseconds. And a caller with several entries hands them to :meth:`record_many`
+        rather than taking the lock once per entry.
+        """
         if self.db.bind and self.db.bind.dialect.name == "postgresql":
             await self.db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_LOCK_KEY})
 
@@ -95,6 +126,37 @@ class AuditService:
     ) -> AuditLog:
         """Append one immutable, hash-chained audit entry. Does not commit.
 
+        A single-entry :meth:`record_many`; the retry and locking behaviour is described there.
+        """
+        appended = await self.record_many(
+            [
+                AuditDraft(
+                    action=action,
+                    account_id=account_id,
+                    patient_id=patient_id,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    payload=payload or {},
+                )
+            ]
+        )
+        return appended[0]
+
+    async def record_many(self, drafts: Sequence[AuditDraft]) -> list[AuditLog]:
+        """Append several entries as one linked run of the chain. Does not commit.
+
+        The batch is what makes broad auditing affordable. Appending N entries by calling
+        :meth:`record` N times costs N advisory-lock round trips, N reads of the chain tail and
+        N savepoints, all of them serialized behind the same global lock — and the call sites
+        that produce several entries produce them per *clinical item*: one per verified
+        suggestion a reasoning run emits, so the cost grew with how much the engine had to say.
+        Here the tail is read once and the entries chain to each other in memory, so the run is
+        one lock acquisition, one read and one savepoint however many entries it carries.
+
+        An empty batch is a no-op that never touches the lock or the table. That is what lets
+        a caller hand over "whatever this request produced" unconditionally without a request
+        that produced nothing paying for the global lock anyway.
+
         Retries on a sequence collision. Assigning the sequence is a read of the current
         maximum followed by an insert, so two appends that overlap can read the same maximum
         and claim the same sequence; the unique constraint then fails one of them. On
@@ -103,58 +165,69 @@ class AuditService:
         The retry is what makes the invariant hold, and it holds on every backend, including
         the SQLite deployments where ``_lock`` does nothing at all.
 
-        Each attempt re-reads the tail of the chain, because a collision means someone else
-        appended: both the sequence *and* ``prev_hash`` have moved, so the record hash has to
-        be recomputed against the new predecessor or the chain would not verify.
+        Each attempt rebuilds the *whole* batch rather than only the entry that lost. A
+        collision means someone else appended, so the sequence and the ``prev_hash`` the batch
+        was built on have both moved; every hash in the run is computed from its predecessor,
+        so recomputing only the first would leave the rest chained to a hash that is no longer
+        where they claim it is.
 
         The insert runs inside a SAVEPOINT so a failed attempt rolls back only itself. Without
         that, the unique violation would poison the caller's whole transaction — and the
-        caller is mid-way through writing the clinical data this entry describes.
+        caller is mid-way through writing the clinical data these entries describe.
         """
+        if not drafts:
+            return []
+
         await self._lock()
-        payload = payload or {}
 
         for attempt in range(_MAX_SEQUENCE_ATTEMPTS):
             latest = await self._latest()
             sequence = (latest.sequence + 1) if latest else 1
             prev_hash = latest.record_hash if latest else GENESIS_HASH
-            created_at = datetime.now(UTC)
 
-            canonical = canonical_payload(
-                sequence=sequence,
-                action=action,
-                account_id=str(account_id) if account_id else None,
-                patient_id=str(patient_id) if patient_id else None,
-                entity_type=entity_type,
-                entity_id=str(entity_id) if entity_id else None,
-                payload=payload,
-                created_at=_iso_utc(created_at),
-            )
-            record_hash = compute_record_hash(prev_hash, canonical)
+            entries: list[AuditLog] = []
+            for offset, draft in enumerate(drafts):
+                created_at = datetime.now(UTC)
+                canonical = canonical_payload(
+                    sequence=sequence + offset,
+                    action=draft.action,
+                    account_id=str(draft.account_id) if draft.account_id else None,
+                    patient_id=str(draft.patient_id) if draft.patient_id else None,
+                    entity_type=draft.entity_type,
+                    entity_id=str(draft.entity_id) if draft.entity_id else None,
+                    payload=draft.payload,
+                    created_at=_iso_utc(created_at),
+                )
+                record_hash = compute_record_hash(prev_hash, canonical)
+                entries.append(
+                    AuditLog(
+                        sequence=sequence + offset,
+                        account_id=draft.account_id,
+                        patient_id=draft.patient_id,
+                        action=draft.action,
+                        entity_type=draft.entity_type,
+                        entity_id=draft.entity_id,
+                        payload=draft.payload,
+                        prev_hash=prev_hash,
+                        record_hash=record_hash,
+                        created_at=created_at,
+                    )
+                )
+                # The next entry chains to this one, exactly as it would have done had it been
+                # appended in its own call straight after this one.
+                prev_hash = record_hash
 
-            entry = AuditLog(
-                sequence=sequence,
-                account_id=account_id,
-                patient_id=patient_id,
-                action=action,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                payload=payload,
-                prev_hash=prev_hash,
-                record_hash=record_hash,
-                created_at=created_at,
-            )
             try:
                 async with self.db.begin_nested():
-                    self.db.add(entry)
+                    self.db.add_all(entries)
                     await self.db.flush()
             except IntegrityError:
                 if attempt == _MAX_SEQUENCE_ATTEMPTS - 1:
                     raise
-                # The savepoint rollback has already detached `entry`; the next attempt
-                # builds a fresh one against the chain tail as it now stands.
+                # The savepoint rollback has already detached every entry; the next attempt
+                # builds a fresh batch against the chain tail as it now stands.
                 continue
-            return entry
+            return entries
 
         raise AssertionError("unreachable: the loop returns or raises on the final attempt")
 
