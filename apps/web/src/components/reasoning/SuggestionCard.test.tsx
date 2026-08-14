@@ -544,6 +544,27 @@ describe('SuggestionCard with malformed reasoning output', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(3);
   });
 
+  it('reads the alternative keys a model uses for an evidence item, and flattens the rest', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          evidence: {
+            evidence_for: [
+              { finding: 'Crackles at the right base' },
+              { observation: 'Respiratory rate 24', severity: 'moderate' },
+            ],
+            evidence_against: [],
+          },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+
+    expect(screen.getByText('Crackles at the right base')).toBeInTheDocument();
+    // No recognised key: the object's own values are joined rather than dropped.
+    expect(screen.getByText('Respiratory rate 24; moderate')).toBeInTheDocument();
+  });
+
   it('renders the conclusion when the evidence object is missing entirely', () => {
     render(
       <SuggestionCard
