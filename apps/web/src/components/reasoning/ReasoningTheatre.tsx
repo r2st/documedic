@@ -3,10 +3,16 @@
 import { useEffect } from 'react';
 import { Card, ErrorBanner } from '@/components/ui';
 import { useReasoningStream } from '@/hooks/useReasoningStream';
+import type { AgentLane } from '@/hooks/useReasoningStream';
 import { AutonomyBadge } from './badges';
 import type { AutonomyTier } from '@/lib/types';
 
-const DOT: Record<string, string> = {
+// Keyed by the lane status union rather than by `string`, so both maps are total by
+// construction: a lane's status is only ever assigned by the stream reducer (never taken from
+// the server's payload), so there is no unknown-status case to fall back to at runtime. Typing
+// them this way makes adding a fourth status a compile error here instead of a lane that
+// silently renders with no dot and reads out a raw enum value to a screen reader.
+const DOT: Record<AgentLane['status'], string> = {
   idle: 'bg-slate-300 ring-2 ring-slate-100',
   running: 'bg-brand-500 ring-2 ring-brand-100 animate-pulse',
   done: 'bg-emerald-500 ring-2 ring-emerald-100',
@@ -14,7 +20,7 @@ const DOT: Record<string, string> = {
 
 // A lane's progress is drawn as a coloured dot and, when finished, a tick. Both are colour and
 // shape only, so the same fact is spelled out for a screen reader alongside the lane's name.
-const LANE_STATUS: Record<string, string> = {
+const LANE_STATUS: Record<AgentLane['status'], string> = {
   idle: 'waiting',
   running: 'running',
   done: 'done',
@@ -100,7 +106,7 @@ export function ReasoningTheatre({
               >
                 {lane.label}
               </span>
-              <span className="sr-only">{LANE_STATUS[lane.status] ?? lane.status}</span>
+              <span className="sr-only">{LANE_STATUS[lane.status]}</span>
               {lane.status === 'done' && (
                 <svg aria-hidden="true" className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />

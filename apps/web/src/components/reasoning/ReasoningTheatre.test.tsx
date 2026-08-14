@@ -196,6 +196,28 @@ describe('ReasoningTheatre', () => {
     expect(done.closest('li')?.querySelector('svg')).not.toBeNull();
   });
 
+  it('spells out every lane status for a screen reader, not just the dot colour', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    // Three lanes held at the three different statuses at once, so each arm of the status map
+    // is asserted against a lane whose only other cues (dot colour, tick) are visual.
+    act(() => {
+      source.emit('reasoning_start', { sequence: ['triage', 'verifier', 'synthesis'] });
+      source.emit('agent_start', { agent: 'triage', label: 'Triage' });
+      source.emit('agent_complete', { agent: 'triage' });
+      source.emit('agent_start', { agent: 'verifier', label: 'Verifier' });
+    });
+
+    const laneStatus = (label: string) =>
+      screen.getByText(label).closest('li')?.querySelector('.sr-only')?.textContent;
+
+    expect(laneStatus('Triage')).toBe('done');
+    expect(laneStatus('Verifier')).toBe('running');
+    // Untouched by any agent event, so still queued behind the ones that have started.
+    expect(laneStatus('synthesis')).toBe('waiting');
+  });
+
   it('renders the live hypothesis ranking with each probability band', async () => {
     render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
     const source = await latestSource();
