@@ -276,3 +276,128 @@ describe('UploadPage approval guards', () => {
     expect(push).not.toHaveBeenCalled();
   });
 });
+
+describe('UploadPage retries', () => {
+  beforeEach(() => {
+    push.mockReset();
+    vi.mocked(api.uploadDocument).mockReset().mockResolvedValue(DOC);
+    vi.mocked(api.getExtraction).mockReset();
+    vi.mocked(api.approveExtraction).mockReset().mockResolvedValue({ merged: {} });
+  });
+
+  it('retries only the extraction read when the file is already stored', async () => {
+    // The document is uploaded; only the read of its extraction failed. Re-posting the file
+    // would put the same lab report in the chart twice, so the retry must re-read instead.
+    vi.mocked(api.getExtraction).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    expect(
+      await screen.findByText(/reading the extracted details may not have completed/),
+    ).toBeInTheDocument();
+
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction());
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Review extraction')).toBeInTheDocument();
+    expect(api.uploadDocument).toHaveBeenCalledOnce();
+    expect(api.getExtraction).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers no retry when the upload itself got no response', async () => {
+    // `fetch` threw, so the POST may have landed and only the reply been lost. A retry button
+    // here is how the same document is stored twice; the message says to reload and look.
+    vi.mocked(api.uploadDocument).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+
+    await screen.findByText(/the upload may not have completed/);
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('offers a retry when the server answered and refused the upload', async () => {
+    // An ApiError means the server responded and stored nothing, so re-posting is safe.
+    vi.mocked(api.uploadDocument).mockRejectedValueOnce(
+      new ApiError(503, 'unavailable', 'Document storage is temporarily unavailable.'),
+    );
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction());
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Document storage is temporarily unavailable.');
+
+    vi.mocked(api.uploadDocument).mockResolvedValue(DOC);
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Review extraction')).toBeInTheDocument();
+    expect(api.uploadDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers no retry when an approval got no response', async () => {
+    // The entities may already be merged into the chart; sending again would merge them twice.
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction());
+    vi.mocked(api.approveExtraction).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Review extraction');
+    await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
+
+    await screen.findByText(/the approval of these extracted details may not have completed/);
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('retries an approval the server refused, keeping the excluded entities excluded', async () => {
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction());
+    vi.mocked(api.approveExtraction).mockRejectedValueOnce(
+      new ApiError(503, 'unavailable', 'The record service is temporarily unavailable.'),
+    );
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Review extraction');
+    // Exclude the second entity, then fail the approval and retry it.
+    await user.click(screen.getByRole('checkbox', { name: /Include lab_result 2/ }));
+    await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
+    await screen.findByText('The record service is temporarily unavailable.');
+
+    vi.mocked(api.approveExtraction).mockResolvedValue({ merged: {} });
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/patients/pat-1'));
+    expect(api.approveExtraction).toHaveBeenNthCalledWith(2, 'pat-1', 'doc-1', [1]);
+  });
+
+  it('clears the failed attempt while the retry is in flight', async () => {
+    vi.mocked(api.getExtraction).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    await screen.findByRole('button', { name: 'Try again' });
+
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction());
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('keeps the banner and the retry when the retry fails again', async () => {
+    vi.mocked(api.getExtraction).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+
+    await user.upload(fileInput(container), PDF);
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(api.getExtraction).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Review extraction')).not.toBeInTheDocument();
+  });
+});

@@ -11,21 +11,40 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const [drug, setDrug] = useState('');
   const [result, setResult] = useState<SafetyCheckResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The message and the drug it was about, in one value. The drug is kept because a clinician
+  // may well have started typing the next drug before noticing the banner, and the retry has to
+  // re-run the check they actually asked for — not whatever is in the field now. Holding both
+  // together also means there is no representable state where a banner is shown with nothing to
+  // retry it against.
+  const [failure, setFailure] = useState<{ message: string; drug: string } | null>(null);
 
-  async function check(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  /**
+   * Run the deterministic safety check.
+   *
+   * Unlike the upload and the decision writes, this one is safe to repeat unconditionally: it
+   * reads the patient's allergies, current medications, conditions and renal function and
+   * returns a verdict — nothing is written to the chart, so a request that may or may not have
+   * reached the server can simply be sent again. Worth having here more than anywhere else in
+   * the app, because the answer being retried is whether a drug is contraindicated, and the
+   * alternative to a retry button is a clinician deciding without one.
+   */
+  async function runCheck(drugName: string) {
+    setFailure(null);
     setResult(null);
     setBusy(true);
     try {
-      setResult(await api.checkDrugSafety(id, { drug_name: drug }));
+      setResult(await api.checkDrugSafety(id, { drug_name: drugName }));
     } catch (err) {
-      setError(requestErrorMessage(err, 'the drug safety check'));
+      setFailure({ message: requestErrorMessage(err, 'the drug safety check'), drug: drugName });
     } finally {
       setBusy(false);
     }
+  }
+
+  async function check(e: React.FormEvent) {
+    e.preventDefault();
+    await runCheck(drug);
   }
 
   return (
@@ -88,7 +107,15 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
             {busy ? 'Checking…' : 'Check'}
           </Button>
         </form>
-        {error && <ErrorBanner message={error} className="mt-3" />}
+        {failure && (
+          <ErrorBanner
+            message={failure.message}
+            className="mt-3"
+            onRetry={() => void runCheck(failure.drug)}
+            retrying={busy}
+            retryLabel="Check again"
+          />
+        )}
       </Card>
 
       {/* The verdict arrives without moving focus, so it has to be announced. Polite rather

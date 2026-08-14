@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { ExtractionResult } from '@/lib/types';
 import { Button, Card, ConfidenceBadge, ErrorBanner } from '@/components/ui';
@@ -19,20 +19,75 @@ export default function UploadPage({ params }: { params: { id: string } }) {
   );
   const [rejected, setRejected] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // How to retry whatever just failed, or null when a retry would not be safe.
+  //
+  // Which of the two calls behind "upload" failed decides this, and the difference matters
+  // enough to be modelled rather than glossed:
+  //
+  //   - `uploadDocument` rejected with an ApiError. The server answered, so it decided not to
+  //     store the file (too large, wrong type, a 500 on its side). Posting it again creates
+  //     nothing that is not already meant to be there.
+  //   - `uploadDocument` rejected without a response — `fetch` itself threw. The POST may well
+  //     have landed and only the reply been lost, so a blind retry is how a patient's chart
+  //     ends up with the same lab report twice. No retry here; the message already says to
+  //     reload and look before trying again.
+  //   - `getExtraction` failed. The document is stored and has an id; the extraction is an
+  //     idempotent read of it. This is the case worth having, because without it the obvious
+  //     move is to upload the file a second time — which is exactly the duplicate that had to
+  //     be avoided above.
+  const [retry, setRetry] = useState<(() => void) | null>(null);
   const [busy, setBusy] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   // The file input is a transparent overlay on the drop zone, so its own focus ring is
   // invisible. Without this a keyboard user tabs onto the control and sees nothing change.
   const [inputFocused, setInputFocused] = useState(false);
 
+  function fail(err: unknown, what: string, onRetry: (() => void) | null) {
+    setError(requestErrorMessage(err, what));
+    // Stored via the updater form: React would otherwise call a bare function argument as a
+    // state initialiser rather than storing it.
+    setRetry(() => onRetry);
+  }
+
   async function onUpload(file: File) {
+    // Cleared before the retry: a failed upload says the work "may not have completed", so
+    // leaving that banner up while the retry is in flight describes the previous attempt as
+    // though it were the current one.
     setError(null);
+    setRetry(null);
     setBusy(true);
     try {
       const doc = await api.uploadDocument(id, file);
-      setReviewed({ docId: doc.id, extraction: await api.getExtraction(id, doc.id) });
+      await loadExtraction(doc.id);
     } catch (err) {
-      setError(requestErrorMessage(err, 'the upload'));
+      fail(err, 'the upload', err instanceof ApiError ? () => void onUpload(file) : null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Read the extraction for a document that is already stored.
+   *
+   * Split out of the upload so a failure here can be retried on its own, and deliberately
+   * swallowing rather than rethrowing: it has already set the banner that names this step, and
+   * letting it unwind into `onUpload`'s catch would relabel it as a failed upload and offer to
+   * post the file a second time.
+   */
+  async function loadExtraction(docId: string) {
+    try {
+      setReviewed({ docId, extraction: await api.getExtraction(id, docId) });
+    } catch (err) {
+      fail(err, 'reading the extracted details', () => void retryExtraction(docId));
+    }
+  }
+
+  async function retryExtraction(docId: string) {
+    setError(null);
+    setRetry(null);
+    setBusy(true);
+    try {
+      await loadExtraction(docId);
     } finally {
       setBusy(false);
     }
@@ -60,12 +115,21 @@ export default function UploadPage({ params }: { params: { id: string } }) {
     // completed" and to reload before retrying, so leaving that banner up while the retry is in
     // flight describes the previous attempt as though it were the current one.
     setError(null);
+    setRetry(null);
     setBusy(true);
     try {
       await api.approveExtraction(id, docId, [...rejected]);
       router.push(`/patients/${id}`);
     } catch (err) {
-      setError(requestErrorMessage(err, 'the approval of these extracted details'));
+      // Same split as the upload, for the same reason and with more at stake: an approval that
+      // the server rejected merged nothing and can be sent again, but one that got no response
+      // may already have merged these entities into the chart. Retrying that blind is how the
+      // same prescription is written into a patient's record twice.
+      fail(
+        err,
+        'the approval of these extracted details',
+        err instanceof ApiError ? () => void approve(docId) : null,
+      );
     } finally {
       setBusy(false);
     }
@@ -100,7 +164,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
 
       <h1 className="text-2xl font-bold tracking-tight text-slate-900">Upload document</h1>
 
-      {error && <ErrorBanner message={error} />}
+      {error && <ErrorBanner message={error} onRetry={retry ?? undefined} retrying={busy} />}
 
       {!reviewed && (
         <Card>

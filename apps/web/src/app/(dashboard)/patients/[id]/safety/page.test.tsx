@@ -191,3 +191,77 @@ describe('SafetyPage scope summary', () => {
     expect(screen.queryByText(/eGFR available/)).not.toBeInTheDocument();
   });
 });
+
+describe('SafetyPage retries', () => {
+  beforeEach(() => {
+    vi.mocked(api.checkDrugSafety).mockReset();
+  });
+
+  it('re-runs the check when a transient failure is retried', async () => {
+    // The check writes nothing to the chart, so it is safe to repeat unconditionally — and the
+    // answer being retried is whether a drug is contraindicated.
+    vi.mocked(api.checkDrugSafety).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = await runCheck('Brufen');
+
+    await screen.findByText(/the drug safety check may not have completed/);
+
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(result());
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+
+    expect(await screen.findByText('Ibuprofen')).toBeInTheDocument();
+    expect(api.checkDrugSafety).toHaveBeenCalledTimes(2);
+    expect(api.checkDrugSafety).toHaveBeenLastCalledWith('pat-1', { drug_name: 'Brufen' });
+  });
+
+  it('retries the drug that failed, not whatever has since been typed into the field', async () => {
+    vi.mocked(api.checkDrugSafety).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = await runCheck('Brufen');
+    await screen.findByRole('button', { name: 'Check again' });
+
+    // The clinician moves on to the next drug before noticing the banner.
+    await user.clear(screen.getByPlaceholderText(/Proposed drug/));
+    await user.type(screen.getByPlaceholderText(/Proposed drug/), 'Crocin');
+
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(result());
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+
+    expect(api.checkDrugSafety).toHaveBeenLastCalledWith('pat-1', { drug_name: 'Brufen' });
+  });
+
+  it('offers the retry when the server itself returned the error', async () => {
+    vi.mocked(api.checkDrugSafety).mockRejectedValue(
+      new ApiError(503, 'unavailable', 'The safety service is temporarily unavailable.'),
+    );
+    await runCheck();
+
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent('The safety service is temporarily unavailable.');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+  });
+
+  it('clears the failed attempt once the retry succeeds', async () => {
+    vi.mocked(api.checkDrugSafety).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = await runCheck();
+    await screen.findByRole('button', { name: 'Check again' });
+
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(result());
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByText('No hard block')).toBeInTheDocument();
+  });
+
+  it('drops a stale verdict as soon as a retry starts', async () => {
+    // A verdict left on screen under an error banner is the dangerous state here: it reads as
+    // the answer for the drug the clinician just asked about.
+    vi.mocked(api.checkDrugSafety).mockResolvedValueOnce(result());
+    const user = await runCheck();
+    await screen.findByText('Ibuprofen');
+
+    vi.mocked(api.checkDrugSafety).mockRejectedValue(new TypeError('Failed to fetch'));
+    await user.click(screen.getByRole('button', { name: 'Check' }));
+
+    await screen.findByRole('alert');
+    expect(screen.queryByText('Ibuprofen')).not.toBeInTheDocument();
+  });
+});
