@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import replace
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.safety import (
@@ -31,6 +31,7 @@ from app.models.derived_marker import DerivedMarker
 from app.models.drug_safety_check import DrugSafetyCheck
 from app.models.drug_safety_override import DrugSafetyOverride
 from app.models.drug_vocabulary import Contraindication, DrugInteraction, DrugVocabulary
+from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 from app.services.audit_service import AuditService
@@ -206,18 +207,43 @@ class SafetyService:
         ]
 
     async def _latest_egfr(self, patient_id: uuid.UUID) -> float | None:
+        """The patient's current eGFR — the one derived from the most recent blood draw.
+
+        Ordered by the *sample date of the source creatinine*, not by ``computed_at``.
+        ``computed_at`` is when the CKD-EPI arithmetic ran, which is ingestion time: every
+        marker on a document approved today carries today's timestamp no matter when the blood
+        was drawn. This product exists to read fragmented histories, and a patient's reports are
+        uploaded in whatever order they come out of the folder, so "today's upload is a report
+        from 2019" is the ordinary case rather than a contrived one.
+
+        Sorting on that put a seven-year-old eGFR of 95 ahead of last month's 22 and handed it
+        to ``_evaluate_renal``, which is the only input to the metformin hard block below 30 —
+        so the block did not fire, and the response said ``is_blocked: false`` for a patient
+        whose current renal function is in the chart. Nothing about the answer showed which
+        measurement it was computed from. ``LabResult`` has ordered by ``sample_date`` on both
+        its readers since it was written; this is the derived side agreeing with it.
+
+        ``coalesce`` rather than a ``NULLS LAST``: sample dates come out of OCR and are
+        routinely missing, and for a row with nothing else to sort on, when it was computed is
+        still the best proxy available. Excluding those rows would drop a real measurement from
+        the safety check to avoid mis-ranking it, which is the worse trade. ``computed_at``
+        breaks ties (two draws that share a date), and the id makes the result stable rather
+        than leaving a tie to the planner.
+        """
+        observed_at = func.coalesce(LabResult.sample_date, DerivedMarker.computed_at)
         result = await self.db.execute(
-            select(DerivedMarker)
+            select(DerivedMarker.value_numeric)
+            .outerjoin(LabResult, LabResult.id == DerivedMarker.source_lab_result_id)
             .where(
                 DerivedMarker.patient_id == patient_id,
                 DerivedMarker.marker_name == "eGFR",
                 DerivedMarker.is_deleted.is_(False),
             )
-            .order_by(DerivedMarker.computed_at.desc())
+            .order_by(observed_at.desc(), DerivedMarker.computed_at.desc(), DerivedMarker.id)
             .limit(1)
         )
-        marker = result.scalar_one_or_none()
-        return float(marker.value_numeric) if marker else None
+        value = result.scalars().first()
+        return float(value) if value is not None else None
 
     async def _load_interactions(self, reference_ids: set[str]) -> list[InteractionRule]:
         """Interaction rules whose *both* endpoints are drugs in play.
