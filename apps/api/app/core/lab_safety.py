@@ -176,6 +176,18 @@ def _to_canonical_value(canonical: str, value: float, unit: str | None) -> float
     return value * factor
 
 
+def creatinine_to_mg_dl(value: float, unit: str | None) -> float | None:
+    """A creatinine reading in mg/dL, or None when the unit is not one this module can read.
+
+    Exposed because the eGFR derivation needs exactly the conversion the critical-value guard
+    already does — the same row was being converted here and taken at face value there, so a
+    creatinine reported in µmol/L was read correctly by one and off by a factor of 88 by the
+    other. Returning None rather than a guess is the contract every caller depends on: a
+    creatinine in units this module cannot interpret has to be skipped, not assumed.
+    """
+    return _to_canonical_value("creatinine", value, unit)
+
+
 def _normalize_unit_key(unit: str | None) -> str:
     """Normalized-but-with-slash key used to look up _UNIT_CONVERSIONS (e.g. ``mmol/l``)."""
     return re.sub(r"[^a-z0-9/]", "", _micro((unit or "").strip().lower()))

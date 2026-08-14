@@ -19,7 +19,7 @@ from app.core.clinical import (
     age_from_dob,
     ckd_epi_2021_egfr,
     egfr_reference_abnormal,
-    is_creatinine_marker,
+    serum_creatinine_mg_dl,
 )
 from app.core.dates import is_plausible_clinical_date, parse_clinical_date
 from app.models.allergy import Allergy
@@ -542,14 +542,20 @@ class GraphService:
         if patient.date_of_birth is None or patient.sex not in ("male", "female"):
             return
         for lab in new_labs:
-            if not is_creatinine_marker(lab.marker_name) or lab.value_numeric is None:
+            # Identity and units together, and both must be certain: a urine creatinine or a
+            # creatinine clearance is not this equation's input, and a serum creatinine in
+            # µmol/L is off by a factor of 88. Either way the answer is to derive nothing and
+            # let the renal check say it had no eGFR, rather than write a fabricated one into
+            # the chart and hard-block off it.
+            creatinine = serum_creatinine_mg_dl(lab.marker_name, lab.value_numeric, lab.unit)
+            if creatinine is None:
                 continue
             try:
                 age = age_from_dob(
                     patient.date_of_birth, (lab.sample_date or datetime.now(UTC)).date()
                 )
                 result = ckd_epi_2021_egfr(
-                    creatinine_mg_dl=float(lab.value_numeric),
+                    creatinine_mg_dl=creatinine,
                     age_years=age,
                     sex=patient.sex,
                 )

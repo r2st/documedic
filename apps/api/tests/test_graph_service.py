@@ -375,6 +375,72 @@ async def test_non_creatinine_labs_produce_no_derived_marker(db):
     assert await _rows(db, DerivedMarker, patient) == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("marker_name", "value", "unit"),
+    [
+        ("Creatinine Clearance", 95.0, "mL/min"),
+        ("Urine Creatinine", 120.0, "mg/dL"),
+        ("24h Urine Creatinine", 1400.0, "mg/24h"),
+        ("Albumin/Creatinine Ratio", 30.0, "mg/g"),
+        ("Creatine Kinase", 180.0, "U/L"),
+    ],
+)
+async def test_a_creatinine_that_is_not_a_serum_creatinine_derives_no_egfr(
+    db, marker_name, value, unit
+):
+    """These all used to match on the substring "creatinine" and reach CKD-EPI.
+
+    A creatinine clearance of 95 mL/min read as 95 mg/dL yields an eGFR of 0.36 — a fabricated
+    number written into the chart as a derived clinical marker, and the sole input to the
+    metformin hard block below 30.
+    """
+    patient = await _patient(db)
+    await GraphService(db).merge_entities(
+        patient=patient,
+        document=None,
+        entities=[_entity("lab_result", marker_name=marker_name, value_numeric=value, unit=unit)],
+    )
+    assert await _rows(db, DerivedMarker, patient) == []
+
+
+@pytest.mark.asyncio
+async def test_a_serum_creatinine_in_micromoles_is_converted_before_the_equation(db):
+    """88 µmol/L is a normal 1.0 mg/dL. Taken at face value it is an eGFR of 0.4.
+
+    The critical-value guard already converted this unit; the eGFR derivation did not, so the
+    same lab row was read two different ways by two halves of the same safety engine.
+    """
+    patient = await _patient(db)
+    await GraphService(db).merge_entities(
+        patient=patient,
+        document=None,
+        entities=[
+            _entity("lab_result", marker_name="Serum creatinine", value_numeric=88.0, unit="µmol/L")
+        ],
+    )
+
+    markers = await _rows(db, DerivedMarker, patient)
+    assert len(markers) == 1
+    # A normal-for-age eGFR, not the 0.4 that reading 88 as mg/dL produces.
+    assert float(markers[0].value_numeric) > 60
+    assert markers[0].input_values["creatinine_mg_dl"] == pytest.approx(1.0, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_serum_creatinine_in_an_unreadable_unit_derives_nothing(db):
+    """Skipped rather than guessed, so the renal check reports having had no eGFR."""
+    patient = await _patient(db)
+    await GraphService(db).merge_entities(
+        patient=patient,
+        document=None,
+        entities=[
+            _entity("lab_result", marker_name="Serum creatinine", value_numeric=1.4, unit="mmol/L")
+        ],
+    )
+    assert await _rows(db, DerivedMarker, patient) == []
+
+
 # --- Mixed batches and coercion helpers ------------------------------------------------
 
 
