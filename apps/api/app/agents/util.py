@@ -7,6 +7,7 @@ from typing import Any
 
 from app.agents.context import ReasoningContext
 from app.agents.llm import LLMUnavailable
+from app.agents.untrusted import UNTRUSTED_DATA_FRAMING
 
 _BANDS = {"high", "moderate", "low", "very_low"}
 
@@ -14,12 +15,25 @@ _BANDS = {"high", "moderate", "low", "very_low"}
 async def call_llm(
     ctx: ReasoningContext, system: str, user: str, *, verifier: bool = False
 ) -> dict[str, Any] | None:
-    """Call Claude off the event loop. Return parsed JSON, or None to trigger fallback."""
+    """Call Claude off the event loop. Return parsed JSON, or None to trigger fallback.
+
+    Every system prompt leaves here carrying :data:`~app.agents.untrusted.UNTRUSTED_DATA_FRAMING`,
+    appended at this one point rather than written into each prompt in
+    :mod:`app.agents.prompts`. The user message is assembled from patient-record text that
+    reached us through OCR of a document someone handed over, so the boundary clause is a
+    property of *making an LLM call at all*, not of any one agent remembering it. An agent added
+    later (the module pattern in CLAUDE.md invites exactly that) gets it without knowing it
+    exists, and cannot be the one that ships without it.
+
+    It goes last so it is the final thing in the system prompt, after each agent's own hard
+    rules — closest to the untrusted text it governs.
+    """
     client = ctx.verifier_llm if verifier else ctx.llm
     if not client.available():
         return None
+    framed = f"{system}\n{UNTRUSTED_DATA_FRAMING}"
     try:
-        return await asyncio.to_thread(client.complete_json, system, user)
+        return await asyncio.to_thread(client.complete_json, framed, user)
     except LLMUnavailable:
         return None
 

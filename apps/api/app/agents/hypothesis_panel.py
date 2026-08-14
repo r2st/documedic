@@ -9,6 +9,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import HYPOTHESIS_PANEL
 from app.agents.state import CaseState, Evidence, Hypothesis
 from app.agents.tools import active_condition_names, summarize_snapshot
+from app.agents.untrusted import fenced, fenced_qa
 from app.agents.util import as_text, call_llm, norm_band, objects, text_blob
 
 AGENT = "hypothesis_panel"
@@ -140,8 +141,12 @@ async def _run_specialist(
         ctx,
         # .replace (not .format): the prompt embeds a literal JSON schema with { } braces.
         HYPOTHESIS_PANEL.replace("{specialty}", name),
-        f"Presenting complaint: {state.presenting_complaint}\n\nPatient record:\n{summary}\n\n"
-        f"Intake answers: {[{'q': q.text, 'a': q.answer} for q in state.intake_questions]}",
+        "Presenting complaint:\n"
+        + fenced("presenting complaint", state.presenting_complaint)
+        + "\n\nPatient record:\n"
+        + fenced("patient record", summary)
+        + "\n\nIntake answers:\n"
+        + fenced_qa("intake answers", [(q.text, q.answer) for q in state.intake_questions]),
     )
     if not result:
         return []

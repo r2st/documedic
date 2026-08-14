@@ -16,6 +16,7 @@ from app.agents.context import ReasoningContext, resolve_retrieved
 from app.agents.llm import using_simulated_llm
 from app.agents.prompts import GUIDELINE_RAG
 from app.agents.state import CaseState, GuidelineChunkRef, ManagementOption
+from app.agents.untrusted import fenced
 from app.agents.util import as_float, as_text, call_llm, objects
 
 AGENT = "guideline_rag"
@@ -77,7 +78,15 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
         result = await call_llm(
             ctx,
             GUIDELINE_RAG,
-            f"Case: {_query(state)}\n\nRetrieved guideline excerpts:\n{excerpts}",
+            # The excerpts are fenced alongside the case. The corpus is curated rather than
+            # user-supplied, so this is the weaker of the two risks -- but a guideline chunk is
+            # bulk prose from an ingested PDF, it reaches the prompt by the same route, and this
+            # is the node whose whole contract is "cite only what you were given". A fence is
+            # what makes "what you were given" a position in the message rather than a promise.
+            "Case:\n"
+            + fenced("case", _query(state))
+            + "\n\nRetrieved guideline excerpts:\n"
+            + fenced("guideline excerpts", excerpts),
         )
         if result:
             raw_options = result.get("options")

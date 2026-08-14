@@ -6,6 +6,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import INVESTIGATION_STRATEGIST
 from app.agents.state import CaseState, Investigation
 from app.agents.tools import compute_discriminating_test
+from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, norm_band, objects
 
 AGENT = "investigation_strategist"
@@ -18,8 +19,11 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     result = await call_llm(
         ctx,
         INVESTIGATION_STRATEGIST,
-        "Leading hypotheses: "
-        + ", ".join(f"{h.diagnosis_name} ({h.probability_band})" for h in leaders),
+        "Leading hypotheses:\n"
+        + fenced(
+            "leading hypotheses",
+            "\n".join(f"{h.diagnosis_name} ({h.probability_band})" for h in leaders),
+        ),
     )
     investigations: list[Investigation] = []
     if result:

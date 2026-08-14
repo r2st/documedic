@@ -16,6 +16,7 @@ from app.agents.state import (
     more_conservative_tier,
 )
 from app.agents.tools import summarize_snapshot
+from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, text_list
 
 AGENT = "verifier"
@@ -58,10 +59,20 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     result = await call_llm(
         ctx,
         VERIFIER,
-        f"Presenting complaint: {state.presenting_complaint}\nRecord:\n{summary}\n\n"
-        f"Hypotheses to verify: "
-        + "; ".join(f"{h.diagnosis_name} ({h.probability_band})" for h in leaders)
-        + f"\nManagement options: {len(state.management_options)}; "
+        # The gate is the agent an injection most wants to reach: everything the other seven
+        # produce is re-checked here, and this is where the autonomy tier is set. So the record
+        # text and the hypothesis names -- both of which the panel may have carried an
+        # injection into -- are fenced, while the two counts below are ours and are not.
+        "Presenting complaint:\n"
+        + fenced("presenting complaint", state.presenting_complaint)
+        + "\n\nRecord:\n"
+        + fenced("patient record", summary)
+        + "\n\nHypotheses to verify:\n"
+        + fenced(
+            "hypotheses to verify",
+            "\n".join(f"{h.diagnosis_name} ({h.probability_band})" for h in leaders),
+        )
+        + f"\n\nManagement options: {len(state.management_options)}; "
         f"hard blocks: {len(state.hard_blocks)}",
         verifier=True,
     )

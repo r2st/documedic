@@ -12,6 +12,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import CANT_MISS_SENTINEL
 from app.agents.state import CaseState, Evidence, Hypothesis
 from app.agents.tools import summarize_snapshot
+from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, norm_band, objects, text_blob
 
 AGENT = "cant_miss_sentinel"
@@ -48,7 +49,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     # case the deterministic rules above it: those are the offline safety floor, they have
     # already been applied, and an AttributeError here would discard them along with the whole
     # session. Unusable entries are dropped and the rule table stands. See ``util.objects``.
-    result = await call_llm(ctx, CANT_MISS_SENTINEL, f"Case:\n{blob}")
+    result = await call_llm(ctx, CANT_MISS_SENTINEL, "Case:\n" + fenced("case", blob))
     if result:
         for cm in objects(result.get("cant_miss")):
             name = as_text(cm.get("diagnosis_name"))

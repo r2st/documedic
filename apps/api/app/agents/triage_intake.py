@@ -7,6 +7,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import TRIAGE_INTAKE
 from app.agents.state import CaseState, IntakeQuestionState
 from app.agents.tools import summarize_snapshot
+from app.agents.untrusted import fenced, fenced_qa
 from app.agents.util import as_float, as_text, call_llm, objects, text_blob
 
 AGENT = "triage_intake"
@@ -36,9 +37,12 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     result = await call_llm(
         ctx,
         TRIAGE_INTAKE,
-        f"Presenting complaint: {state.presenting_complaint}\n\nPatient record:\n{summary}\n\n"
-        f"Questions already answered: "
-        f"{[{'q': q.text, 'a': q.answer} for q in state.intake_questions]}",
+        "Presenting complaint:\n"
+        + fenced("presenting complaint", state.presenting_complaint)
+        + "\n\nPatient record:\n"
+        + fenced("patient record", summary)
+        + "\n\nQuestions already answered:\n"
+        + fenced_qa("intake answers", [(q.text, q.answer) for q in state.intake_questions]),
     )
 
     if result is None:

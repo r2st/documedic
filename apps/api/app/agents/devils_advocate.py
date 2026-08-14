@@ -10,6 +10,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import DEVILS_ADVOCATE
 from app.agents.state import CaseState
 from app.agents.tools import summarize_snapshot
+from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, text_list
 
 AGENT = "devils_advocate"
@@ -27,8 +28,16 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     result = await call_llm(
         ctx,
         DEVILS_ADVOCATE,
-        f"Leading hypothesis: {leader.diagnosis_name}\n"
-        f"Presenting complaint: {state.presenting_complaint}\nRecord:\n{summary}",
+        # The hypothesis name is fenced too. It is not record text -- it is what the panel
+        # returned -- but the panel wrote it after reading the record, so an injection that
+        # reached the panel can arrive here inside a diagnosis name. Model output is untrusted
+        # for the same reason record text is.
+        "Leading hypothesis:\n"
+        + fenced("leading hypothesis", leader.diagnosis_name)
+        + "\n\nPresenting complaint:\n"
+        + fenced("presenting complaint", state.presenting_complaint)
+        + "\n\nRecord:\n"
+        + fenced("patient record", summary),
     )
     if result:
         critique = _critique(leader.diagnosis_name, result)
