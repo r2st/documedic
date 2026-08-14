@@ -131,6 +131,19 @@ describe('app/global-error.tsx (root layout boundary)', () => {
       boom,
     );
   });
+
+  it('renders without a digest, which a client-side throw has none of', () => {
+    const bare = new Error('provider threw before hydration');
+    render(<GlobalError error={bare} reset={() => {}} />);
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByText(/^Reference:/)).not.toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('Application shell failed'),
+      '(no digest)',
+      bare,
+    );
+  });
 });
 
 describe('app/not-found.tsx', () => {
