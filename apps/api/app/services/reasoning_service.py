@@ -215,19 +215,53 @@ class ReasoningService:
             return session, []
 
         q_map = {q.id: q for q in await self._questions(session_id)}
+        # One answer of record per question: a second answer rewrites the first rather than
+        # adding a row beside it.
+        #
+        # Answers used to be appended unconditionally, and ``_rebuild_intake_state`` collapsed
+        # them with ``answers_by_q[a.question_id] = a.answer_text`` over an unordered query — so
+        # with two rows for one question, which one reached the engine was whatever order the
+        # database returned. That is clinical *input*: ``agents.util.text_blob`` feeds
+        # affirmative answers to the can't-miss sentinel and drops the keywords of anything
+        # answered "no", so a ``red_flag`` answer decides whether a time-critical diagnosis is
+        # screened in or out, and a clinician correcting "yes" to "no" could be silently ignored.
+        #
+        # Three ordinary things produce a second answer: a correction, a retried or
+        # double-clicked submission, and one payload carrying the same question_id twice
+        # (``SubmitAnswersRequest`` validates a list, not a set). Resolving them by "latest wins"
+        # would need a tiebreak the schema cannot supply — rows written in one transaction share
+        # a ``created_at``, and the primary key is a random UUID rather than a sequence — so the
+        # duplicate is not created in the first place. Last answer wins, and re-submitting the
+        # same payload is idempotent.
+        existing = {
+            a.question_id: a
+            for a in (
+                await self.db.execute(
+                    select(IntakeAnswer).where(IntakeAnswer.session_id == session_id)
+                )
+            )
+            .scalars()
+            .all()
+        }
         now = datetime.now(UTC)
         for ans in answers:
             qid = ans["question_id"]
             question = q_map.get(qid)
             if question is None:
                 continue
-            self.db.add(
-                IntakeAnswer(
+            prior = existing.get(qid)
+            if prior is not None:
+                prior.answer_text = ans["answer_text"]
+            else:
+                row = IntakeAnswer(
                     question_id=qid,
                     session_id=session_id,
                     answer_text=ans["answer_text"],
                 )
-            )
+                self.db.add(row)
+                # Registered before the flush so a repeat of the same question later in *this*
+                # payload updates this row instead of adding a third.
+                existing[qid] = row
             question.answered_at = now
         await self.db.flush()
 
