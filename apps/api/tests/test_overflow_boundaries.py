@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import Numeric, String, select
 
-from app.core.clinical import ckd_epi_2021_egfr
+from app.core.clinical import CKD_EPI_MIN_AGE_YEARS, ckd_epi_2021_egfr
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
@@ -280,11 +280,16 @@ def test_egfr_fits_the_column_across_the_whole_storable_creatinine_range():
 
     Both ends are checked because the exponent is negative: the *smallest* storable creatinine
     produces the largest eGFR, which is the end that could overflow ``Numeric(18, 6)``.
+
+    The age range starts at ``CKD_EPI_MIN_AGE_YEARS`` rather than at 1, because the equation now
+    refuses an age it was not validated on. That is also the worst case for this test: ``0.9938 **
+    age`` is a decreasing factor, so the youngest age the equation will answer for is the one
+    that produces the largest eGFR and the widest column.
     """
     smallest = float(_DECIMAL_QUANTUM)
     largest = float(_DECIMAL_CEILING - _DECIMAL_QUANTUM)
     for creatinine in (smallest, 0.01, 1.0, 20.0, largest):
-        for age in (1, 120):
+        for age in (CKD_EPI_MIN_AGE_YEARS, 120):
             for sex in ("male", "female"):
                 result = ckd_epi_2021_egfr(creatinine_mg_dl=creatinine, age_years=age, sex=sex)
                 assert_fits_columns(

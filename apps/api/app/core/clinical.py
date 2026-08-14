@@ -27,8 +27,15 @@ def age_from_dob(dob: date, on: date) -> int:
     return years
 
 
+# CKD-EPI was developed and validated in adult cohorts, and the paediatric standard is a
+# different equation entirely — bedside Schwartz, ``0.413 * height_cm / Scr``, which is keyed on
+# body size rather than on age and sex. Eighteen is where the published validation of this
+# equation starts.
+CKD_EPI_MIN_AGE_YEARS = 18
+
+
 def ckd_epi_2021_egfr(*, creatinine_mg_dl: float, age_years: int, sex: str) -> EgfrResult:
-    """CKD-EPI 2021 creatinine equation (race-free).
+    """CKD-EPI 2021 creatinine equation (race-free). Adults only — see the age guard.
 
     eGFR = 142 * min(Scr/k, 1)^a * max(Scr/k, 1)^-1.200 * 0.9938^age * (1.012 if female).
     k = 0.7 (female) / 0.9 (male); a = -0.241 (female) / -0.302 (male).
@@ -37,6 +44,30 @@ def ckd_epi_2021_egfr(*, creatinine_mg_dl: float, age_years: int, sex: str) -> E
         raise ValueError("creatinine must be positive")
     if age_years <= 0:
         raise ValueError("age must be positive")
+    if age_years < CKD_EPI_MIN_AGE_YEARS:
+        # Refusing here rather than answering, for the same reason ``is_serum_creatinine_marker``
+        # refuses a urine creatinine: the equation returns a confident number for an input it was
+        # never fitted to, and the number is wrong in the direction that removes a hard block.
+        #
+        # Children have far less muscle mass than the adults this equation was fitted on, so the
+        # same creatinine means much worse renal function in a child — and CKD-EPI, reading that
+        # creatinine as an adult's, overestimates. A two-year-old with a creatinine of 1.5 mg/dL
+        # has a bedside-Schwartz eGFR near 24 mL/min/1.73m², which is stage 4 and below the 30
+        # that absolutely contraindicates metformin. CKD-EPI returns 76 for the same child: mild
+        # impairment, no threshold crossed, and the hard block never fires. The error runs the
+        # whole paediatric range — a six-year-old at 32 reads as 74, a fifteen-year-old at 39
+        # reads as 56.
+        #
+        # Bedside Schwartz cannot be substituted here: it needs a height, and this record holds
+        # no anthropometry at all. So the honest output is no eGFR, which is a state the renal
+        # checks already handle explicitly — ``_evaluate_renal`` reports a threshold it could not
+        # apply rather than passing it, and the Safety screen says renal thresholds were not
+        # applied. A warning that the check did not run beats a fabricated number that says it
+        # did.
+        raise ValueError(
+            f"CKD-EPI 2021 is validated in adults; age {age_years} requires a paediatric "
+            "equation (bedside Schwartz), which needs a height this record does not hold"
+        )
 
     is_female = sex.lower().startswith("f")
     k = 0.7 if is_female else 0.9
