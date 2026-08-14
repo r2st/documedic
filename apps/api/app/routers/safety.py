@@ -89,6 +89,10 @@ async def check_medication(
             "allergies": len(ctx.allergies),
             "conditions": len(ctx.conditions),
             "egfr_available": ctx.egfr is not None,
+            # Counted separately from `current_medications`, which holds only what could be
+            # matched to the vocabulary. Without this the count reads as the whole medication
+            # list and quietly shrinks by whatever the resolver could not read.
+            "unresolved_medications": len(ctx.unresolved_current_meds),
         },
         flags=[_flag_to_response(f, cid) for f, cid in zip(flags, check_ids, strict=True)],
     )
@@ -115,10 +119,17 @@ async def active_flags(
     Reading it discloses the patient's whole current medication list and every allergy that
     bears on it, so the access is audited as `drug_safety_flags_viewed`.
     """
-    results = await SafetyService(db).active_flags(account_id=account.id, patient_id=patient_id)
+    service = SafetyService(db)
+    results = await service.active_flags(account_id=account.id, patient_id=patient_id)
     flags: list[SafetyFlagResponse] = []
     for _vocab, flag_list in results:
         flags.extend(_flag_to_response(f) for f in flag_list)
+    # Once for the chart, not once per drug: a medication the resolver could not read is
+    # missing from every drug's evaluation here, so an empty list above is not the same as a
+    # clean one. Served from the facts the call above already loaded.
+    flags.extend(
+        _flag_to_response(f) for f in await service.unevaluated_medication_flags(patient_id)
+    )
     # After the check, immediately before the commit: the append lock is transaction-scoped
     # on PostgreSQL, so auditing first would hold it across the whole re-evaluation.
     await AuditService(db).record(

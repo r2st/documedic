@@ -22,6 +22,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     SafetyFlag,
+    check_unevaluated_medications,
     evaluate_drug_safety,
     has_hard_block,
 )
@@ -119,8 +120,10 @@ class SafetyService:
             med_rows = await self._current_medication_rows(patient_id)
             allergy_rows = await self._active_allergy_rows(patient_id)
             vocab_by_id = await self._vocabulary_by_id(med_rows, allergy_rows)
+            current_meds, unresolved = await self._current_meds(med_rows, vocab_by_id)
             self._facts[patient_id] = SafetyContext(
-                current_meds=await self._current_meds(med_rows, vocab_by_id),
+                current_meds=current_meds,
+                unresolved_current_meds=unresolved,
                 allergies=await self._allergies(allergy_rows, vocab_by_id),
                 conditions=await self._conditions(patient_id),
                 egfr=await self._latest_egfr(patient_id),
@@ -167,13 +170,22 @@ class SafetyService:
 
     async def _current_meds(
         self, med_rows: list[MedicationEvent], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
-    ) -> list[DrugRef]:
+    ) -> tuple[list[DrugRef], list[str]]:
+        """The chart's current medications as evaluable drugs, and the names that are not.
+
+        The second half is not bookkeeping. A row that resolves to nothing is absent from every
+        rule evaluated against ``current_meds``, and until it was carried out of here that
+        absence was indistinguishable from there being nothing to find — see
+        ``check_unevaluated_medications``, which is what turns it back into something the
+        clinician is told.
+        """
         # Rows with no vocabulary link fall through to name resolution below. Resolving them
         # one at a time is a query per unlinked medication; prefetching makes it one for all.
         await self.resolver.prefetch(
             med.generic_name for med in med_rows if not med.drug_vocabulary_id
         )
         out: list[DrugRef] = []
+        unresolved: list[str] = []
         for med in med_rows:
             vocab = vocab_by_id.get(med.drug_vocabulary_id) if med.drug_vocabulary_id else None
             if vocab is not None:
@@ -196,7 +208,9 @@ class SafetyService:
                         drug_class=resolved.drug_class,
                     )
                 )
-        return out
+            elif med.generic_name and med.generic_name.strip():
+                unresolved.append(med.generic_name.strip())
+        return out, unresolved
 
     async def _allergies(
         self, allergy_rows: list[Allergy], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
@@ -419,9 +433,21 @@ class SafetyService:
             generic_name=vocab.generic_name,
             drug_class=vocab.drug_class,
         )
-        flags = evaluate_drug_safety(proposed, ctx)
+        # Appended, not folded into ``evaluate_drug_safety``: it is a statement about the chart
+        # rather than about the proposed drug, so it must not be repeated once per drug by the
+        # callers that evaluate several against one context (``screen_text``, ``active_flags``).
+        flags = evaluate_drug_safety(proposed, ctx) + check_unevaluated_medications(ctx)
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
         return vocab, ctx, flags, check_ids
+
+    async def unevaluated_medication_flags(self, patient_id: uuid.UUID) -> list[SafetyFlag]:
+        """The chart-level "this much of the record could not be read" flag, or nothing.
+
+        Exposed for ``GET ../flags``, whose response is one flat list for the whole chart and
+        so wants this once rather than once per drug. Served from the same memoised patient
+        facts the surrounding call already built, so it costs no additional query.
+        """
+        return check_unevaluated_medications(await self._patient_facts(patient_id))
 
     async def _persist(
         self,

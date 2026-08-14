@@ -47,6 +47,7 @@ CheckType = Literal[
     "hepatic_dose",
     "duplicate_therapy",
     "guideline_deviation",
+    "unevaluated_medication",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -174,6 +175,10 @@ class SafetyContext:
     egfr: float | None = None
     interaction_rules: list[InteractionRule] = field(default_factory=list)
     contraindication_rules: list[ContraindicationRule] = field(default_factory=list)
+    # Names of current medications that could not be matched to the vocabulary at all, and so
+    # are absent from ``current_meds`` and from every rule evaluated against it. See
+    # ``check_unevaluated_medications``.
+    unresolved_current_meds: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -554,6 +559,57 @@ def check_duplicate_therapy(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
             )
 
     return flags
+
+
+def check_unevaluated_medications(ctx: SafetyContext) -> list[SafetyFlag]:
+    """Say so when part of the chart could not be evaluated, instead of reporting it as clean.
+
+    A medication row whose name resolves to nothing — an OCR'd brand the vocabulary has not
+    been seeded with, a handwritten scrawl, a combination product spelled in a way no candidate
+    matches — is dropped from ``current_meds`` by the service that assembles this context.
+    Every rule keyed on that list then silently has nothing to say about it: no interaction is
+    looked up against it, no same-ingredient or same-class duplicate is detected, and the
+    response comes back with no flags at all.
+
+    Which is the answer that reads as "checked, and fine". A chart carrying an unreadable
+    "Warf 5mg" beside a proposal of aspirin produces exactly the same empty flag list as a chart
+    carrying nothing at all, for the pair that is the textbook major interaction.
+
+    This module already refuses that shape of answer twice — an unresolved *proposed* drug is a
+    422 rather than an unchecked pass, and a renal rule with no eGFR to apply reports itself as
+    unevaluated rather than as passed. This is the same judgement for the third place the check
+    can be incomplete without saying so.
+
+    A warning and not a hard block, for the same reason the renal one is: blocking every
+    prescription on every chart with one unreadable medication line would be both clinically
+    wrong and the kind of unclearable alert that teaches clinicians to click through the real
+    ones. What the clinician needs is to know which line was not read, so they can read it.
+    """
+    if not ctx.unresolved_current_meds:
+        return []
+    names = sorted({name.strip() for name in ctx.unresolved_current_meds if name.strip()})
+    if not names:
+        return []
+    listed = ", ".join(f"“{name}”" for name in names)
+    return [
+        SafetyFlag(
+            check_type="unevaluated_medication",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"{len(names)} current medication{'s' if len(names) != 1 else ''} on this chart "
+                f"could not be matched to a known drug ({listed}), so no interaction or "
+                "duplicate-therapy rule was evaluated against "
+                f"{'them' if len(names) != 1 else 'it'} — this is not the same as “no "
+                "interactions found”. Confirm what the entry is, or ask for the brand to be "
+                "added to the drug vocabulary."
+            ),
+            details={
+                "unresolved_medications": names,
+                "evaluated": False,
+            },
+        )
+    ]
 
 
 def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
