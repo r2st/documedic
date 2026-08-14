@@ -45,6 +45,49 @@ def _tokens(text: str) -> set[str]:
     return {t for t in _TOKEN.findall((text or "").lower()) if t not in _STOP and len(t) > 2}
 
 
+# A query token counts as a keyword hit if it *is* a keyword word, or is that word give or take
+# a short inflectional suffix ("platelet" ~ "platelets", "fever" ~ "fevers"). Both bounds matter:
+# below _MIN_STEM_LEN a prefix carries no clinical meaning ("hyp" would hit "hypertension",
+# "hypoglycaemia" and "hypothyroidism" alike), and beyond _MAX_STEM_SUFFIX the extra characters
+# are a different word rather than an inflection ("cardio" is not "cardiomyopathy").
+_MIN_STEM_LEN = 4
+_MAX_STEM_SUFFIX = 3
+
+
+def _keyword_tokens(keywords: Sequence[str]) -> frozenset[str]:
+    """The individual words of a chunk's keywords, so a phrase matches word-wise.
+
+    Keywords are curated as phrases ("dengue fever", "first-line"), and the query is scored
+    token by token, so the phrase has to be broken up for either to reach the other.
+    """
+    return frozenset(t for k in keywords for t in _TOKEN.findall(k.lower()) if len(t) > 2)
+
+
+def _is_keyword_hit(token: str, keyword_tokens: frozenset[str]) -> bool:
+    """Whether a query token matches a keyword word exactly or as a short inflection.
+
+    This used to be a substring test — ``any(t in k2 for k2 in keywords)`` — which matched on
+    any run of characters anywhere inside a keyword. "ten" hit "hypertension", "art" hit
+    "arthritis", "ana" hit "anaemia". Every one of those is a full keyword hit, weighted ×1.5,
+    which is enough on its own to push an unrelated guideline section over the retrieval
+    threshold and into a management option's citations. Keyword hits have to mean the query
+    named the concept, not that its letters happened to appear in the middle of it.
+    """
+    if token in keyword_tokens:
+        return True
+    return any(_is_inflection(token, k) for k in keyword_tokens)
+
+
+def _is_inflection(a: str, b: str) -> bool:
+    """True when one word is the other plus a short suffix (plural, gerund, adverb...)."""
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return (
+        len(short) >= _MIN_STEM_LEN
+        and len(long) - len(short) <= _MAX_STEM_SUFFIX
+        and long.startswith(short)
+    )
+
+
 @dataclass(frozen=True)
 class RetrievableChunk:
     """A guideline chunk with its retrieval tokens already computed.
@@ -69,6 +112,15 @@ class RetrievableChunk:
     corpus_version: str
     keywords: tuple[str, ...]
     body_tokens: frozenset[str]
+    # The words of ``keywords``, split once here for the same reason ``body_tokens`` is: the
+    # retriever scores every chunk in the corpus on every query.
+    keyword_tokens: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        # Derived, never passed: a directly-constructed chunk (tests, fixtures) would otherwise
+        # score with no keywords at all and silently lose every keyword hit.
+        if not self.keyword_tokens and self.keywords:
+            object.__setattr__(self, "keyword_tokens", _keyword_tokens(self.keywords))
 
     @classmethod
     def of(cls, chunk: GuidelineChunk) -> RetrievableChunk:
@@ -96,8 +148,8 @@ def lexical_score(query: str, chunks: Sequence[RetrievableChunk], k: int) -> lis
         return []
     scored: list[tuple[float, RetrievableChunk]] = []
     for chunk in chunks:
-        kw = chunk.keywords
-        kw_hits = sum(1 for t in q_tokens if t in kw or any(t in k2 for k2 in kw))
+        kw = chunk.keyword_tokens
+        kw_hits = sum(1 for t in q_tokens if _is_keyword_hit(t, kw))
         overlap = len(q_tokens & chunk.body_tokens)
         # Saturating relevance: independent of query length so a long multi-diagnosis query
         # is not penalised. raw>=4.5 (≈3 keyword hits, or 2 hits + body overlap) clears 0.75.
