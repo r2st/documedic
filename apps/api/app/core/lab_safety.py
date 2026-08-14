@@ -106,8 +106,31 @@ _ALIASES: dict[str, str] = {
 _UNIT_CONVERSIONS: dict[str, dict[str, float]] = {
     # mmol/L -> mg/dL
     "glucose": {"mmol/l": 18.0182},
-    # µmol/L -> mg/dL
-    "creatinine": {"umol/l": 1 / 88.42, "µmol/l": 1 / 88.42},
+    # µmol/L -> mg/dL. Keyed only on the ASCII spelling because ``_micro`` folds both Unicode
+    # micro signs to "u" before lookup; a "µmol/l" key here could never have been reached, since
+    # the key normaliser strips any character outside [a-z0-9/] and turned it into "mol/l".
+    "creatinine": {"umol/l": 1 / 88.42},
+    # per-µL -> 10^3/µL. 1 µL = 1 mm^3 = 1 "cumm", so this is a decimal shift, not a
+    # measurement conversion. Indian CBC reports print the raw per-cumm count far more often
+    # than the thousands-scaled one ("PLATELET COUNT 8,000 /cumm").
+    "platelets": {"/cumm": 0.001, "cells/cumm": 0.001, "/mm3": 0.001, "cells/mm3": 0.001},
+    "wbc": {"/cumm": 0.001, "cells/cumm": 0.001, "/mm3": 0.001, "cells/mm3": 0.001},
+}
+
+# Spellings that mean the marker's canonical unit exactly, keyed by canonical marker. These
+# carry NO arithmetic — they are the same unit written the way an Indian lab report writes it.
+#
+# Scoped per marker rather than applied globally, because the equivalences are not universal:
+# mEq/L equals mmol/L only for a monovalent ion, so it holds for potassium and sodium and would
+# be wrong by a factor of two for calcium. "mg%" is mg per 100 mL, which is mg/dL by definition,
+# and "gm/dL"/"g%" are g/dL — those are safe wherever the canonical unit already is that.
+_UNIT_SYNONYMS: dict[str, frozenset[str]] = {
+    "potassium": frozenset({"meq/l"}),
+    "sodium": frozenset({"meq/l"}),
+    "glucose": frozenset({"mg%"}),
+    "creatinine": frozenset({"mg%"}),
+    "calcium": frozenset({"mg%"}),
+    "hemoglobin": frozenset({"gm/dl", "gms/dl", "gm%", "g%"}),
 }
 
 _NORM_RE = re.compile(r"[^a-z0-9+ ]")
@@ -118,10 +141,21 @@ def _normalize_marker(marker_name: str) -> str | None:
     return _ALIASES.get(key)
 
 
+def _micro(unit: str) -> str:
+    """Fold both Unicode micro signs to ASCII "u".
+
+    U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU are visually identical and both come off
+    lab reports. Neither survives the character classes below, so ``10^3/µL`` normalised to
+    ``103l`` -- which matches neither the canonical ``103ul`` nor any conversion key, and a
+    platelet count printed with a real micro sign was skipped rather than evaluated.
+    """
+    return unit.replace("µ", "u").replace("μ", "u")
+
+
 def _normalize_unit(unit: str | None) -> str:
     """Strip everything but letters/digits so equivalent unit spellings compare equal
     (``10^3/uL``, ``10^3/ul``, ``x10e3/ul`` -> ``103ul``)."""
-    return re.sub(r"[^a-z0-9]", "", (unit or "").strip().lower())
+    return re.sub(r"[^a-z0-9]", "", _micro((unit or "").strip().lower()))
 
 
 def _to_canonical_value(canonical: str, value: float, unit: str | None) -> float | None:
@@ -131,6 +165,11 @@ def _to_canonical_value(canonical: str, value: float, unit: str | None) -> float
     expected = _normalize_unit(_RANGES[canonical].unit)
     if not norm_unit or norm_unit == expected:
         return value
+    # A synonym is the same unit spelled differently, so it carries no arithmetic. Checked
+    # before the bail-out below, which otherwise treats "the unit written another way" the same
+    # as "a unit I cannot interpret" and drops the flag entirely.
+    if _unit_symbol(unit) in _UNIT_SYNONYMS.get(canonical, frozenset()):
+        return value
     factor = _UNIT_CONVERSIONS.get(canonical, {}).get(_normalize_unit_key(unit))
     if factor is None:
         return None
@@ -139,7 +178,16 @@ def _to_canonical_value(canonical: str, value: float, unit: str | None) -> float
 
 def _normalize_unit_key(unit: str | None) -> str:
     """Normalized-but-with-slash key used to look up _UNIT_CONVERSIONS (e.g. ``mmol/l``)."""
-    return re.sub(r"[^a-z0-9/]", "", (unit or "").strip().lower())
+    return re.sub(r"[^a-z0-9/]", "", _micro((unit or "").strip().lower()))
+
+
+def _unit_symbol(unit: str | None) -> str:
+    """Like ``_normalize_unit_key`` but keeps ``%``, which several synonyms depend on.
+
+    "mg%" and "g%" are ordinary Indian lab notation for mg/dL and g/dL. Dropping the percent
+    sign would collapse them to bare "mg"/"g" and make the synonym table match a mass unit.
+    """
+    return re.sub(r"[^a-z0-9/%]", "", _micro((unit or "").strip().lower()))
 
 
 def evaluate_critical_value(
