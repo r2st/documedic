@@ -115,16 +115,52 @@ prescription/lab document, confirm the extraction, then run a drug-safety check.
 ## Testing
 
 ```bash
+# Backend — 1,483 tests
 cd apps/api
-../../.venv/bin/python -m pytest                 # 62 tests
-../../.venv/bin/python -m pytest --cov=app       # ~89% overall; core safety 98–100%
+../../.venv/bin/python -m pytest
+../../.venv/bin/python -m pytest --cov=app       # core safety 98–100%
 ../../.venv/bin/ruff check app tests             # lint
+../../.venv/bin/mypy app                         # strict type check
+
+# Frontend — 355 tests across 28 files, 100% line/branch coverage
+cd apps/web && npm run test -- --run --coverage
 ```
 
 Test coverage includes a parameterized **drug-safety hard-block matrix**, the **eGFR**
 formula, the **audit hash-chain** (including tamper detection), auth flows, patient CRUD +
 isolation, and the full **upload → extract → approve → graph-merge** path with eGFR
 computation and brand-name normalization.
+
+### Testing against PostgreSQL
+
+The default suite runs on in-memory SQLite, which is fast but **does not enforce several
+constraints PostgreSQL does** — `VARCHAR(n)` lengths and `NUMERIC(p, s)` range are both
+ignored, and the immutability/`updated_at` triggers do not exist at all. Every deployment
+runs on PostgreSQL, so a green suite on its own says nothing about those paths. This is not
+hypothetical: two overflow bugs reached production through exactly this gap, where a lab
+value or drug name too large for its column passed every test and then failed at `flush` —
+which does not fail the one bad field, it 500s the clinician's whole document approval.
+
+Two things close it:
+
+- `apps/api/tests/column_fit.py` reapplies the column limits from the SQLite side, so an
+  ordinary `pytest` run catches a regression.
+- `apps/api/tests/test_postgres_column_bounds.py` (marked `postgres`) proves it end to end
+  against a real server. It **skips itself when none is reachable**, so it is safe to leave
+  in the default run:
+
+  ```bash
+  docker compose up -d postgres
+  cd apps/api && ../../.venv/bin/python -m pytest -m postgres
+  # point it elsewhere with TEST_POSTGRES_URL; it builds and drops its own schema,
+  # so it never touches existing data
+  ```
+
+  Deselect with `-m 'not postgres'`.
+
+**When adding a column-typed constraint** (a narrower `String(n)`, a `Numeric`, a
+`CHECK ... IN (...)`) to anything the extraction pipeline writes, assume the SQLite suite
+will not catch a violation and add the PostgreSQL case.
 
 ---
 

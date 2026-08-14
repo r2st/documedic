@@ -622,6 +622,63 @@ pytest tests/integration/ -m integration
 pytest -m "integration" --tb=short
 ```
 
+#### 5.3.1 What SQLite does not enforce (and why it has bitten us)
+
+The default `pytest` run uses an in-memory SQLite database — fast, isolated per test, no
+Docker required. It is the right default, but it is **weaker than the database we deploy on**,
+and the difference is silent:
+
+| Constraint | SQLite | PostgreSQL |
+|---|---|---|
+| `VARCHAR(n)` length | ignored — stores any length | `value too long for type character varying(n)` |
+| `NUMERIC(p, s)` range | ignored — stores any magnitude | `numeric field overflow` |
+| `CHECK ... IN (...)` | **enforced** | enforced |
+| `UPDATE`/`DELETE` immutability triggers | absent | enforced |
+| `updated_at` triggers | absent | enforced |
+
+The first two rows are the dangerous ones, because they make a real bug look like a passing
+test. Both have shipped: a lab value of `99999999999999999999999.5` read off a scan with a
+smudged decimal point, and a 900-character run of OCR noise read as one drug name. Each was
+stored happily in every test and rejected by PostgreSQL in production.
+
+The blast radius is larger than the bad field. The rejection lands at `flush`, by which point
+the whole approval is one transaction — so it does not drop the unreadable line, it returns a
+500 and rolls back *every* entity that extracted correctly on the same document. The
+clinician loses the whole chart, not the one value the scanner could not read.
+
+**Writing tests for this class of bug.** Two layers, both required:
+
+1. **`apps/api/tests/column_fit.py`** — `assert_fits_columns(*rows)` reapplies the column
+   limits SQLite ignores, reading them off the mapped columns. Sweep the rows a merge writes
+   with it, and the ordinary suite catches the regression:
+
+   ```python
+   from tests.column_fit import assert_fits_columns
+
+   rows = (await db.execute(select(LabResult))).scalars().all()
+   assert_fits_columns(*rows)
+   ```
+
+2. **`apps/api/tests/test_postgres_column_bounds.py`** — the end-to-end confirmation against a
+   real server, marked `postgres`. The fixture creates its own PostgreSQL schema and drops it
+   afterwards, so it never touches existing data, and it **skips when nothing is reachable**:
+
+   ```bash
+   docker compose up -d postgres
+   cd apps/api && pytest -m postgres              # deselect with -m 'not postgres'
+   TEST_POSTGRES_URL=postgresql+asyncpg://… pytest -m postgres
+   ```
+
+   Note that this module first asserts PostgreSQL *does* reject an over-long string and an
+   out-of-range numeric, before testing that the merge avoids both. Without those two, the
+   whole file could pass by connecting to something that enforces nothing.
+
+**Rule of thumb:** if you add a `String(n)`, a `Numeric(p, s)`, or a `CHECK` to any column the
+extraction pipeline writes, assume the SQLite suite will not catch a violation. Prefer fitting
+the value at the merge boundary (see `_fitted`, `_to_decimal`, and `_enum` in
+`app/services/graph_service.py`) over letting the database refuse it — one unreadable line
+must never cost the clinician the rest of the document.
+
 ### 5.4 E2E Tests -- Playwright
 
 End-to-end tests exercise the full stack from the browser through the API to the database.
@@ -795,6 +852,11 @@ cd apps/web && pnpm exec playwright test
 
 # Integration tests only (requires Docker services)
 pytest -m integration
+
+# Constraint tests against a real PostgreSQL (see 5.3.1) -- these skip when none is
+# reachable, so they are safe to leave in the default run
+docker compose up -d postgres && pytest -m postgres
+pytest -m 'not postgres'                      # deselect them
 
 # Drug safety tests only
 pytest apps/api/tests/test_drug_safety.py -v
