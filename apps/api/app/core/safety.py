@@ -35,7 +35,9 @@ to prescribe outside first-line, so this is a nudge, not a rule.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Literal
 
 Severity = Literal["info", "warning", "critical", "hard_block"]
@@ -163,6 +165,7 @@ class ContraindicationRule:
     renal_threshold: dict | None = None
     hepatic_threshold: dict | None = None
     contraindication_id: str | None = None
+    icd10_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -346,14 +349,300 @@ def check_interactions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag
     return flags
 
 
+# --- Condition matching -----------------------------------------------------------------------
+#
+# A contraindication rule is keyed on a condition *name*, and the chart's name for the same
+# condition is whatever a clinician wrote or an OCR pass lifted off a referral letter. Comparing
+# the two with string equality — which is what this did — meant an absolute contraindication was
+# enforced only when the chart happened to spell it exactly as the curated rule does. A chart
+# saying "Asthma", the ordinary way it is written, did not hard-block atenolol; "Bronchial
+# Asthma" did. That is CLAUDE.md rule 3 defeated by wording, and it fails open: the response was
+# `is_blocked: false` with no flag saying the comparison had been attempted and missed.
+#
+# So the comparison is widened, deterministically and offline (rule 8), on three axes, and
+# whatever the widening still cannot resolve is *reported* rather than dropped — the same
+# judgement this module already makes for an unresolvable drug name and a missing eGFR.
+#
+# The widening is deliberately asymmetric. A chart MORE specific than the rule ("Ectopic
+# Pregnancy" against a rule for "Pregnancy") is the rule's condition plus detail, so the block
+# stands. A chart LESS specific than the rule ("Renal Impairment" against a rule for *Severe*
+# renal impairment) is not evidence the patient meets it, so it becomes a warning instead. The
+# safe direction to be wrong is the one a clinician can clear with a documented override; the
+# unsafe direction is the one that says nothing at all.
+
+# Chart wordings that mean the condition is NOT this patient's problem. Phrases are matched as
+# substrings of the normalised name; single words are matched as whole tokens, so "no" catches
+# "no h/o asthma" without "nocturnal" catching itself.
+_CONDITION_ABSENT_PHRASES = ("family history", "fh of", "negative for", "not present", "ruled out")
+_CONDITION_ABSENT_TOKENS = frozenset(
+    {"no", "not", "nil", "denies", "denied", "negative", "excluded", "absent", "ruled"}
+)
+
+# Wordings that mean the condition is hedged, historical, or still a question. Not grounds for a
+# hard block — the chart does not assert the patient currently has it — but very much grounds for
+# telling the clinician the rule exists. "h/o peptic ulcer disease" against an NSAID is the
+# textbook case: not a block, never nothing.
+_CONDITION_UNCERTAIN = (
+    "suspected",
+    "possible",
+    "probable",
+    "query ",
+    "?",
+    "r/o ",
+    "rule out",
+    "h/o",
+    "history of",
+    "past ",
+    "previous",
+    "resolved",
+)
+
+# British spellings folded to the American forms the curated rules use. Applied per token rather
+# than as substring rewrites, because the obvious substring rules ("oe" -> "e") also rewrite
+# ordinary words like "toe".
+_SPELLING_VARIANTS: dict[str, str] = {
+    "haemorrhage": "hemorrhage",
+    "haemorrhagic": "hemorrhagic",
+    "haematemesis": "hematemesis",
+    "anaemia": "anemia",
+    "oedema": "edema",
+    "diarrhoea": "diarrhea",
+    "ischaemia": "ischemia",
+    "ischaemic": "ischemic",
+    "oesophageal": "esophageal",
+    "oesophagitis": "esophagitis",
+    "paediatric": "pediatric",
+}
+
+# Tokens that carry no identifying weight, dropped before the specificity comparison below.
+# Severity and course words (mild/moderate/severe/acute/chronic) are deliberately NOT here:
+# "Moderate Renal Impairment" and "Severe Renal Impairment" are two different curated rules with
+# two different eGFR bands, and collapsing them would answer with the wrong one.
+_CONDITION_STOPWORDS = frozenset(
+    {"disease", "disorder", "syndrome", "condition", "of", "the", "and", "with", "due", "to"}
+)
+
+# Chart wordings that ARE the curated rule's condition under another name. Each entry is a
+# clinical synonym, not a fuzzy guess: this table is the reason a hard block survives being
+# written the way clinicians actually write it. Keys and values are already normalised.
+_CONDITION_ALIASES: dict[str, str] = {
+    # Airways — the seeded atenolol block is keyed on "Bronchial Asthma".
+    "asthma": "bronchial asthma",
+    "reactive airway": "bronchial asthma",
+    "bronchospasm": "bronchial asthma",
+    # Peptic ulcer — the seeded NSAID blocks.
+    "pud": "peptic ulcer",
+    "gastric ulcer": "peptic ulcer",
+    "duodenal ulcer": "peptic ulcer",
+    "gastroduodenal ulcer": "peptic ulcer",
+    # Pregnancy — the seeded ACE-inhibitor, statin, warfarin and methotrexate blocks.
+    "pregnant": "pregnancy",
+    "gravid": "pregnancy",
+    "primigravida": "pregnancy",
+    "multigravida": "pregnancy",
+    "intrauterine pregnancy": "pregnancy",
+    # Chronic kidney disease — metformin's dose-adjustment rule.
+    "ckd": "chronic kidney",
+    "crf": "chronic kidney",
+    "chronic renal failure": "chronic kidney",
+    "chronic renal insufficiency": "chronic kidney",
+    "chronic kidney failure": "chronic kidney",
+    # Active bleeding — warfarin's absolute block.
+    "active bleed": "active bleeding",
+    "active hemorrhage": "active bleeding",
+    "gi bleed": "active bleeding",
+    "gi bleeding": "active bleeding",
+    "gastrointestinal bleed": "active bleeding",
+    "gastrointestinal bleeding": "active bleeding",
+    "malena": "active bleeding",
+    "melena": "active bleeding",
+    # G6PD deficiency — ciprofloxacin's relative rule.
+    "g6pd": "g6pd deficiency",
+    "glucose 6 phosphate dehydrogenase deficiency": "g6pd deficiency",
+    # Unstable angina — sildenafil's absolute block.
+    "unstable angina pectoris": "unstable angina",
+    "crescendo angina": "unstable angina",
+}
+
+_PARENTHETICAL = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
+_NON_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
+
+# The synonym table as token sets, longest key first so a specific synonym is applied before a
+# general one. Rewriting token sets rather than whole strings is what lets one entry cover every
+# wording built around it: "asthma" -> "bronchial asthma" also resolves "severe persistent
+# asthma", which a whole-string table would have missed.
+_ALIAS_REWRITES: tuple[tuple[frozenset[str], frozenset[str]], ...] = tuple(
+    sorted(
+        (
+            (frozenset(key.split()) - _CONDITION_STOPWORDS, frozenset(value.split()))
+            for key, value in _CONDITION_ALIASES.items()
+        ),
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
+)
+
+
+@dataclass(frozen=True)
+class _ConditionMatch:
+    """A charted condition taken to be a contraindication rule's condition.
+
+    ``is_present`` false means "related, but the chart does not assert the patient currently has
+    it" — reported as a warning rather than enforced as a block.
+    """
+
+    charted_name: str
+    basis: str
+    is_present: bool
+
+
+@lru_cache(maxsize=2048)
+def _condition_words(name: str | None) -> tuple[str, ...]:
+    """A condition name as plain lower-case words, with British spellings folded.
+
+    Parenthetical qualifiers go first — "Asthma (moderate persistent)" is asthma — then
+    punctuation, so "h/o" and "type-2" become word sequences rather than opaque blobs.
+
+    Memoised, with the module's other pure text rewrites: ``active_flags`` re-evaluates every
+    current medication against one chart, so the same handful of condition names is normalised
+    once per (medication x rule) pair — the same strings, through the same regexes, every time.
+    Keyed on the raw name, and the whole module is free of patient state beyond its arguments,
+    so the cache holds condition *names* and never anything tying one to a patient.
+    """
+    text = _PARENTHETICAL.sub(" ", _norm(name))
+    text = _NON_ALPHANUMERIC.sub(" ", text).strip()
+    return tuple(_SPELLING_VARIANTS.get(word, word) for word in text.split())
+
+
+@lru_cache(maxsize=2048)
+def _condition_concept(name: str | None) -> frozenset[str]:
+    """The set of words that identify a condition, after synonym rewriting.
+
+    Comparing sets rather than strings is what makes one synonym entry cover every wording built
+    around it, and what makes word order irrelevant. Everything here is a deterministic rewrite —
+    no scoring, no similarity threshold, nothing that can match two different conditions to each
+    other merely by resembling one another.
+    """
+    tokens = frozenset(_condition_words(name)) - _CONDITION_STOPWORDS
+    for key, value in _ALIAS_REWRITES:
+        if key and key <= tokens:
+            tokens = (tokens - key) | value
+    return tokens
+
+
+def _icd10_matches(a: str | None, b: str | None) -> bool:
+    """True when two ICD-10 codes name the same condition, at whatever depth each was coded.
+
+    Charts code to whatever precision the source used, so a rule written against the J45 asthma
+    category has to match a chart carrying J45.909. Prefix containment on the dotless form is
+    that rollup; the three-character floor keeps a whole chapter from matching a category.
+    """
+    x = _NON_ALPHANUMERIC.sub("", (a or "").lower())
+    y = _NON_ALPHANUMERIC.sub("", (b or "").lower())
+    if len(x) < 3 or len(y) < 3:
+        return False
+    return x.startswith(y) or y.startswith(x)
+
+
+def _match_condition(
+    rule: ContraindicationRule, conditions: list[PatientCondition]
+) -> _ConditionMatch | None:
+    """The charted condition this rule fires against, or None.
+
+    Returns the strongest match on the chart: an established one is preferred over a hedged or
+    less-specific one, so a chart carrying both "h/o asthma" and "Asthma" blocks rather than
+    warns.
+    """
+    rule_tokens = _condition_concept(rule.condition_name)
+    best: _ConditionMatch | None = None
+
+    for condition in conditions:
+        normalised = _norm(condition.condition_name)
+        words = set(_condition_words(condition.condition_name))
+        if any(phrase in normalised for phrase in _CONDITION_ABSENT_PHRASES) or (
+            words & _CONDITION_ABSENT_TOKENS
+        ):
+            continue
+
+        tokens = _condition_concept(condition.condition_name)
+
+        if _icd10_matches(rule.icd10_code, condition.icd10_code):
+            basis = "icd10"
+        elif tokens and tokens == rule_tokens:
+            # The same condition, verbatim or after the rewrites in _condition_concept.
+            basis = "name"
+        elif rule_tokens and tokens > rule_tokens:
+            # The chart is the rule's condition plus detail ("Ectopic Pregnancy" for a rule on
+            # "Pregnancy"), so the patient has the rule's condition.
+            basis = "more_specific"
+        elif tokens and rule_tokens > tokens:
+            # The chart is less specific than the rule. Not evidence the patient meets it.
+            basis = "less_specific"
+        else:
+            continue
+
+        hedged = any(marker in normalised for marker in _CONDITION_UNCERTAIN)
+        is_present = basis != "less_specific" and not hedged
+        if hedged and basis != "less_specific":
+            basis = f"{basis}_hedged"
+
+        match = _ConditionMatch(
+            charted_name=condition.condition_name, basis=basis, is_present=is_present
+        )
+        if is_present:
+            return match
+        if best is None:
+            best = match
+    return best
+
+
+def _near_miss_flag(
+    proposed: DrugRef, rule: ContraindicationRule, match: _ConditionMatch
+) -> SafetyFlag:
+    """Say that a contraindication rule was reached and not applied, and why.
+
+    This is the residue: a condition on the chart that is related to a curated rule for this
+    drug but does not establish that the patient meets it. Enforcing the block here would assert
+    something the record does not say. Dropping it silently is the failure this whole section
+    exists to remove — it is the difference between "checked, and fine" and "there is something
+    here I could not decide", and only the clinician can close that gap by reading the chart.
+
+    Never a hard block, whatever the underlying rule's severity. The rule's own severity is
+    carried in the details so the clinician can see what it would have been.
+    """
+    would_block = rule.is_absolute or rule.severity == "absolute"
+    return SafetyFlag(
+        check_type="contraindication",
+        severity="warning" if would_block else "info",
+        is_hard_block=False,
+        summary=(
+            f"“{match.charted_name}” on this chart may be the {rule.condition_name} that "
+            f"{proposed.generic_name} is contraindicated in ({rule.description}), but the record "
+            "does not establish it"
+            + (
+                ", so the hard block was not applied. Confirm the diagnosis if it applies."
+                if would_block
+                else ". Confirm the diagnosis if it applies."
+            )
+        ),
+        details={
+            "proposed_drug": proposed.generic_name,
+            "condition": rule.condition_name,
+            "charted_condition": match.charted_name,
+            "match_basis": match.basis,
+            "would_hard_block_if_confirmed": would_block,
+            "rule_severity": rule.severity,
+            "evaluated": False,
+        },
+        contraindication_id=rule.contraindication_id,
+    )
+
+
 def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
     flags: list[SafetyFlag] = []
-    condition_names = {_norm(c.condition_name) for c in ctx.conditions}
     for rule in ctx.contraindication_rules:
         if rule.drug_reference_id != proposed.reference_id:
             continue
-
-        condition_present = _norm(rule.condition_name) in condition_names
 
         # --- Renal-threshold evaluation (works even if the named condition is absent,
         #     because eGFR is a measured value). ---
@@ -362,7 +651,17 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
             flags.append(renal_flag)
             continue
 
-        if not condition_present:
+        match = _match_condition(rule, ctx.conditions)
+        if match is None:
+            continue
+
+        # Related, but not established as this patient's current problem — the chart is less
+        # specific than the rule ("Renal Impairment" against a rule for *Severe* renal
+        # impairment), or it is hedged or historical ("suspected", "h/o"). Applying the block
+        # would assert something the chart does not say; staying silent would hide the one
+        # condition on the chart that bears on this drug. See ``_near_miss_flag``.
+        if not match.is_present:
+            flags.append(_near_miss_flag(proposed, rule, match))
             continue
 
         if rule.is_absolute or rule.severity == "absolute":
@@ -379,6 +678,12 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
                         "proposed_drug": proposed.generic_name,
                         "condition": rule.condition_name,
                         "is_absolute": True,
+                        # What the chart actually says, and why it was taken to be the rule's
+                        # condition. The two differ whenever the block fired on anything but a
+                        # verbatim wording, and a block is exactly the record that has to be
+                        # answerable months later.
+                        "charted_condition": match.charted_name,
+                        "match_basis": match.basis,
                     },
                     contraindication_id=rule.contraindication_id,
                 )
@@ -397,6 +702,8 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
                         "proposed_drug": proposed.generic_name,
                         "condition": rule.condition_name,
                         "severity": rule.severity,
+                        "charted_condition": match.charted_name,
+                        "match_basis": match.basis,
                     },
                     contraindication_id=rule.contraindication_id,
                 )

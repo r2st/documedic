@@ -344,6 +344,10 @@ class SafetyService:
                 renal_threshold=r.renal_threshold,
                 hepatic_threshold=r.hepatic_threshold,
                 contraindication_id=str(r.id),
+                # The second axis condition matching runs on. A code equality is unambiguous
+                # where a name comparison is a guess about wording, so it is carried whenever
+                # both sides have one; see app.core.safety._match_condition.
+                icd10_code=r.icd10_code,
             )
             for r in result.scalars().all()
         ]
