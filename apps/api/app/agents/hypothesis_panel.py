@@ -9,7 +9,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import HYPOTHESIS_PANEL
 from app.agents.state import CaseState, Evidence, Hypothesis
 from app.agents.tools import active_condition_names, summarize_snapshot
-from app.agents.util import as_text, call_llm, norm_band, text_blob
+from app.agents.util import as_text, call_llm, norm_band, objects, text_blob
 
 AGENT = "hypothesis_panel"
 
@@ -146,14 +146,17 @@ async def _run_specialist(
     if not result:
         return []
     out: list[Hypothesis] = []
-    for h in result.get("hypotheses", []):
+    # ``objects`` rather than the raw list: the four specialists run under ``asyncio.gather``, so
+    # one of them reading a bare-string hypothesis list takes down the other three's work with it
+    # — and with ``produced`` non-empty from nobody, the deterministic panel never runs either.
+    for h in objects(result.get("hypotheses")):
         name_ = as_text(h.get("diagnosis_name"))
         if not name_:
             continue
         out.append(
             Hypothesis(
                 diagnosis_name=name_,
-                icd_code=h.get("icd_code"),
+                icd_code=h.get("icd_code") if isinstance(h.get("icd_code"), str) else None,
                 probability_band=norm_band(h.get("probability_band")),
                 evidence_for=_parse_evidence(h.get("evidence_for"), True),
                 evidence_against=_parse_evidence(h.get("evidence_against"), False),

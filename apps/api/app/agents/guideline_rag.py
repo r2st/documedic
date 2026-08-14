@@ -14,7 +14,7 @@ from app.agents.context import ReasoningContext
 from app.agents.llm import using_simulated_llm
 from app.agents.prompts import GUIDELINE_RAG
 from app.agents.state import CaseState, GuidelineChunkRef, ManagementOption
-from app.agents.util import call_llm
+from app.agents.util import as_float, as_text, call_llm, objects
 
 AGENT = "guideline_rag"
 
@@ -25,10 +25,24 @@ def _query(state: CaseState) -> str:
     return f"management of {dx} | {state.presenting_complaint}"
 
 
+def _citable(chunks: object) -> list[dict]:
+    """The retrieved chunks that can actually be cited, in retrieval order.
+
+    ``ctx.retrieve`` is an injection point, not app-internal code: the lexical retriever always
+    returns well-formed dicts, but the production path is dense search in Qdrant, whose payloads
+    are whatever the ingestion wrote. A chunk with no ``section_id`` raised KeyError building the
+    ``refs`` map, and a non-numeric ``score`` raised ValueError one line earlier -- both inside a
+    node with no edge around it, so a single malformed payload failed the case rather than
+    costing it one citation. A chunk that cannot be cited is dropped, which is what the
+    below-threshold chunks beside it already are.
+    """
+    return [c for c in objects(chunks) if isinstance(c.get("section_id"), str) and c["section_id"]]
+
+
 async def run(state: CaseState, ctx: ReasoningContext) -> None:
     await ctx.emit("agent_start", {"agent": AGENT, "label": "Guideline-RAG"})
-    chunks_raw = ctx.retrieve(_query(state), 6)
-    retrieved = [c for c in chunks_raw if float(c.get("score", 0)) >= ctx.retrieval_threshold]
+    chunks_raw = _citable(ctx.retrieve(_query(state), 6))
+    retrieved = [c for c in chunks_raw if as_float(c.get("score"), 0.0) >= ctx.retrieval_threshold]
     retrieved_ids = {c["section_id"] for c in retrieved}
 
     refs = {
@@ -38,7 +52,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             document_title=c.get("document_title", ""),
             heading=c.get("heading"),
             snippet=(c.get("content", "")[:280]),
-            score=float(c.get("score", 0)),
+            score=as_float(c.get("score"), 0.0),
             corpus_version=c.get("corpus_version", ""),
             page_range=c.get("page_range"),
         )
@@ -60,13 +74,21 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             f"Case: {_query(state)}\n\nRetrieved guideline excerpts:\n{excerpts}",
         )
         if result:
-            grounded_by_model = True
+            raw_options = result.get("options")
             insufficient = bool(result.get("insufficient_support", False))
-            for opt in result.get("options", []):
-                text = (opt.get("text") or "").strip()
+            for opt in objects(raw_options):
+                text = as_text(opt.get("text"))
                 if not text:
                     continue
-                cited = [refs[sid] for sid in opt.get("citation_section_ids", []) if sid in refs]
+                # Only string ids are looked up: an unhashable id (a list, an object) would
+                # raise TypeError on the ``in`` test against a dict, in the node that grounds
+                # every management option the clinician is shown.
+                raw_ids = opt.get("citation_section_ids")
+                cited = [
+                    refs[sid]
+                    for sid in (raw_ids if isinstance(raw_ids, (list | tuple)) else [])
+                    if isinstance(sid, str) and sid in refs
+                ]
                 options.append(
                     ManagementOption(
                         text=text,
@@ -74,6 +96,14 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
                         sufficient_support=bool(opt.get("sufficient_support", bool(cited))),
                     )
                 )
+            # An answer nothing survived parsing from is not an answer of "nothing". A model
+            # that offered options in a shape this agent cannot read (a list of bare strings)
+            # left ``options`` empty for the same reason a dead provider does, and treating
+            # that as a deliberate finding suppressed the deterministic grounding below --
+            # so the clinician saw no management options from a corpus that had already been
+            # retrieved and scored. Only an empty (or absent) options field is taken as a
+            # deliberate "nothing to offer".
+            grounded_by_model = bool(options) or not raw_options
     # Gated on whether the model actually answered, not on whether a key exists: with a keyed
     # provider that was down, the deterministic grounding below was skipped and the clinician
     # got no management options at all, from a corpus that had already been retrieved. A model

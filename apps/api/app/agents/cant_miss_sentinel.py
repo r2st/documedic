@@ -12,7 +12,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import CANT_MISS_SENTINEL
 from app.agents.state import CaseState, Evidence, Hypothesis
 from app.agents.tools import summarize_snapshot
-from app.agents.util import call_llm, norm_band, text_blob
+from app.agents.util import as_text, call_llm, norm_band, objects, text_blob
 
 AGENT = "cant_miss_sentinel"
 
@@ -44,29 +44,34 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
         existing.add(key)
 
     # 2) LLM augmentation (additive only).
+    # Every field is coerced rather than trusted. A malformed augmentation must not cost the
+    # case the deterministic rules above it: those are the offline safety floor, they have
+    # already been applied, and an AttributeError here would discard them along with the whole
+    # session. Unusable entries are dropped and the rule table stands. See ``util.objects``.
     result = await call_llm(ctx, CANT_MISS_SENTINEL, f"Case:\n{blob}")
     if result:
-        for cm in result.get("cant_miss", []):
-            name = (cm.get("diagnosis_name") or "").strip()
-            if not name or name.strip().lower() in existing:
+        for cm in objects(result.get("cant_miss")):
+            name = as_text(cm.get("diagnosis_name"))
+            if not name or name.lower() in existing:
                 continue
+            why = as_text(cm.get("why_dangerous"))
+            evidence = [
+                Evidence(text, True, source="clinical_knowledge")
+                for text in (as_text(e.get("text")) for e in objects(cm.get("evidence_for")))
+                if text
+            ]
             added.append(
                 Hypothesis(
                     diagnosis_name=name,
-                    icd_code=cm.get("icd_code"),
+                    icd_code=cm.get("icd_code") if isinstance(cm.get("icd_code"), str) else None,
                     probability_band=norm_band(cm.get("probability_band"), "very_low"),
-                    evidence_for=[
-                        Evidence(e.get("text", ""), True, source="clinical_knowledge")
-                        for e in cm.get("evidence_for", [])
-                        if e.get("text")
-                    ]
-                    or [Evidence(cm.get("why_dangerous", ""), True, source="clinical_knowledge")],
-                    rationale=cm.get("why_dangerous"),
+                    evidence_for=evidence or [Evidence(why, True, source="clinical_knowledge")],
+                    rationale=why or None,
                     cant_miss_flag=True,
                     source_agent="sentinel",
                 )
             )
-            existing.add(name.strip().lower())
+            existing.add(name.lower())
     else:
         state.degraded = state.degraded or not ctx.llm_available()
 

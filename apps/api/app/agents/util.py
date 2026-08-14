@@ -54,6 +54,50 @@ def as_text(value: Any) -> str:
     return str(value)
 
 
+def objects(value: Any) -> list[dict[str, Any]]:
+    """The dict entries of a model-supplied list, with everything else dropped.
+
+    Every agent reads its output as a list of objects -- ``result.get("hypotheses", [])``, then
+    ``h.get("diagnosis_name")`` on each item. A model that answers with a list of bare strings
+    (``"hypotheses": ["Angina", "GERD"]``) makes that ``.get`` an AttributeError, and a model
+    that answers with an object instead of a list makes it iterate the *keys*, which are also
+    strings, for the same result. Either way the exception escapes the agent's ``run``, and no
+    node in ``graph.run_reasoning`` is wrapped -- so one malformed field fails the whole
+    reasoning session, after the model had already answered.
+
+    What makes that worse than it sounds is that every one of these agents has a deterministic
+    fallback for exactly this situation, and none of them get to use it: the crash happens while
+    parsing the response, past the point where "the model gave us nothing usable" would have
+    routed to the offline path. Dropping the unusable entries instead leaves the caller with an
+    empty list, which is the input its fallback is already written for.
+
+    The Verifier has guarded its own ``verdicts`` list this way since it was hardened (see
+    ``verifier._recognised``); this is that guard, shared, for the six nodes that did not get it.
+    """
+    if not isinstance(value, (list | tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def as_float(value: Any, default: float) -> float:
+    """A float from a model-supplied value, falling back when it is not a usable number.
+
+    ``float(result.get("info_gain_score", 0.5))`` is how the intake round read its own score, and
+    a model that answered ``"high"`` -- or ``null``, which is what "I don't know" tends to look
+    like -- raised straight out of the first request a clinician makes on a case. Booleans are
+    rejected rather than read as 1.0/0.0: ``True`` where a score belongs is a non-answer, not a
+    score of one. Non-finite values are rejected for the same reason, since NaN silently defeats
+    every threshold comparison downstream.
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if result == result and result not in (float("inf"), float("-inf")) else default
+
+
 _NEGATIVE = {"no", "none", "nil", "denies", "negative", "n", "no.", "none.", "absent"}
 
 

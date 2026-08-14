@@ -7,7 +7,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import TRIAGE_INTAKE
 from app.agents.state import CaseState, IntakeQuestionState
 from app.agents.tools import summarize_snapshot
-from app.agents.util import call_llm, text_blob
+from app.agents.util import as_float, as_text, call_llm, objects, text_blob
 
 AGENT = "triage_intake"
 
@@ -60,21 +60,29 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
 
 
 def _apply(state: CaseState, result: dict) -> None:
+    """Read one triage response, keeping whatever parts of it are usable.
+
+    Every field is coerced rather than trusted. This runs on ``ReasoningService.start`` -- the
+    first thing that happens when a clinician opens a case -- and it is the one agent whose
+    failure the clinician cannot work around, because there is no session yet to retry against.
+    A response that is partly malformed still yields the questions it got right.
+    """
     state.intake_complete = bool(result.get("intake_complete"))
-    state.info_gain_score = float(result.get("info_gain_score", state.info_gain_score))
+    state.info_gain_score = as_float(result.get("info_gain_score"), state.info_gain_score)
     existing = {q.text.strip().lower() for q in state.intake_questions}
-    for q in result.get("questions", []):
-        text = (q.get("text") or "").strip()
+    for q in objects(result.get("questions")):
+        text = as_text(q.get("text"))
         if not text or text.lower() in existing:
             continue
         state.intake_questions.append(
             IntakeQuestionState(
                 text=text,
-                question_type=q.get("question_type", "clarifying"),
-                rationale=q.get("rationale"),
-                info_gain_score=float(q.get("info_gain_score", 0.5)),
+                question_type=as_text(q.get("question_type")) or "clarifying",
+                rationale=as_text(q.get("rationale")) or None,
+                info_gain_score=as_float(q.get("info_gain_score"), 0.5),
             )
         )
+        existing.add(text.lower())
 
 
 def _fallback(state: CaseState) -> None:
