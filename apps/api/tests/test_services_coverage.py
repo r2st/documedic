@@ -322,8 +322,13 @@ def test_renal_rule_without_an_egfr_threshold_produces_no_flag():
     assert _evaluate_renal(proposed, rule, SafetyContext(egfr=22.0)) is None
 
 
-def test_renal_rule_produces_no_flag_when_the_patient_has_no_egfr_on_record():
-    """Without an eGFR there is nothing to compare — the rule must abstain, not assume."""
+def test_renal_rule_with_no_egfr_on_record_reports_itself_unevaluated():
+    """Without an eGFR the rule must say so, not abstain into silence.
+
+    Abstaining made "could not be checked" indistinguishable from "checked and fine" — both
+    reached the clinician as no flag at all. It now warns instead, without blocking. See
+    ``tests/test_unevaluated_renal_check.py`` for the full statement of that decision.
+    """
     rule = ContraindicationRule(
         drug_reference_id="ref-1",
         condition_name="Chronic kidney disease",
@@ -334,7 +339,10 @@ def test_renal_rule_produces_no_flag_when_the_patient_has_no_egfr_on_record():
     )
     proposed = DrugRef(reference_id="ref-1", generic_name="Metformin")
 
-    assert _evaluate_renal(proposed, rule, SafetyContext(egfr=None)) is None
+    unevaluated = _evaluate_renal(proposed, rule, SafetyContext(egfr=None))
+    assert unevaluated is not None
+    assert unevaluated.is_hard_block is False
+    assert unevaluated.details["evaluated"] is False
     # ...but a recorded eGFR under the threshold must still hard-block.
     flag = _evaluate_renal(proposed, rule, SafetyContext(egfr=22.0))
     assert flag is not None and flag.is_hard_block is True

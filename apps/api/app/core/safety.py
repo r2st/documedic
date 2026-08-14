@@ -403,19 +403,63 @@ def _evaluate_renal(
     proposed: DrugRef, rule: ContraindicationRule, ctx: SafetyContext
 ) -> SafetyFlag | None:
     threshold = rule.renal_threshold
-    if not threshold or ctx.egfr is None:
+    if not threshold:
         return None
     below = threshold.get("egfr_below")
     above = threshold.get("egfr_above")
     if below is None:
         return None
+
+    action = threshold.get("action", "review")
+
+    if ctx.egfr is None:
+        # A renal rule exists for this drug and there is no eGFR to apply it to. Returning None
+        # here -- which is what this did -- makes "could not be evaluated" indistinguishable
+        # from "evaluated and fine": the response says `is_blocked: false` with no flags, and
+        # the Safety screen renders the missing eGFR as the *absence* of its "eGFR available."
+        # footnote, i.e. as nothing at all. So a patient with no creatinine on file was shown a
+        # clean metformin check, when the rule that would have hard-blocked it below 30 mL/min
+        # simply never ran.
+        #
+        # This is the same judgement `check_medication` already makes one level up, where a
+        # drug name that resolves to nothing is a 422 rather than an unchecked pass: reporting
+        # no problems for a check that did not happen is the dangerous answer. Stated as a
+        # warning and not a hard block, because blocking every renally-dosed drug for every
+        # chart without a creatinine would be both clinically wrong and the kind of unclearable
+        # alert that teaches clinicians to click through the real ones.
+        #
+        # Only the base band (`egfr_above is None`) speaks. The bands of one rule family are
+        # half-open slices of the same threshold, so letting each one report its own
+        # unevaluated state would put two near-identical warnings on the card for metformin and
+        # say nothing the strictest band has not already said.
+        if above is not None:
+            return None
+        return SafetyFlag(
+            check_type="renal_dose",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"Renal check not performed for {proposed.generic_name} "
+                f"({rule.condition_name}): no eGFR on this chart. Guidelines set a threshold of "
+                f"{below} mL/min (action: {action}); a current creatinine is needed to apply it."
+            ),
+            details={
+                "proposed_drug": proposed.generic_name,
+                "egfr": None,
+                "egfr_threshold": below,
+                "action": action,
+                "condition": rule.condition_name,
+                "evaluated": False,
+            },
+            contraindication_id=rule.contraindication_id,
+        )
+
     if ctx.egfr >= below:
         return None
     if above is not None and ctx.egfr < above:
         # A more severe (lower) band rule should handle this; skip the dose-reduction band.
         return None
 
-    action = threshold.get("action", "review")
     is_hard = action == "contraindicated"
     return SafetyFlag(
         check_type="renal_dose",
