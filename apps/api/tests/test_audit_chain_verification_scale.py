@@ -1,16 +1,19 @@
-"""Chain verification has to stay bounded as a patient's trail grows.
+"""Chain verification has to stay bounded as the log grows.
 
 ``audit_logs`` is append-only and never pruned, and it records every PHI *read* as well as
 every write, so the trail of a patient under long-term follow-up runs to tens of thousands of
-rows. ``verify_patient_chain`` used to read all of it in one statement, hydrate every row into
-an ORM instance, and hash the lot in a single expression — unbounded memory, and the event loop
-held for the whole pass. That is the shape of the bcrypt and blob-I/O defects: unbounded work on
-the one thread the worker serves everybody from.
+rows — and the global table to that times every patient. Both verifications used to read their
+whole slice in one statement, hydrate every row into an ORM instance, and hash the lot in a
+single expression — unbounded memory, and the event loop held for the whole pass. That is the
+shape of the bcrypt and blob-I/O defects: unbounded work on the one thread the worker serves
+everybody from. Both are reachable from live endpoints (``/patients/{id}/audit/verify``, and
+``/regulatory/samd-dossier`` for the global one).
 
-It reads in ``_VERIFY_BATCH_SIZE`` batches now, walking a ``sequence`` cursor forwards. These
+They read in ``_VERIFY_BATCH_SIZE`` batches now, walking a ``sequence`` cursor forwards. These
 tests pin the properties that batching is easy to get wrong on: nothing may be skipped at a
 batch boundary, tampering in *any* batch has to be caught (not just the first), the count has to
-stay the patient's own, and the loop has to keep running throughout.
+stay the right slice's, the loop has to keep running throughout — and for the global chain, the
+link between the last row of one batch and the first of the next has to survive the boundary.
 """
 
 from __future__ import annotations
@@ -22,6 +25,13 @@ import uuid
 import pytest
 from sqlalchemy import func, select, text
 
+from app.core.audit_hash import (
+    GENESIS_HASH,
+    canonical_payload,
+    compute_record_hash,
+    verify_chain,
+    verify_chain_from,
+)
 from app.models.audit_log import AuditLog
 from app.services import audit_service as audit_module
 from app.services.audit_service import _VERIFY_BATCH_SIZE, AuditDraft, AuditService
@@ -197,3 +207,108 @@ async def test_the_endpoint_reports_the_batched_count(db, auth_client):
 
     assert body["chain_valid"] is True
     assert body["entries_checked"] > _VERIFY_BATCH_SIZE
+
+
+# --- the global chain -------------------------------------------------------------------------
+
+
+async def test_the_global_chain_survives_the_batch_boundary(db, auth_client):
+    """The linkage check is the whole point of the global walk, and batching is what breaks it.
+
+    Each entry's ``prev_hash`` has to equal the previous row's ``record_hash`` — across a batch
+    boundary as much as within one. A walk that restarted from genesis on every batch, or simply
+    forgot the last hash of the previous one, fails here and nowhere else: one batch's worth of
+    entries verifies perfectly well on its own.
+    """
+    await _fill_trail(db, await _patient_id(auth_client))
+    total = await db.scalar(select(func.count()).select_from(AuditLog))
+
+    checked, valid = await AuditService(db).verify_full_chain()
+
+    assert valid is True
+    assert checked == int(total or 0)
+    assert checked > _VERIFY_BATCH_SIZE, "the fixture did not produce a multi-batch chain"
+
+
+async def test_a_link_broken_at_the_batch_boundary_is_caught(db, auth_client):
+    """Repoint the first row of the second batch. Its own hash still recomputes; the link does
+    not — which is exactly the tamper a per-batch restart would wave through."""
+    await _fill_trail(db, await _patient_id(auth_client))
+    sequences = list(
+        (await db.execute(select(AuditLog.sequence).order_by(AuditLog.sequence.asc()))).scalars()
+    )
+    await db.execute(
+        text("UPDATE audit_logs SET prev_hash = :h WHERE sequence = :s"),
+        {"h": "f" * 64, "s": sequences[_VERIFY_BATCH_SIZE]},
+    )
+    await db.commit()
+
+    checked, valid = await AuditService(db).verify_full_chain()
+
+    assert valid is False
+    assert checked == len(sequences)
+
+
+async def test_the_global_walk_reads_one_batch_at_a_time(db, auth_client, monkeypatch):
+    await _fill_trail(db, await _patient_id(auth_client))
+
+    reads = 0
+    real_execute = type(db).execute
+
+    async def _execute(self, statement, *args, **kwargs):
+        nonlocal reads
+        reads += 1
+        return await real_execute(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(type(db), "execute", _execute)
+    checked, valid = await AuditService(db).verify_full_chain()
+
+    assert valid is True
+    assert reads == math.ceil(checked / _VERIFY_BATCH_SIZE) + 1
+
+
+async def test_verify_chain_from_resumes_where_it_left_off():
+    """The primitive the batching rests on, checked without a database in the way.
+
+    Splitting a chain and feeding it through in two calls has to agree with one call over the
+    whole of it — and a run fed the wrong starting hash has to be rejected.
+    """
+    entries = _synthetic_chain(6)
+
+    whole, tail_hash = verify_chain_from(entries, GENESIS_HASH)
+    first_half, carried = verify_chain_from(entries[:3], GENESIS_HASH)
+    second_half, resumed_tail = verify_chain_from(entries[3:], carried)
+
+    assert whole is True
+    assert first_half is True and second_half is True
+    assert resumed_tail == tail_hash
+    assert verify_chain(entries) is whole
+    # The carried hash is load-bearing: start the second half from genesis instead and the link
+    # into it no longer checks out.
+    assert verify_chain_from(entries[3:], GENESIS_HASH)[0] is False
+
+
+def _synthetic_chain(n: int) -> list[dict]:
+    """``n`` correctly-linked entries, built the way ``append`` builds them."""
+    entries: list[dict] = []
+    prev = GENESIS_HASH
+    for i in range(n):
+        entry = {
+            "sequence": i + 1,
+            "action": "record_viewed",
+            "account_id": None,
+            "patient_id": None,
+            "entity_type": "patient",
+            "entity_id": None,
+            "payload": {"n": i},
+            "created_at": f"2026-08-14T09:{i:02d}:00+00:00",
+            "prev_hash": prev,
+        }
+        entry["record_hash"] = compute_record_hash(prev, canonical_payload(**_hashed(entry)))
+        prev = entry["record_hash"]
+        entries.append(entry)
+    return entries
+
+
+def _hashed(entry: dict) -> dict:
+    return {k: v for k, v in entry.items() if k not in {"prev_hash", "record_hash"}}

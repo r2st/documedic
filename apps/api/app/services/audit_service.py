@@ -22,7 +22,7 @@ from app.core.audit_hash import (
     GENESIS_HASH,
     canonical_payload,
     compute_record_hash,
-    verify_chain,
+    verify_chain_from,
 )
 from app.models.audit_log import AuditLog
 
@@ -68,8 +68,29 @@ def _canonical_for(row: Any) -> str:
     )
 
 
-def _chain_entry(row: AuditLog) -> dict[str, Any]:
-    """Row rendered as the dict shape :func:`verify_chain` consumes."""
+# The columns a chain check reads. Selected explicitly rather than mapping whole entities: the
+# verifications below walk the table, nothing they do needs a mapped object, and each one would
+# cost an instrumented instance and an identity-map entry per row for a value read once.
+_CHAIN_COLUMNS = (
+    AuditLog.sequence,
+    AuditLog.action,
+    AuditLog.account_id,
+    AuditLog.patient_id,
+    AuditLog.entity_type,
+    AuditLog.entity_id,
+    AuditLog.payload,
+    AuditLog.created_at,
+    AuditLog.prev_hash,
+    AuditLog.record_hash,
+)
+
+
+def _chain_entry(row: Any) -> dict[str, Any]:
+    """Row rendered as the dict shape :func:`verify_chain_from` consumes.
+
+    ``row`` is an ``AuditLog`` or a ``Row`` over ``_CHAIN_COLUMNS`` — see :func:`_canonical_for`
+    for why there is one of these rather than one per row shape.
+    """
     return {
         "sequence": row.sequence,
         "action": row.action,
@@ -335,24 +356,12 @@ class AuditService:
         is what the endpoint reports as ``entries_checked``, and tamper evidence that stops at
         the first discrepancy tells an operator less than one that covers the whole trail.
         """
-        columns = (
-            AuditLog.sequence,
-            AuditLog.action,
-            AuditLog.account_id,
-            AuditLog.patient_id,
-            AuditLog.entity_type,
-            AuditLog.entity_id,
-            AuditLog.payload,
-            AuditLog.created_at,
-            AuditLog.prev_hash,
-            AuditLog.record_hash,
-        )
         checked = 0
         valid = True
         after = -1
         while True:
             result = await self.db.execute(
-                select(*columns)
+                select(*_CHAIN_COLUMNS)
                 .where(AuditLog.patient_id == patient_id, AuditLog.sequence > after)
                 .order_by(AuditLog.sequence.asc())
                 .limit(_VERIFY_BATCH_SIZE)
@@ -367,7 +376,37 @@ class AuditService:
                     valid = False
 
     async def verify_full_chain(self) -> tuple[int, bool]:
-        """Verify the entire global chain is unbroken (genesis -> latest)."""
-        result = await self.db.execute(select(AuditLog).order_by(AuditLog.sequence.asc()))
-        entries = [_chain_entry(r) for r in result.scalars().all()]
-        return len(entries), verify_chain(entries)
+        """Verify the entire global chain is unbroken (genesis -> latest), in batches.
+
+        Same defect and same fix as :meth:`verify_patient_chain`, one scale worse: this walks
+        *every* row in ``audit_logs``, for every patient and every account, and it is reachable
+        from a live endpoint — ``/regulatory/samd-dossier`` includes the chain's length and
+        validity. Read in one statement, that put the whole never-pruned table in memory and
+        hashed it with the event loop held.
+
+        Linkage is what makes this the global check rather than the per-patient one, and linkage
+        is exactly what a naive batch loses: each entry's ``prev_hash`` has to match the previous
+        row's ``record_hash``, across a boundary as much as within one. ``verify_chain_from``
+        carries that single expected hash from batch to batch, so the walk needs one row's worth
+        of state rather than the table's.
+        """
+        checked = 0
+        valid = True
+        expected_prev = GENESIS_HASH
+        after = -1
+        while True:
+            result = await self.db.execute(
+                select(*_CHAIN_COLUMNS)
+                .where(AuditLog.sequence > after)
+                .order_by(AuditLog.sequence.asc())
+                .limit(_VERIFY_BATCH_SIZE)
+            )
+            rows = result.all()
+            if not rows:
+                return checked, valid
+            checked += len(rows)
+            after = rows[-1].sequence
+            batch_valid, expected_prev = verify_chain_from(
+                [_chain_entry(r) for r in rows], expected_prev
+            )
+            valid = valid and batch_valid

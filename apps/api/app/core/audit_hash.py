@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from typing import Any
 
 # Hash that the very first audit row chains from.
@@ -47,17 +48,21 @@ def compute_record_hash(prev_hash: str, canonical: str) -> str:
     return digest.hexdigest()
 
 
-def verify_chain(entries: list[dict[str, Any]]) -> bool:
-    """Verify an ordered list of audit entries forms an unbroken hash chain.
+def verify_chain_from(entries: Sequence[dict[str, Any]], expected_prev: str) -> tuple[bool, str]:
+    """Verify a run of entries continues the chain from ``expected_prev``.
+
+    Returns ``(valid, next_expected_prev)``, so a caller reading a long log in batches can carry
+    the link across the batch boundary instead of holding the whole table in memory to check it.
+    :func:`verify_chain` is this, starting from genesis.
 
     Each entry must provide the same fields passed to :func:`canonical_payload` plus
-    ``prev_hash`` and ``record_hash``. Returns True only if every link recomputes correctly
-    and each ``prev_hash`` matches the prior row's ``record_hash``.
+    ``prev_hash`` and ``record_hash``. A broken link does not stop the walk: the remaining
+    entries are still checked on their own terms, so what comes back is "these links are wrong"
+    rather than "everything after the first edit is wrong", which is the more useful thing to
+    hand an operator holding tamper evidence.
     """
-    expected_prev = GENESIS_HASH
+    valid = True
     for entry in entries:
-        if entry["prev_hash"] != expected_prev:
-            return False
         canonical = canonical_payload(
             sequence=entry["sequence"],
             action=entry["action"],
@@ -68,7 +73,19 @@ def verify_chain(entries: list[dict[str, Any]]) -> bool:
             payload=entry.get("payload", {}),
             created_at=entry["created_at"],
         )
-        if compute_record_hash(entry["prev_hash"], canonical) != entry["record_hash"]:
-            return False
+        if (
+            entry["prev_hash"] != expected_prev
+            or compute_record_hash(entry["prev_hash"], canonical) != entry["record_hash"]
+        ):
+            valid = False
         expected_prev = entry["record_hash"]
-    return True
+    return valid, expected_prev
+
+
+def verify_chain(entries: Sequence[dict[str, Any]]) -> bool:
+    """Verify an ordered list of audit entries forms an unbroken hash chain from genesis.
+
+    Returns True only if every link recomputes correctly and each ``prev_hash`` matches the
+    prior row's ``record_hash``.
+    """
+    return verify_chain_from(entries, GENESIS_HASH)[0]
