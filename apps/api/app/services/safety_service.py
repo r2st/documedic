@@ -8,6 +8,7 @@ are hard blocks that cannot be dismissed.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import replace
 
 from sqlalchemy import func, select
@@ -61,14 +62,19 @@ class SafetyService:
         return await PatientService(self.db).get(account_id, patient_id)
 
     async def _build_context(
-        self, patient_id: uuid.UUID, *, proposed_reference_id: str | None = None
+        self, patient_id: uuid.UUID, *, proposed_reference_ids: Iterable[str] = ()
     ) -> SafetyContext:
         """Assemble everything ``evaluate_drug_safety`` needs for one patient.
 
-        ``proposed_reference_id`` is the drug about to be checked, when there is one. It only
-        widens the *reference-data* scope: the two rule tables are loaded for the drugs actually
-        in play (current medications plus the proposal) rather than in full. Patient data is
-        unaffected by it.
+        ``proposed_reference_ids`` are the drugs about to be checked, when there are any. They
+        only widen the *reference-data* scope: the two rule tables are loaded for the drugs
+        actually in play (current medications plus the proposals) rather than in full. Patient
+        data is unaffected by them.
+
+        Plural because a management option names however many drugs its guideline names — "an
+        ACE inhibitor or ARB (e.g. enalapril/telmisartan)" is one option and two molecules — and
+        a rule for a drug outside this set is a rule that cannot fire, which is how a
+        contraindication for a proposed drug would go silently unloaded.
         """
         med_rows = await self._current_medication_rows(patient_id)
         allergy_rows = await self._active_allergy_rows(patient_id)
@@ -81,9 +87,9 @@ class SafetyService:
         # only fire between the proposal and a current medication, and contraindications only for
         # the proposal itself, so a full-table load is wasted I/O that grows with the corpus
         # rather than with the patient. Both predicates ride existing indexes.
-        reference_ids = {m.reference_id for m in current_meds}
-        if proposed_reference_id:
-            reference_ids.add(proposed_reference_id)
+        reference_ids = {m.reference_id for m in current_meds} | {
+            ref for ref in proposed_reference_ids if ref
+        }
 
         return SafetyContext(
             current_meds=current_meds,
@@ -380,7 +386,7 @@ class SafetyService:
         # on it: check_duplicate_therapy needs to see it to detect "already an active order for
         # this exact product". check_interactions self-skips that pair, so nothing else in
         # evaluate_drug_safety is affected.
-        ctx = await self._build_context(patient_id, proposed_reference_id=vocab.reference_id)
+        ctx = await self._build_context(patient_id, proposed_reference_ids=[vocab.reference_id])
         proposed = DrugRef(
             reference_id=vocab.reference_id,
             generic_name=vocab.generic_name,
@@ -505,6 +511,52 @@ class SafetyService:
             .order_by(DrugSafetyOverride.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def screen_text(self, patient_id: uuid.UUID, text: str) -> list[SafetyFlag]:
+        """Deterministic conflicts between the drugs *named in* ``text`` and this patient.
+
+        The screen behind Critical Safety Rule #3 for output the pipeline generates rather than
+        output a clinician proposes. A retrieved guideline is written for a population and knows
+        nothing about the patient it is about to be shown beside: the shipped ICMR corpus says
+        "Paracetamol is preferred for fever" in its dengue workflow and "Metformin is the
+        preferred first-line pharmacotherapy" in its diabetes one, and both reach the clinician
+        as cited management options. Until this existed, nothing compared either against the
+        documented allergy or the measured eGFR in the same case state — so a patient allergic
+        to paracetamol was shown a guideline-cited suggestion to give it, carrying every signal
+        that it had been checked.
+
+        Deliberately *not* :meth:`_reject_if_multiple_drugs`, which refuses a multi-drug string
+        at the clinician-proposal boundary. There, naming two drugs makes the verdict ambiguous
+        and one of them would be silently dropped. Here, naming several drugs is what a
+        guideline sentence normally does, and every one of them is evaluated: refusing would
+        turn "this option names two drugs" into no check at all, which is the failure that
+        boundary exists to prevent, inverted.
+
+        Whole-name matching only, via :meth:`DrugResolver.rows_named_in` — never the fuzzy
+        tier. Fuzzy matching earns its place on a name a human typed or OCR lifted off a
+        prescription; run over a paragraph of prose it would invent conflicts against drugs the
+        text never mentioned, and a spurious hard block on a correct guideline recommendation
+        teaches clinicians to click past hard blocks.
+
+        Offline and deterministic, like every other check here: no LLM, and nothing but the
+        patient's own rows and the curated rule tables.
+        """
+        named = await self.resolver.rows_named_in(text)
+        if not named:
+            return []
+        ctx = await self._build_context(patient_id, proposed_reference_ids=named)
+        flags: list[SafetyFlag] = []
+        # Sorted so a run's output does not depend on dictionary insertion order, which follows
+        # where in the sentence each drug happened to appear.
+        for reference_id in sorted(named):
+            row = named[reference_id]
+            proposed = DrugRef(
+                reference_id=row.reference_id,
+                generic_name=row.generic_name,
+                drug_class=row.drug_class,
+            )
+            flags.extend(evaluate_drug_safety(proposed, ctx))
+        return flags
 
     async def active_flags(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID

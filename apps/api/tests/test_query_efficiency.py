@@ -540,7 +540,7 @@ async def test_only_rules_touching_the_drugs_in_play_are_loaded(db):
     aspirin = await _vocab(db, "Aspirin")
 
     ctx = await SafetyService(db)._build_context(
-        patient.id, proposed_reference_id=aspirin.reference_id
+        patient.id, proposed_reference_ids=[aspirin.reference_id]
     )
 
     in_play = {metformin.reference_id, warfarin.reference_id, aspirin.reference_id}
@@ -559,14 +559,14 @@ async def test_the_proposed_drugs_own_rules_are_still_loaded(db):
     """Scoping must not narrow so far that the proposal's own rules disappear.
 
     Warfarin + aspirin is a curated interacting pair; the proposed drug is not yet a current
-    medication, so only ``proposed_reference_id`` can bring its rules into scope.
+    medication, so only ``proposed_reference_ids`` can bring its rules into scope.
     """
     _account, patient = await _account_and_patient(db)
     await _add_current_med(db, patient, "Warfarin")
     aspirin = await _vocab(db, "Aspirin")
 
     ctx = await SafetyService(db)._build_context(
-        patient.id, proposed_reference_id=aspirin.reference_id
+        patient.id, proposed_reference_ids=[aspirin.reference_id]
     )
 
     pairs = {
@@ -718,3 +718,28 @@ async def test_a_patient_on_no_medications_touches_neither_reference_table(db, e
         if "drug_interactions" in s or "FROM contraindications" in s
     ]
     assert touched == [], f"queried reference tables with no drugs in play: {touched}"
+
+
+async def test_rules_are_loaded_for_every_proposed_drug_not_just_one(db):
+    """The scope must widen to all the drugs a text names, not to the first of them.
+
+    ``SafetyService.screen_text`` hands ``_build_context`` every drug a guideline management
+    option names, because a guideline sentence routinely names several ("an ACE inhibitor or ARB
+    (e.g. enalapril/telmisartan)"). A rule for a drug outside the loaded scope cannot fire, so a
+    parameter that quietly kept only one of them would silently drop the others' hard blocks
+    while every query-count assertion above still passed.
+    """
+    _account, patient = await _account_and_patient(db)
+    metformin = await _vocab(db, "Metformin")
+    enalapril = await _vocab(db, "Enalapril")
+
+    ctx = await SafetyService(db)._build_context(
+        patient.id, proposed_reference_ids=[metformin.reference_id, enalapril.reference_id]
+    )
+
+    scoped = {ci.drug_reference_id for ci in ctx.contraindication_rules}
+    assert metformin.reference_id in scoped
+    assert enalapril.reference_id in scoped, (
+        "the second proposed drug's contraindication rules were never loaded, so its hard "
+        "blocks could not fire"
+    )

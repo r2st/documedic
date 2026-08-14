@@ -31,7 +31,7 @@ from app.models.reasoning_session import ReasoningSession
 from app.services.audit_service import AuditDraft, AuditService
 from app.services.guideline_service import GuidelineService
 from app.services.record_service import REASONING_SNAPSHOT_LIMIT, RecordService
-from app.services.safety_service import SafetyService
+from app.services.safety_service import SafetyFlag, SafetyService
 
 
 class ReasoningSessionNotFoundError(NotFoundError):
@@ -99,25 +99,39 @@ class ReasoningService:
     async def _safety_evaluator(
         self, account_id: uuid.UUID, patient_id: uuid.UUID
     ) -> SafetyEvaluator:
-        """Precompute the patient's active safety flags into a constant evaluator callable."""
-        results = await SafetyService(self.db).active_flags(
-            account_id=account_id, patient_id=patient_id
-        )
-        flags: list[dict] = []
-        for _vocab, flag_list in results:
-            for f in flag_list:
-                flags.append(
-                    {
-                        "check_type": f.check_type,
-                        "severity": f.severity,
-                        "is_hard_block": f.is_hard_block,
-                        "summary": f.summary,
-                        "details": f.details,
-                    }
-                )
+        """The deterministic drug-safety evaluator the reasoning graph calls.
 
-        def evaluate(_drug: str) -> list[dict]:
-            return flags
+        Answers two different questions through the one seam the graph has (see
+        :data:`~app.agents.context.SafetyEvaluator`):
+
+        * ``""`` — the patient's current medications checked against each other. Precomputed,
+          because it is the same answer however many times the node asks.
+        * any other text — the drugs *named in* it, checked against this patient. This is what
+          screens a guideline management option before the clinician sees it. It cannot be
+          precomputed: which contraindication and interaction rules matter depends on which
+          drugs the text turns out to name, and that is not known until the retrieval and
+          drafting upstream of the safety node have run.
+
+        The second arm was for a long time the reason this signature took a drug name at all,
+        and it returned the first arm's constant regardless — a seam that looked wired and was
+        inert. Everything it now finds was reachable the whole time.
+        """
+        service = SafetyService(self.db)
+        results = await service.active_flags(account_id=account_id, patient_id=patient_id)
+        current: list[dict] = [_flag_dict(f) for _vocab, flag_list in results for f in flag_list]
+        # Screening results memoised per text: management options are drafted from overlapping
+        # guideline excerpts, so the same sentence is commonly screened more than once in a run,
+        # and each miss costs a handful of queries on a path that is streaming to the clinician.
+        screened: dict[str, list[dict]] = {}
+
+        async def evaluate(text: str) -> list[dict]:
+            if not text or not text.strip():
+                return current
+            if text not in screened:
+                screened[text] = [
+                    _flag_dict(f) for f in await service.screen_text(patient_id, text)
+                ]
+            return screened[text]
 
         return evaluate
 
@@ -577,3 +591,14 @@ class ReasoningService:
         )
         await self.db.commit()
         return record
+
+
+def _flag_dict(flag: SafetyFlag) -> dict:
+    """A deterministic safety flag in the shape the reasoning graph and SSE stream carry."""
+    return {
+        "check_type": flag.check_type,
+        "severity": flag.severity,
+        "is_hard_block": flag.is_hard_block,
+        "summary": flag.summary,
+        "details": flag.details,
+    }

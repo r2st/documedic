@@ -23,8 +23,16 @@ from app.agents.llm import LLMClient
 # injection point whose whole purpose is to be easy to substitute. ``resolve_retrieved`` is how
 # agents consume either.
 Retriever = Callable[[str, int], "list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]"]
-# proposed-drug name -> list of safety-flag dicts (deterministic engine output)
-SafetyEvaluator = Callable[[str], list[dict[str, Any]]]
+# Text naming zero or more drugs -> the deterministic engine's flags for those drugs against
+# this patient. "" means "the patient's current medications", which is what the safety node's
+# first pass asks for; any other string is screened for the drug names inside it, which is how a
+# guideline management option gets checked against the chart it is about to be shown beside.
+#
+# May be sync or async, for the same reason ``Retriever`` may: the evaluator the ReasoningService
+# injects has to reach the database (the contraindication and interaction rules it needs depend
+# on which drugs the text turns out to name, so they cannot all be preloaded), while the ones
+# tests inject are ordinary functions. ``resolve_safety`` is how the node consumes either.
+SafetyEvaluator = Callable[[str], "list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]"]
 EventEmitter = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
@@ -48,6 +56,15 @@ async def resolve_retrieved(result: Any) -> list[dict[str, Any]]:
 
 def _empty_safety(drug: str) -> list[dict[str, Any]]:
     return []
+
+
+async def resolve_safety(result: Any) -> list[dict[str, Any]]:
+    """Await a safety evaluator's result if it is awaitable, else pass it through.
+
+    The twin of :func:`resolve_retrieved`, for the same reason and at the same kind of
+    injection point — see :data:`SafetyEvaluator`.
+    """
+    return await result if inspect.isawaitable(result) else result
 
 
 @dataclass

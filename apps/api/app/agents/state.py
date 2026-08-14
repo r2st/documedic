@@ -93,6 +93,13 @@ class ManagementOption:
     citations: list[GuidelineChunkRef] = field(default_factory=list)
     autonomy_tier: str = "suggestive"
     sufficient_support: bool = True
+    # Deterministic drug-safety flags raised against the drugs this option *names*, filled in by
+    # the drug-safety node after guideline retrieval. A guideline is written for a population;
+    # the conflict is with this patient, so it can only be found once both are in hand.
+    safety_flags: list[dict[str, Any]] = field(default_factory=list)
+
+    def has_hard_block(self) -> bool:
+        return any(f.get("is_hard_block") for f in self.safety_flags)
 
 
 @dataclass

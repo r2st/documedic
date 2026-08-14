@@ -111,16 +111,31 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
             }
             for c in opt.citations
         ]
+        # A conflict with this patient's own record outranks how well the option is cited: a
+        # perfectly-supported guideline recommendation for a drug they are allergic to is the
+        # most dangerous thing this pipeline can emit, precisely because everything about its
+        # presentation says it was checked. It is escalated, titled for what it is, and carries
+        # the flags with it — the conservative reading wins (Critical Safety Rules #2 and #3).
+        conflicted = bool(opt.safety_flags)
+        blocked = opt.has_hard_block()
         out.append(
             {
                 "output_type": "management",
-                "autonomy_tier": state.autonomy_tier
-                if opt.sufficient_support
-                else "flag_for_review",
+                "autonomy_tier": "flag_for_review"
+                if conflicted or not opt.sufficient_support
+                else state.autonomy_tier,
                 "confidence_band": None,
-                "title": "Guideline-supported management option",
+                "title": (
+                    "Guideline-supported management option — conflicts with this patient's record"
+                    if conflicted
+                    else "Guideline-supported management option"
+                ),
                 "body": as_text(opt.text) or None,
-                "evidence": {"sufficient_support": opt.sufficient_support},
+                "is_hard_block": blocked,
+                "evidence": {
+                    "sufficient_support": opt.sufficient_support,
+                    "safety_flags": opt.safety_flags,
+                },
                 "verifier_verdict": {},
                 "devils_advocate": {},
                 "citations": citations,
