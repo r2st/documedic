@@ -292,16 +292,40 @@ class DocumentService:
         )
 
     async def get(
-        self, account_id: uuid.UUID, patient_id: uuid.UUID, doc_id: uuid.UUID
+        self,
+        account_id: uuid.UUID,
+        patient_id: uuid.UUID,
+        doc_id: uuid.UUID,
+        *,
+        for_update: bool = False,
     ) -> Document:
-        result = await self.db.execute(
-            select(Document).where(
-                Document.id == doc_id,
-                Document.patient_id == patient_id,
-                Document.account_id == account_id,
-                Document.is_deleted.is_(False),
-            )
+        """The document, or ``DocumentNotFoundError``.
+
+        ``for_update`` takes a row lock, and only :meth:`approve` asks for one. Approving merges
+        the stored extraction into the chart, and the merge decides what to insert by reading
+        what is already there — a read-then-insert window that two approvals of the same
+        document can both sit inside. Sequentially the second one sees the first one's rows and
+        merges nothing, which is what makes a double-clicked Approve button harmless; overlapping,
+        both read an empty chart and both insert, and the patient ends up with one blood draw
+        recorded twice. The lock makes the second approval wait for the first to commit, so its
+        read happens after the write it needs to see (READ COMMITTED takes a fresh snapshot per
+        statement, and the lock is released at commit).
+
+        PostgreSQL only, in the same sense as ``AuditService._lock``: SQLAlchemy's SQLite dialect
+        silently drops ``FOR UPDATE``, so on a SQLite deployment two genuinely simultaneous
+        approvals of one document can still both merge. Sequential re-approval — the case that
+        actually happens, and the one the deduplication in ``GraphService`` covers — is safe on
+        every backend.
+        """
+        statement = select(Document).where(
+            Document.id == doc_id,
+            Document.patient_id == patient_id,
+            Document.account_id == account_id,
+            Document.is_deleted.is_(False),
         )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self.db.execute(statement)
         document = result.scalar_one_or_none()
         if document is None:
             raise DocumentNotFoundError()
@@ -350,7 +374,8 @@ class DocumentService:
         doc_id: uuid.UUID,
         approval: ExtractionApproval,
     ) -> dict[str, int]:
-        document = await self.get(account_id, patient_id, doc_id)
+        # Locked: the merge below reads the chart to decide what is already in it. See `get`.
+        document = await self.get(account_id, patient_id, doc_id, for_update=True)
         patient = await self._get_patient(account_id, patient_id)
         meta = dict(document.extraction_metadata or {})
         raw_entities = meta.get("entities", [])

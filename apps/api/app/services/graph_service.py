@@ -84,6 +84,28 @@ def _to_decimal(value: object) -> Decimal | None:
         return None
 
 
+def _lab_key(
+    marker: str | None, value: Decimal | None, sample_date: datetime | None
+) -> tuple[str, Decimal | None, str | None]:
+    """Dedup key identifying one lab *observation* within a source document.
+
+    The timestamp is reduced to a UTC ISO string rather than compared as a ``datetime`` because
+    the two sides of the comparison come from different places: one was just parsed by
+    ``_parse_datetime`` (always tz-aware) and the other was read back out of the database, which
+    on SQLite drops the tzinfo on the round trip. As ``datetime`` objects those two are unequal
+    and hash differently, so the key would never match and the dedup would silently do nothing.
+    """
+    return (
+        (marker or "").strip().lower(),
+        value,
+        None
+        if sample_date is None
+        else sample_date.replace(tzinfo=UTC).astimezone(UTC).isoformat()
+        if sample_date.tzinfo is None
+        else sample_date.astimezone(UTC).isoformat(),
+    )
+
+
 class GraphService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -106,7 +128,7 @@ class GraphService:
         # during this merge are folded back in, so a document that lists the same drug or
         # condition twice no longer creates two rows — autoflush is off, so the earlier
         # db.add() would not have been visible to a follow-up SELECT.
-        seen = await self._existing_keys(patient)
+        seen = await self._existing_keys(patient, source_doc_id)
         # Every medication and drug-allergy line resolves a name against the vocabulary. Doing
         # that lazily costs one exact-match query per line, so a 30-line prescription pays 30
         # round-trips; one prefetch collapses them into a single query.
@@ -125,7 +147,9 @@ class GraphService:
                 ):
                     counts["medications"] += 1
             elif etype == "lab_result":
-                lab = await self._merge_lab(patient, source_doc_id, fields, region, confidence)
+                lab = await self._merge_lab(
+                    patient, source_doc_id, fields, region, confidence, seen["lab_results"]
+                )
                 if lab is not None:
                     counts["lab_results"] += 1
                     new_lab_results.append(lab)
@@ -145,8 +169,40 @@ class GraphService:
         await self.db.flush()
         return counts
 
-    async def _existing_keys(self, patient: Patient) -> dict[str, set]:
-        """Dedup keys already in the record: current meds, conditions, allergies."""
+    async def _existing_keys(
+        self, patient: Patient, source_doc_id: uuid.UUID | None
+    ) -> dict[str, set]:
+        """Dedup keys already in the record: current meds, conditions, allergies, labs.
+
+        The lab set is the one scoped to a *document* rather than to the whole patient, because
+        a lab result is not identified by its marker the way a condition is identified by its
+        name. The same marker recurs legitimately for years — a creatinine drawn every quarter is
+        the entire point of a longitudinal record — so keying on the marker across the chart
+        would suppress the follow-ups that matter most. What is unambiguously a duplicate is the
+        same observation arriving from the same document twice, which is what re-approving an
+        extraction does: ``approve`` re-merges every entity in the stored extraction, and nothing
+        stops a clinician approving a second time (a double-clicked button, or a genuine
+        re-approval after correcting a drug name). Every other entity type already survived that;
+        labs were re-inserted whole, so one document's creatinine and HbA1c appeared twice in the
+        chart, read as two separate draws, and derived eGFR was recomputed and stored per copy.
+
+        Scoping the read to the document also keeps its cost flat. Patient-scoped it would load
+        a key per lab the patient has ever had — the set that grows fastest here, and the one
+        ``ix_lab_results_patient_sample_date`` exists because it reaches thousands of rows.
+        """
+        labs = await self.db.execute(
+            select(
+                LabResult.marker_name,
+                LabResult.value_numeric,
+                LabResult.sample_date,
+            ).where(
+                LabResult.patient_id == patient.id,
+                LabResult.source_document_id == source_doc_id
+                if source_doc_id is not None
+                else LabResult.source_document_id.is_(None),
+                LabResult.is_deleted.is_(False),
+            )
+        )
         meds = await self.db.execute(
             select(MedicationEvent.generic_name, MedicationEvent.dose).where(
                 MedicationEvent.patient_id == patient.id,
@@ -170,6 +226,9 @@ class GraphService:
             "medications": {((generic or "").lower(), dose or "") for generic, dose in meds.all()},
             "conditions": {name.lower() for (name,) in conditions.all() if name},
             "allergies": {name.lower() for (name,) in allergies.all() if name},
+            "lab_results": {
+                _lab_key(marker, value, sample_date) for marker, value, sample_date in labs.all()
+            },
         }
 
     async def _merge_medication(
@@ -220,6 +279,7 @@ class GraphService:
         fields: dict[str, Any],
         region: dict[str, Any] | None,
         confidence: dict[str, Any],
+        seen: set,
     ) -> LabResult | None:
         marker = fields.get("marker_name")
         if not marker:
@@ -239,6 +299,15 @@ class GraphService:
                 is_abnormal = False
 
         sample_date = _parse_datetime(fields.get("sample_date"))
+        # Same marker, same value, same draw date, same document: the observation is already in
+        # the chart. Two *different* values for one marker in one report (a pre- and post-dialysis
+        # creatinine) differ in the key and are both kept, as is the same marker arriving from a
+        # later report. See _existing_keys for why this is scoped to the document.
+        key = _lab_key(marker, value_numeric, sample_date)
+        if key in seen:
+            return None
+        seen.add(key)
+
         lab = LabResult(
             patient_id=patient.id,
             source_document_id=source_doc_id,

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
+import uuid
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from app.models.document import Document
+from app.services.document_service import DocumentService
 from tests.conftest import create_patient
 from tests.test_concurrent_ingestion import (  # noqa: F401 — fixtures used by name
     clinicians,
@@ -435,3 +438,171 @@ async def test_simultaneous_uploads_of_different_files_all_land_and_stay_distinc
         resp = await first.get(f"/api/v1/patients/{concurrent_patient}/documents/{doc_id}/file")
         assert resp.status_code == 200, resp.text
         assert resp.content == data, f"{name} came back as another document"
+
+
+# ------------------------------------------------------------------ approving the same scan twice
+
+# Nothing rejects a second approval of one document — ``extraction_metadata["approved"]`` is
+# written but never read — and two ordinary things produce one: a double-clicked Approve button
+# on a slow connection, and a clinician who approves, spots a mis-extracted value and approves
+# again with a correction. So the merge has to be idempotent at the API boundary, not just in
+# GraphService, which is where these differ from the unit tests in
+# ``test_graph_service_merge_dedup``.
+
+
+async def test_approving_the_same_document_twice_does_not_duplicate_the_record(auth_client):
+    """The chart after two approvals is the chart after one."""
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+    doc = await _upload(auth_client, pid, "renal-panel.pdf", SCANS["renal-panel.pdf"])
+    body = {"corrections": [], "rejected_entity_indexes": []}
+
+    first = await auth_client.post(
+        f"/api/v1/patients/{pid}/documents/{doc['id']}/approve", json=body
+    )
+    assert first.status_code == 200, first.text
+    after_first = (await auth_client.get(f"/api/v1/patients/{pid}/record")).json()
+
+    second = await auth_client.post(
+        f"/api/v1/patients/{pid}/documents/{doc['id']}/approve", json=body
+    )
+    assert second.status_code == 200, second.text
+    after_second = (await auth_client.get(f"/api/v1/patients/{pid}/record")).json()
+
+    assert second.json()["merged"] == dict.fromkeys(first.json()["merged"], 0)
+    for section in ("medications", "lab_results", "conditions", "allergies", "derived_markers"):
+        assert len(after_second[section]) == len(after_first[section]), (
+            f"re-approving duplicated {section}: "
+            f"{len(after_first[section])} -> {len(after_second[section])}"
+        )
+
+
+async def test_re_approving_with_a_correction_amends_the_record_without_duplicating_it(auth_client):
+    """The realistic second approval: the merge was right except for one value.
+
+    This is why a second approval cannot simply be refused. The clinician is correcting the
+    chart, so the corrected entity has to merge — while everything alongside it, already in the
+    record from the first pass, must not arrive a second time.
+    """
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+    doc = await _upload(auth_client, pid, "renal-panel.pdf", SCANS["renal-panel.pdf"])
+    body = {"corrections": [], "rejected_entity_indexes": []}
+    assert (
+        await auth_client.post(f"/api/v1/patients/{pid}/documents/{doc['id']}/approve", json=body)
+    ).status_code == 200
+
+    extraction = (
+        await auth_client.get(f"/api/v1/patients/{pid}/documents/{doc['id']}/extraction")
+    ).json()
+    index = next(
+        i for i, e in enumerate(extraction["entities"]) if e["entity_type"] == "lab_result"
+    )
+
+    corrected = await auth_client.post(
+        f"/api/v1/patients/{pid}/documents/{doc['id']}/approve",
+        json={
+            "corrections": [{"entity_index": index, "field_name": "value_numeric", "value": "2.9"}],
+            "rejected_entity_indexes": [],
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+
+    record = (await auth_client.get(f"/api/v1/patients/{pid}/record")).json()
+    creatinines = sorted(
+        lab["value_numeric"] for lab in record["lab_results"] if lab["marker_name"] == "Creatinine"
+    )
+    # Both readings are present and distinct: the original stands (nothing in this system edits
+    # a merged clinical row in place) and the corrected value is a new one alongside it.
+    assert creatinines == ["1.400000", "2.900000"], creatinines
+
+
+async def test_a_re_approval_leaves_the_other_documents_in_the_chart_untouched(auth_client):
+    """Idempotency must be per document — re-approving one scan cannot disturb its neighbours."""
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+    uploaded = await _upload_chart(auth_client, pid)
+    body = {"corrections": [], "rejected_entity_indexes": []}
+    for doc in uploaded.values():
+        assert (
+            await auth_client.post(
+                f"/api/v1/patients/{pid}/documents/{doc['id']}/approve", json=body
+            )
+        ).status_code == 200
+
+    before = (await auth_client.get(f"/api/v1/patients/{pid}/record")).json()
+    again = await auth_client.post(
+        f"/api/v1/patients/{pid}/documents/{uploaded['renal-panel.pdf']['id']}/approve", json=body
+    )
+    assert again.status_code == 200, again.text
+    after = (await auth_client.get(f"/api/v1/patients/{pid}/record")).json()
+
+    assert {lab["marker_name"] for lab in after["lab_results"]} == {"Creatinine", "LDL"}
+    for section in ("medications", "lab_results", "conditions", "allergies", "derived_markers"):
+        assert len(after[section]) == len(before[section])
+
+
+def test_approve_locks_the_document_row_before_reading_the_chart() -> None:
+    """The overlapping double-click is closed by a row lock, and this is where that is pinned.
+
+    Sequential re-approval is safe on every backend: the second one reads the first one's rows
+    and merges nothing. Two approvals genuinely in flight are a different problem — both can read
+    the chart before either has written — and the fix is the ``FOR UPDATE`` on the ``documents``
+    row that makes the second wait for the first to commit.
+
+    Asserted by compiling the statement rather than by racing two requests, because the race
+    cannot be run here: SQLAlchemy's SQLite dialect drops ``FOR UPDATE`` silently, so on the
+    file-backed engine the other concurrency tests use, a test of the locked behaviour would fail
+    against correct code. Compiling against the PostgreSQL dialect asserts the thing that is
+    actually true — that production takes the lock — instead of asserting nothing.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql
+
+    from app.models.document import Document
+
+    statement = (
+        select(Document)
+        .where(Document.id == uuid.uuid4(), Document.is_deleted.is_(False))
+        .with_for_update()
+    )
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE" in compiled
+    source = inspect.getsource(DocumentService.approve)
+    assert "for_update=True" in source, (
+        "DocumentService.approve must load the document with a row lock; without it two "
+        "simultaneous approvals both read an empty chart and both merge the same lab results"
+    )
+
+
+async def test_two_clinicians_approving_different_documents_at_once_both_land(
+    concurrent_app,  # noqa: F811 — pytest fixture
+    clinicians,  # noqa: F811 — pytest fixture
+):
+    """The lock is per document, so it must not serialise unrelated work into losing a merge.
+
+    A lock taken on the wrong row — the patient, say — would make these two approvals contend,
+    and the failure mode of that is silent: one merge's rows simply never appear.
+    """
+    one, two = clinicians
+    patient = await create_patient(one)
+    pid = patient["id"]
+    renal = await _upload(one, pid, "renal-panel.pdf", SCANS["renal-panel.pdf"])
+    lipids = await _upload(one, pid, "lipids.pdf", SCANS["lipids.pdf"])
+    body = {"corrections": [], "rejected_entity_indexes": []}
+
+    results = await asyncio.gather(
+        one.post(f"/api/v1/patients/{pid}/documents/{renal['id']}/approve", json=body),
+        two.post(f"/api/v1/patients/{pid}/documents/{lipids['id']}/approve", json=body),
+        return_exceptions=True,
+    )
+    assert all(not isinstance(r, BaseException) and r.status_code == 200 for r in results), results
+
+    record = (await one.get(f"/api/v1/patients/{pid}/record")).json()
+    assert {lab["marker_name"] for lab in record["lab_results"]} == {"Creatinine", "LDL"}
+    # Neither concurrent merge duplicated its own document's labs either.
+    assert len(record["lab_results"]) == 2
+
+    verify = (await one.get(f"/api/v1/patients/{pid}/audit/verify")).json()
+    assert verify["chain_valid"] is True
