@@ -1,13 +1,19 @@
 """Dense (embedding) retrieval support for the guideline corpus.
 
 This module exists because the dense half of retrieval was built, provisioned, documented — and
-never connected. ``guideline_ingest`` embeds every chunk with sentence-transformers, writes the
-vector to ``guideline_chunks.embedding``, and upserts it into Qdrant; ``requirements.txt`` pins
-``qdrant-client`` and ``sentence-transformers`` (and, transitively, torch); ``docker-compose``
-runs a Qdrant service. The read side never touched any of it. ``GuidelineService.retrieve``
-called ``lexical_score`` unconditionally, and three module docstrings claimed the opposite —
-"Production retrieval is dense vector search in Qdrant ... when they are unavailable the service
-falls back to a deterministic lexical retriever". There was no dense path to fall back *from*.
+never connected, on either side. ``requirements.txt`` pins ``qdrant-client`` and
+``sentence-transformers`` (and, transitively, torch); ``docker-compose`` runs a Qdrant service.
+The read side never touched any of it: ``GuidelineService.retrieve`` called ``lexical_score``
+unconditionally, and three module docstrings claimed the opposite — "Production retrieval is
+dense vector search in Qdrant ... when they are unavailable the service falls back to a
+deterministic lexical retriever". There was no dense path to fall back *from*.
+
+The write side was no better, and it is worth stating plainly because it is the failure mode this
+module is easiest to reintroduce: ``guideline_ingest`` embedded chunks only when its caller asked
+it to push to Qdrant, and the only caller that ever did was its own ``__main__``. Seeding — the
+path every deployment actually runs — left ``guideline_chunks.embedding`` NULL for every row. An
+optional path that silently does nothing reads exactly like a working one, so both halves are now
+covered by tests that inject the embedder rather than depend on a model being present.
 
 What dense retrieval is allowed to do here is deliberately narrow, and the bound is measured
 rather than assumed. See ``guideline_service.apply_dense_rerank`` for the invariant; the
@@ -33,9 +39,11 @@ from collections.abc import Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
-# The model ``guideline_ingest._maybe_embed`` writes with. A query embedded by a different model
-# is not comparable to the stored chunk vectors, so this is deliberately one constant shared by
-# both sides rather than two settings that can drift apart.
+# The one model both sides use: ``embed_documents`` writes chunk vectors with it and
+# ``embed_query`` reads against them. A query embedded by a different model is not comparable to
+# the stored chunk vectors -- ``cosine`` scores every such pair 0 -- so this is deliberately one
+# constant rather than two settings that can drift apart. ``guideline_ingest`` used to construct
+# its own ``SentenceTransformer`` with its own hardcoded name, which is exactly that drift.
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 _model: object | None = None
@@ -127,6 +135,45 @@ def embed_query(text: str) -> tuple[float, ...] | None:
         logger.warning("Dense query embedding failed (%s); falling back to lexical.", exc)
         return None
     return _unit(float(x) for x in vector)
+
+
+def embedding_text(heading: str | None, content: str) -> str:
+    """The text a guideline chunk is embedded as — on both the ingest and the benchmark side.
+
+    One function because the two must not drift. A chunk embedded as bare content and a query
+    compared against it measure something slightly different from what the retrieval benchmark
+    reports, and nothing would fail: the numbers would simply be a little worse than the ones
+    calibration was based on. The heading is included because it names what the section is *for*
+    ("Management of dengue"), which is exactly what a management query asks about.
+    """
+    return f"{heading or ''} {content}".strip()
+
+
+def embed_documents(texts: list[str]) -> list[tuple[float, ...]] | None:
+    """Unit-normalised embeddings for corpus chunks, or None when unavailable.
+
+    Shares ``_load_model`` with ``embed_query`` so a chunk and a query are always embedded by the
+    same model. They used to be separate: ``guideline_ingest`` constructed its own
+    ``SentenceTransformer`` with its own hardcoded model name, which is how a corpus and a query
+    end up on different models and every cosine silently becomes 0 (see ``cosine``).
+
+    Synchronous and CPU-bound over the whole batch — callers keep it off the event loop.
+    """
+    if not texts or _env_disabled():
+        return None
+    model = _load_model()
+    if model is None:
+        return None
+    try:
+        encoded = model.encode(texts, normalize_embeddings=True)  # type: ignore[attr-defined]
+    except Exception as exc:
+        logger.warning("Dense corpus embedding failed (%s); chunks stored without vectors.", exc)
+        return None
+    vectors = [_unit(float(x) for x in row) for row in encoded]
+    # All or nothing: a partial batch would silently leave some chunks un-rerankable, and the
+    # caller has no way to tell which. Every real encode either produces usable vectors for the
+    # whole batch or fails above.
+    return None if any(v is None for v in vectors) else [v for v in vectors if v is not None]
 
 
 def _unit(values: Iterable[float]) -> tuple[float, ...] | None:

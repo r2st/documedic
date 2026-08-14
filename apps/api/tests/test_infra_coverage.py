@@ -30,7 +30,7 @@ from app.db import session as db_session
 from app.db.types import GUID, INETType, dumps
 from app.exceptions import TokenError
 from app.models.user import Account, Session
-from app.services import guideline_ingest
+from app.services import dense_retrieval, guideline_ingest
 from app.services.audit_service import AuditService
 from app.services.auth_service import AuthService
 from app.services.document_service import _band as doc_confidence_band
@@ -518,14 +518,23 @@ def test_guideline_embedding_falls_back_to_lexical_when_sentence_transformers_is
     monkeypatch,
 ):
     """Missing the embedding package must yield ``None`` (lexical search), never an exception."""
+    dense_retrieval.reset()
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
-    assert guideline_ingest._maybe_embed(["hydration and platelet monitoring"]) is None
+    assert dense_retrieval.embed_documents(["hydration and platelet monitoring"]) is None
+    dense_retrieval.reset()
 
 
 def test_qdrant_push_is_skipped_when_the_client_package_is_absent(monkeypatch):
     monkeypatch.setitem(sys.modules, "qdrant_client", None)
     # Returns without raising; ingestion still completes and rows land in PostgreSQL.
-    assert guideline_ingest._push_qdrant("icmr-2024.1", [{"section_id": "S1"}], [[0.1]]) is None
+    assert (
+        guideline_ingest._push_qdrant(
+            "icmr-2024.1",
+            [{"source": "icmr", "section_id": "S1"}],
+            {("icmr", "S1"): (0.1,)},
+        )
+        is None
+    )
 
 
 def test_qdrant_push_creates_the_versioned_collection_and_upserts_every_record(monkeypatch):
@@ -564,8 +573,8 @@ def test_qdrant_push_creates_the_versioned_collection_and_upserts_every_record(m
 
     guideline_ingest._push_qdrant(
         "icmr-2024.1",
-        [{"section_id": "S1"}, {"section_id": "S2"}],
-        [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+        [{"source": "icmr", "section_id": "S1"}, {"source": "icmr", "section_id": "S2"}],
+        {("icmr", "S1"): (0.1, 0.2, 0.3), ("icmr", "S2"): (0.4, 0.5, 0.6)},
     )
 
     assert calls["url"] == "http://qdrant:6333"

@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models.guideline import GuidelineChunk
-from app.services import guideline_ingest
+from app.services import dense_retrieval, guideline_ingest
 from app.services.guideline_ingest import chunk_text, ingest, load_corpus
 
 _DOC = {
@@ -47,6 +47,22 @@ def corpus_file(tmp_path):
     path = tmp_path / "hypertension.json"
     path.write_text(json.dumps([_DOC]))
     return path
+
+
+async def _rows(db, corpus_version: str = "test-1.0"):
+    """Rows this test ingested, in insert order.
+
+    Scoped to the version deliberately: the session fixture arrives with the real shipped corpus
+    already seeded, so an unscoped ``select(GuidelineChunk)`` also returns those rows -- and they
+    have no embedding, which is enough to make an "embeddings are populated" assertion fail and
+    an "embeddings are empty" one pass for a reason that has nothing to do with the test.
+    """
+    result = await db.execute(
+        select(GuidelineChunk)
+        .where(GuidelineChunk.corpus_version == corpus_version)
+        .order_by(GuidelineChunk.id)
+    )
+    return list(result.scalars().all())
 
 
 # --- chunk_text ------------------------------------------------------------------------
@@ -230,11 +246,68 @@ async def test_corpus_versions_are_isolated(db, corpus_file):
     assert await ingest(db, corpus_version="test-2.0", path=corpus_file) == 2
 
 
+# --- what gets embedded, and when --------------------------------------------------------
+#
+# Embedding used to be gated on ``push_qdrant``, which only the ``__main__`` entry point ever
+# passed. ``db.seed.seed_all`` -- the path that actually runs on every deployment -- calls
+# ``ingest(db)``, so ``guideline_chunks.embedding`` was NULL for every row in production and the
+# dense re-ranker (``guideline_service.dense_scores``) was permanently inert. These tests inject
+# the embedder rather than relying on a real model: with no model reachable the real one returns
+# None, and a test that asserts "embeddings are None" then passes whatever the code does.
+
+
 @pytest.mark.asyncio
-async def test_ingest_without_qdrant_leaves_embeddings_empty(db, corpus_file):
-    """The lexical retriever has to work with no vector store present (offline-capable)."""
+async def test_ingest_embeds_without_being_asked_to_push_to_qdrant(db, corpus_file, monkeypatch):
+    """The stored vector and the Qdrant point serve different readers and are not one switch."""
+    monkeypatch.setattr(dense_retrieval, "embed_documents", lambda texts: [(1.0,)] * len(texts))
+
     await ingest(db, corpus_version="test-1.0", path=corpus_file, push_qdrant=False)
-    rows = (await db.execute(select(GuidelineChunk))).scalars().all()
+
+    rows = await _rows(db)
+    assert len(rows) == 2
+    assert all(row.embedding == [1.0] for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_ingest_embeds_the_heading_with_the_content(db, corpus_file, monkeypatch):
+    """A section's heading names what it is *for*, which is what a management query asks about."""
+    seen: list[list[str]] = []
+
+    def _embed(texts):
+        seen.append(list(texts))
+        return [(1.0,)] * len(texts)
+
+    monkeypatch.setattr(dense_retrieval, "embed_documents", _embed)
+
+    await ingest(db, corpus_version="test-1.0", path=corpus_file)
+
+    assert seen, "the embedder was never called"
+    assert "First-line pharmacotherapy Amlodipine" in seen[0][0]
+
+
+@pytest.mark.asyncio
+async def test_a_reingest_that_adds_nothing_does_not_load_the_model(db, corpus_file, monkeypatch):
+    """``ingest`` runs on every startup. Encoding the whole corpus to insert nothing is the cost
+    this avoids -- it would put a transformer load on the boot path of every deployment."""
+    await ingest(db, corpus_version="test-1.0", path=corpus_file)
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(dense_retrieval, "embed_documents", lambda texts: calls.append(texts))
+
+    assert await ingest(db, corpus_version="test-1.0", path=corpus_file) == 0
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_stores_no_embedding_when_no_model_is_available(db, corpus_file, monkeypatch):
+    """The deterministic lexical retriever is the offline-safe floor (Critical Safety Rule #8):
+    a deployment with no torch installed ingests normally and simply has nothing to re-rank."""
+    monkeypatch.setattr(dense_retrieval, "embed_documents", lambda texts: None)
+
+    assert await ingest(db, corpus_version="test-1.0", path=corpus_file) == 2
+
+    rows = await _rows(db)
+    assert len(rows) == 2
     assert all(row.embedding is None for row in rows)
 
 
@@ -259,11 +332,19 @@ async def test_duplicate_sections_within_one_file_are_collapsed(db, tmp_path):
     path.write_text(json.dumps([doc]))
     assert await ingest(db, corpus_version="test-1.0", path=path) == 1
 
+    # The count and the table have to agree. The count comes out of the insert loop, so a loop
+    # that inserted both copies and happened to report one would satisfy the assertion above
+    # while leaving two rows behind the same citation -- which is how the collapse broke once
+    # already, when it stopped being a side effect of the loop updating ``existing``.
+    rows = await _rows(db)
+    assert [r.section_id for r in rows] == ["dup"]
+    assert rows[0].content == "First copy."
+
 
 # --- ingest does not block the event loop ------------------------------------------------
 #
-# ``_maybe_embed`` runs SentenceTransformer over the whole corpus and ``_push_qdrant`` is
-# blocking HTTP. Both used to be called directly from ``async def ingest``, which runs on the
+# ``dense_retrieval.embed_documents`` runs SentenceTransformer over the batch and ``_push_qdrant``
+# is blocking HTTP. Both used to be called directly from ``async def ingest``, which runs on the
 # loop that is also serving every other request -- so a seed or an admin re-ingest froze the
 # API for the duration. They are off-loaded with ``asyncio.to_thread`` now.
 
@@ -274,9 +355,9 @@ async def test_embedding_runs_on_a_worker_thread(db, corpus_file, monkeypatch):
 
     def _embed(texts):
         seen.append(threading.current_thread())
-        return [[0.1]] * len(texts)
+        return [(0.1,)] * len(texts)
 
-    monkeypatch.setattr(guideline_ingest, "_maybe_embed", _embed)
+    monkeypatch.setattr(dense_retrieval, "embed_documents", _embed)
     monkeypatch.setattr(guideline_ingest, "_push_qdrant", lambda *a: None)
 
     await ingest(db, corpus_version="test-1.0", path=corpus_file, push_qdrant=True)
@@ -289,7 +370,7 @@ async def test_embedding_runs_on_a_worker_thread(db, corpus_file, monkeypatch):
 async def test_the_qdrant_push_runs_on_a_worker_thread(db, corpus_file, monkeypatch):
     seen: list[threading.Thread] = []
 
-    monkeypatch.setattr(guideline_ingest, "_maybe_embed", lambda texts: [[0.1]] * len(texts))
+    monkeypatch.setattr(dense_retrieval, "embed_documents", lambda texts: [(0.1,)] * len(texts))
     monkeypatch.setattr(
         guideline_ingest,
         "_push_qdrant",
@@ -319,9 +400,9 @@ async def test_a_slow_ingest_leaves_the_event_loop_responsive(db, corpus_file, m
 
     def _slow_embed(texts):
         time.sleep(0.3)
-        return [[0.1]] * len(texts)
+        return [(0.1,)] * len(texts)
 
-    monkeypatch.setattr(guideline_ingest, "_maybe_embed", _slow_embed)
+    monkeypatch.setattr(dense_retrieval, "embed_documents", _slow_embed)
     monkeypatch.setattr(guideline_ingest, "_push_qdrant", lambda *a: None)
 
     beat = asyncio.create_task(_heartbeat())
@@ -387,7 +468,13 @@ _RECORDS = [
     {"source": "icmr", "section_id": "htn-first-line", "content": "Amlodipine."},
     {"source": "icmr", "section_id": "htn-targets", "content": "Below 140/90."},
 ]
-_VECTORS = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+# Keyed by ``(source, section_id)`` rather than by position: ``ingest`` no longer embeds the whole
+# corpus on every run, so the batch it hands to ``_push_qdrant`` can cover only some of
+# ``records`` and a positional pairing would hand a chunk another chunk's vector.
+_VECTORS = {
+    ("icmr", "htn-first-line"): (0.1, 0.2, 0.3),
+    ("icmr", "htn-targets"): (0.4, 0.5, 0.6),
+}
 
 
 def test_a_missing_collection_is_created_then_upserted(monkeypatch):
@@ -472,12 +559,37 @@ def test_a_chunk_keeps_its_point_id_when_the_corpus_grows_in_front_of_it(monkeyp
     grown = [{"source": "icmr", "section_id": "htn-new", "content": "New."}, *_RECORDS]
     after = _FakeQdrantClient("u", exists=True)
     _install_fake_qdrant(monkeypatch, after)
-    guideline_ingest._push_qdrant("icmr-2024.1", grown, [[0.7, 0.8, 0.9], *_VECTORS])
+    guideline_ingest._push_qdrant(
+        "icmr-2024.1", grown, {("icmr", "htn-new"): (0.7, 0.8, 0.9), **_VECTORS}
+    )
 
     shifted = {p.payload["section_id"]: p.id for p in after.points}
     assert shifted["htn-first-line"] == original["htn-first-line"]
     assert shifted["htn-targets"] == original["htn-targets"]
     assert shifted["htn-new"] not in original.values()
+
+
+def test_chunks_with_no_vector_are_left_out_of_the_push(monkeypatch):
+    """``records`` can legitimately run ahead of the batch that was embedded. Those chunks are
+    skipped rather than paired with whatever vector sits at their index."""
+    client = _FakeQdrantClient("u", exists=True)
+    _install_fake_qdrant(monkeypatch, client)
+
+    partial = [{"source": "icmr", "section_id": "htn-new", "content": "New."}, *_RECORDS]
+    guideline_ingest._push_qdrant("icmr-2024.1", partial, _VECTORS)
+
+    assert [p.payload["section_id"] for p in client.points] == ["htn-first-line", "htn-targets"]
+    assert [p.vector for p in client.points] == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+
+def test_nothing_is_pushed_when_no_chunk_carries_a_vector(monkeypatch):
+    """No embedder means no dense index to maintain -- and no empty collection created for one."""
+    client = _FakeQdrantClient("u", exists=False)
+    _install_fake_qdrant(monkeypatch, client)
+
+    guideline_ingest._push_qdrant("icmr-2024.1", _RECORDS, {})
+
+    assert client.calls == []
 
 
 def test_point_ids_separate_corpus_versions_sources_and_sections():

@@ -2,9 +2,11 @@
 
 Reads curated guideline documents (``data/guidelines/*.json``), chunks them section-aware
 (~512 tokens), preserves citation metadata, and upserts into ``guideline_chunks`` (idempotent on
-corpus_version + source + section_id). Dense embeddings and the Qdrant upload are optional: if
-``sentence-transformers`` / ``qdrant-client`` are installed the chunks are embedded and indexed;
-otherwise ingestion still populates the table so the deterministic lexical retriever works.
+corpus_version + source + section_id). Dense embeddings and the Qdrant upload are optional and
+independent of each other: if ``sentence-transformers`` is installed the chunks are embedded into
+``guideline_chunks.embedding`` (which is what ``guideline_service`` re-ranks with), and if
+``qdrant-client`` is installed *and* the caller asks, they are also indexed into Qdrant.
+Otherwise ingestion still populates the table so the deterministic lexical retriever works.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.session import get_sessionmaker
 from app.models.guideline import _SOURCES, GuidelineChunk
+from app.services import dense_retrieval
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +175,30 @@ def load_corpus(path: Path | None = None) -> list[dict]:
     return chunks
 
 
+def _key(record: dict) -> tuple[str, str]:
+    return (record["source"], record["section_id"])
+
+
+def _deduplicated(records: list[dict]) -> list[dict]:
+    """One record per ``(source, section_id)``, keeping the first.
+
+    A single guideline file can repeat a ``section_id`` -- the corpus is hand-curated -- and that
+    key is the citation: it is what the insert loop tests against ``existing``, what
+    ``_point_id`` hashes, and what a management option cites back. Two records sharing it are
+    one chunk as far as every reader is concerned.
+
+    This used to happen implicitly: the insert loop added each key to ``existing`` as it went, so
+    the second copy hit the ``continue``. That stopped working when the loop began iterating a
+    pre-computed ``new_records`` -- the set is built in one pass now, before any insert, so
+    nothing updates it in between and both copies were inserted. Making it a step of its own is
+    what keeps the two readers of that key agreeing, rather than a side effect of one of them.
+    """
+    unique: dict[tuple[str, str], dict] = {}
+    for record in records:
+        unique.setdefault(_key(record), record)
+    return list(unique.values())
+
+
 async def ingest(
     db: AsyncSession,
     *,
@@ -179,7 +206,18 @@ async def ingest(
     path: Path | None = None,
     push_qdrant: bool = False,
 ) -> int:
-    """Upsert the corpus into ``guideline_chunks``. Returns the number of new chunks."""
+    """Upsert the corpus into ``guideline_chunks``. Returns the number of new chunks.
+
+    Chunks are embedded whenever a model is available, independently of ``push_qdrant``.
+
+    Those two used to be the same switch, and only ``python -m app.services.guideline_ingest``
+    ever passed it. Every other path -- ``db.seed.seed_all``, which is what runs at startup and
+    in every deployment -- called ``ingest(db)``, so ``guideline_chunks.embedding`` was NULL for
+    every row a real deployment ever had. That was invisible while nothing read the column; it
+    is not now that the dense re-ranker does (``guideline_service.dense_scores``), because an
+    un-embedded corpus makes it permanently inert. The vector stored in the row and the vector
+    pushed to Qdrant serve different readers, so they are no longer gated on one flag.
+    """
     version = corpus_version or settings.guideline_corpus_version
     existing = {
         tuple(row)
@@ -191,45 +229,43 @@ async def ingest(
             )
         ).all()
     }
-    records = load_corpus(path)
-    # Both of these are synchronous and slow -- SentenceTransformer.encode is CPU-bound over the
-    # whole corpus, and the Qdrant push is blocking HTTP -- and ``ingest`` runs from the seeding
-    # path and from the admin endpoint, on the event loop that is also serving every other
-    # request. Off-loaded to a worker thread so an ingestion cannot stall the API.
-    embeddings = (
-        await asyncio.to_thread(_maybe_embed, [r["content"] for r in records])
-        if push_qdrant
-        else None
-    )
+    records = _deduplicated(load_corpus(path))
+    new_records = [r for r in records if _key(r) not in existing]
+
+    # Qdrant is upserted with the whole corpus; the database column only needs the rows actually
+    # being inserted. The distinction matters because ``ingest`` runs on every startup and is
+    # idempotent -- embedding all of it each time would load a transformer and encode the entire
+    # corpus to insert nothing, on the boot path of every deployment.
+    to_embed = records if push_qdrant else new_records
+    vectors: dict[tuple[str, str], tuple[float, ...]] = {}
+    if to_embed:
+        # Synchronous and slow: a transformer forward pass over the batch. ``ingest`` runs from
+        # the seeding path and from the admin endpoint, on the event loop that is also serving
+        # every other request, so it goes to a worker thread.
+        encoded = await asyncio.to_thread(
+            dense_retrieval.embed_documents,
+            [dense_retrieval.embedding_text(r["heading"], r["content"]) for r in to_embed],
+        )
+        if encoded:
+            vectors = {_key(r): v for r, v in zip(to_embed, encoded, strict=True)}
 
     added = 0
-    for idx, rec in enumerate(records):
-        if (rec["source"], rec["section_id"]) in existing:
-            continue
+    for rec in new_records:
+        vector = vectors.get(_key(rec))
         db.add(
             GuidelineChunk(
                 corpus_version=version,
-                embedding=embeddings[idx] if embeddings else None,
+                embedding=list(vector) if vector else None,
                 **rec,
             )
         )
-        existing.add((rec["source"], rec["section_id"]))
         added += 1
     await db.flush()
 
-    if push_qdrant and embeddings:
-        await asyncio.to_thread(_push_qdrant, version, records, embeddings)
+    if push_qdrant and vectors:
+        # Blocking HTTP, same reasoning as the encode above.
+        await asyncio.to_thread(_push_qdrant, version, records, vectors)
     return added
-
-
-def _maybe_embed(texts: list[str]) -> list[list[float]] | None:
-    """Embed with sentence-transformers if available; otherwise return None (lexical fallback)."""
-    try:
-        from sentence_transformers import SentenceTransformer
-    except Exception:
-        return None
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    return [v.tolist() for v in model.encode(texts)]
 
 
 def _point_id(version: str, record: dict) -> str:
@@ -258,7 +294,9 @@ def _collection_exists(client: object, collection: str) -> bool:
     return True
 
 
-def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]]) -> None:
+def _push_qdrant(
+    version: str, records: list[dict], vectors: dict[tuple[str, str], tuple[float, ...]]
+) -> None:
     """Index chunks into Qdrant if the client is available (best-effort).
 
     Creates the versioned collection only when it is missing, then upserts. This used to call
@@ -274,9 +312,14 @@ def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]
         from qdrant_client.models import Distance, PointStruct, VectorParams
     except Exception:
         return
+    # Only the chunks a vector was produced for. With the embedding batch now scoped to what it
+    # is for (see ``ingest``), ``records`` can legitimately contain rows this run did not embed.
+    indexable = [r for r in records if _key(r) in vectors]
+    if not indexable:
+        return
     client = QdrantClient(url=settings.qdrant_url)
     collection = f"{settings.qdrant_collection}_{version}".replace(".", "_")
-    dim = len(embeddings[0])
+    dim = len(vectors[_key(indexable[0])])
     if not _collection_exists(client, collection):
         try:
             client.create_collection(
@@ -291,8 +334,12 @@ def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]
     client.upsert(
         collection_name=collection,
         points=[
-            PointStruct(id=_point_id(version, records[i]), vector=embeddings[i], payload=records[i])
-            for i in range(len(records))
+            PointStruct(
+                id=_point_id(version, rec),
+                vector=list(vectors[_key(rec)]),
+                payload=rec,
+            )
+            for rec in indexable
         ],
     )
 

@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from app.models.medication_event import MedicationEvent
 from app.models.user import Account
-from app.services import guideline_ingest
+from app.services import dense_retrieval, guideline_ingest
 from app.services.extraction import text_parser
 from app.services.extraction.text_parser import (
     _parse_allergy,
@@ -185,28 +185,26 @@ async def test_a_vignette_with_no_intake_questions_proceeds_straight_to_reasonin
 # --------------------------------------------------------------- optional embedding model
 
 
-def test_guideline_embedding_uses_sentence_transformers_when_it_is_installed(monkeypatch):
-    """With the package present, chunks must be embedded as plain lists of floats.
+def test_corpus_chunks_are_embedded_by_the_same_model_the_query_side_uses(monkeypatch):
+    """Corpus and query vectors are only comparable if one model produced both.
 
-    Qdrant rejects numpy arrays, so the ``.tolist()`` conversion is load-bearing.
+    ``guideline_ingest`` used to build its own ``SentenceTransformer`` with its own hardcoded
+    name, which is precisely how the two drift apart -- and a mismatch is silent, because
+    ``cosine`` scores differing lengths 0 rather than raising. Both sides go through
+    ``dense_retrieval._load_model`` now, so this asserts the constant that names it.
     """
+    dense_retrieval.reset()
     encoded: dict = {}
-
-    class _Vector:
-        def __init__(self, values):
-            self._values = values
-
-        def tolist(self):
-            return list(self._values)
 
     class _FakeModel:
         def __init__(self, name):
             encoded["model"] = name
 
         @staticmethod
-        def encode(texts):
+        def encode(texts, normalize_embeddings=False):
             encoded["texts"] = list(texts)
-            return [_Vector([0.1, 0.2]) for _ in texts]
+            encoded["normalised"] = normalize_embeddings
+            return [[0.3, 0.4] for _ in texts]
 
     monkeypatch.setitem(
         sys.modules,
@@ -214,11 +212,36 @@ def test_guideline_embedding_uses_sentence_transformers_when_it_is_installed(mon
         types.SimpleNamespace(SentenceTransformer=_FakeModel),
     )
 
-    out = guideline_ingest._maybe_embed(["hydration guidance", "platelet monitoring"])
+    out = dense_retrieval.embed_documents(["hydration guidance", "platelet monitoring"])
 
-    assert out == [[0.1, 0.2], [0.1, 0.2]]
-    assert encoded["model"] == "all-MiniLM-L6-v2"
+    assert encoded["model"] == dense_retrieval.EMBEDDING_MODEL
     assert encoded["texts"] == ["hydration guidance", "platelet monitoring"]
+    # Unit-normalised on the way out, so ``cosine`` is a plain dot product on both sides.
+    assert out == [(0.6, 0.8), (0.6, 0.8)]
+    dense_retrieval.reset()
+
+
+def test_a_batch_that_cannot_be_normalised_is_dropped_whole(monkeypatch):
+    """All or nothing: a partial batch would leave some chunks un-rerankable with no way for the
+    caller to tell which, and ``ingest`` would write NULL for them without saying so."""
+    dense_retrieval.reset()
+
+    class _FakeModel:
+        def __init__(self, name):
+            pass
+
+        @staticmethod
+        def encode(texts, normalize_embeddings=False):
+            return [[1.0, 0.0], [0.0, 0.0]]  # the second has no direction to normalise
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(SentenceTransformer=_FakeModel),
+    )
+
+    assert dense_retrieval.embed_documents(["good", "degenerate"]) is None
+    dense_retrieval.reset()
 
 
 async def test_ingest_pushes_to_qdrant_only_when_embeddings_were_produced(db, monkeypatch):
@@ -227,9 +250,9 @@ async def test_ingest_pushes_to_qdrant_only_when_embeddings_were_produced(db, mo
     monkeypatch.setattr(
         guideline_ingest,
         "_push_qdrant",
-        lambda version, records, embeddings: pushed.append(version),
+        lambda version, records, vectors: pushed.append(version),
     )
-    monkeypatch.setattr(guideline_ingest, "_maybe_embed", lambda texts: None)
+    monkeypatch.setattr(dense_retrieval, "embed_documents", lambda texts: None)
 
     added = await guideline_ingest.ingest(db, push_qdrant=True)
 
@@ -240,11 +263,11 @@ async def test_ingest_pushes_to_qdrant_only_when_embeddings_were_produced(db, mo
 async def test_ingest_pushes_to_qdrant_when_embeddings_are_available(db, monkeypatch):
     pushed: list[tuple[str, int]] = []
 
-    def _fake_push(version, records, embeddings):
-        pushed.append((version, len(embeddings)))
+    def _fake_push(version, records, vectors):
+        pushed.append((version, len(vectors)))
 
     monkeypatch.setattr(guideline_ingest, "_push_qdrant", _fake_push)
-    monkeypatch.setattr(guideline_ingest, "_maybe_embed", lambda texts: [[0.1]] * len(texts))
+    monkeypatch.setattr(dense_retrieval, "embed_documents", lambda texts: [(0.1,)] * len(texts))
 
     await guideline_ingest.ingest(db, push_qdrant=True)
 
