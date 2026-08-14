@@ -7,10 +7,19 @@ critical value must still be caught even when ``LabResult.is_abnormal`` was neve
 fully offline and produces no certainty language (Critical Safety Rules #4 and #8): a flag here
 is a prompt for the clinician to look, never a diagnosis or an instruction to act.
 
-Panic values are the more severe tier nested inside critical (panic implies critical). Only
-glucose and creatinine get unit-aware conversion (mg/dL <-> mmol/L / µmol/L) because Indian labs
-occasionally report either; everything else assumes the near-universal unit noted in
-``CriticalRange.unit`` and is skipped (never guessed) when the supplied unit looks incompatible.
+Panic values are the more severe tier nested inside critical (panic implies critical). A marker
+is read in whichever of the unit systems it is reported in — mg/dL against mmol/L or µmol/L,
+g/dL against g/L, 10^3/µL against 10^9/L — because Indian reports carry both, sometimes on the
+same page. A supplied unit that is neither the canonical one, a registered spelling of it
+(``_UNIT_SYNONYMS``) nor a registered conversion (``_UNIT_CONVERSIONS``) is skipped, never
+guessed at, and reported skipped via ``unreadable_lab``.
+
+The rule those three tables exist to keep is that **supplying the unit must never be worse than
+omitting it**. A unit the module has not been told about is skipped, and a skip renders exactly
+like a normal result — so every unit a real report prints has to be registered, or naming it
+disables the guard. That is not hypothetical: a haemoglobin of 55 g/L, a calcium of 1.6 mmol/L
+and a platelet count of 8 x10^9/L are all can't-miss values in the ordinary SI spelling, and all
+three were skipped in silence until their scales were registered here.
 
 A row carrying *no* unit is the harder case, and it is ordinary: the unit lives in a column
 header that columnar extraction does not always carry down to the row, or in a footnote OCR
@@ -63,6 +72,24 @@ _RANGES: dict[str, CriticalRange] = {
     "hemoglobin": CriticalRange(unit="g/dl", panic_low=5.0, critical_low=7.0, critical_high=20.0),
     "platelets": CriticalRange(unit="10^3/ul", panic_low=10, critical_low=20, critical_high=1000),
     "creatinine": CriticalRange(unit="mg/dl", critical_high=4.0, panic_high=10.0),
+    # Urea, twice, because a report means one of two different quantities by it and the two are
+    # a factor of 2.14 apart. BUN is the *nitrogen* in the urea (28 g of N per 60.06 g of urea);
+    # "Blood Urea" is the whole molecule. Anglo-American labs print BUN, Indian labs mostly print
+    # Blood Urea, and both spellings turn up on reports this product ingests.
+    #
+    # Holding them as one marker would mean picking a threshold that is wrong for the other
+    # spelling by that factor in one direction or the other: a "Blood Urea 90 mg/dL" — high but
+    # ordinary in CKD, a BUN of 42 — read against a BUN threshold is most of the way to a
+    # critical flag, and a genuinely critical BUN read against a urea threshold is silence. So
+    # they are two canonical markers with their own thresholds and their own alias sets, and no
+    # arithmetic anywhere converts between them: which quantity was measured is the report's to
+    # say, exactly as which unit was used is.
+    #
+    # No panic tier on either. The critical value is the standard >100 mg/dL BUN (and its urea
+    # equivalent); above that the number stops discriminating — what escalates a uraemic patient
+    # is the clinical picture and the potassium, both of which this module already carries.
+    "bun": CriticalRange(unit="mg/dl", critical_high=100.0),
+    "urea": CriticalRange(unit="mg/dl", critical_high=214.0),
     "inr": CriticalRange(unit="ratio", critical_high=5.0, panic_high=9.0),
     "wbc": CriticalRange(
         unit="10^3/ul", panic_low=1.0, critical_low=2.0, critical_high=30.0, panic_high=50.0
@@ -101,6 +128,23 @@ _ALIASES: dict[str, str] = {
     "rbs": "glucose",
     "random blood sugar": "glucose",
     "plasma glucose": "glucose",
+    # A glucose row is labelled by when it was drawn as often as by what it is, and the timing
+    # word lands on either side of the analyte name depending on the analyser. All of these are
+    # the same measurement against the same critical bands: a glucose of 32 is a panic low
+    # whether the column header called it fasting, random or post-prandial.
+    "fasting blood sugar": "glucose",
+    "fasting plasma glucose": "glucose",
+    "glucose fasting": "glucose",
+    "glucose random": "glucose",
+    "glucose pp": "glucose",
+    "glucose postprandial": "glucose",
+    "glucose post prandial": "glucose",
+    "postprandial blood sugar": "glucose",
+    "post prandial blood sugar": "glucose",
+    "ppbs": "glucose",
+    "random blood glucose": "glucose",
+    "blood sugar": "glucose",
+    "sugar": "glucose",
     "hemoglobin": "hemoglobin",
     "haemoglobin": "hemoglobin",
     "hb": "hemoglobin",
@@ -111,10 +155,37 @@ _ALIASES: dict[str, str] = {
     "creatinine": "creatinine",
     "serum creatinine": "creatinine",
     "scr": "creatinine",
+    # "Cr" and "Creat" are how a creatinine is printed on a renal-panel line that has run out of
+    # column width, and this is the marker it costs most to miss: it is the input to the eGFR
+    # that the metformin hard block hangs off. "Cr Cl"/"Creatinine Clearance" is a different
+    # quantity and is fenced above, by "clearance" and "crcl".
+    "cr": "creatinine",
+    "creat": "creatinine",
+    # The two urea quantities. Kept rigorously apart — see the _RANGES entries. Every "nitrogen"
+    # spelling is a BUN and every bare-urea spelling is a whole-molecule urea; a name that says
+    # neither is not resolved to either.
+    "bun": "bun",
+    "blood urea nitrogen": "bun",
+    "serum urea nitrogen": "bun",
+    "urea nitrogen": "bun",
+    "urea": "urea",
+    "blood urea": "urea",
+    "serum urea": "urea",
     "inr": "inr",
+    "international normalized ratio": "inr",
+    "international normalised ratio": "inr",
+    "prothrombin time inr": "inr",
     "wbc": "wbc",
+    "wbc count": "wbc",
     "white blood cell count": "wbc",
+    "white cell count": "wbc",
+    "white blood cells": "wbc",
+    # Indian reports print the "-cyte" spellings with a "c" at least as often as with a "k", and
+    # abbreviate the whole line to TLC more often than either.
     "total leukocyte count": "wbc",
+    "total leucocyte count": "wbc",
+    "leukocyte count": "wbc",
+    "leucocyte count": "wbc",
     "tlc": "wbc",
     "calcium": "calcium",
     "serum calcium": "calcium",
@@ -166,9 +237,27 @@ _UNIT_CONVERSIONS: dict[str, dict[str, float]] = {
     "wbc": {"/cumm": 0.001, "cells/cumm": 0.001, "/mm3": 0.001, "cells/mm3": 0.001},
     # µmol/L -> mg/dL. ASCII key only, as for creatinine above.
     "bilirubin": {"umol/l": 1 / 17.104},
+    # mmol/L -> mg/dL for the whole urea molecule (MW 60.06, so mmol/L x 6.006).
+    #
+    # There is deliberately no mmol/L entry for "bun". The SI convention reports the urea
+    # molecule, not its nitrogen, so a row labelled BUN and carrying mmol/L is either mislabelled
+    # or using a convention this module cannot identify from the document — and the two readings
+    # are a factor of 2.14 apart. Such a row is skipped and reported unreadable, which is the
+    # same answer this module gives every other unit it cannot place.
+    "urea": {"mmol/l": 6.006},
     # g/L -> g/dL. Indian biochemistry panels print albumin in g/dL far more often, but the SI
     # form turns up on machine-generated reports and is a plain factor of ten.
     "albumin": {"g/l": 0.1},
+    # g/L -> g/dL, the same factor of ten, for the marker it turns up on most. ``_UNITLESS_BANDS``
+    # below already knew this scale existed — it reads a bare "Hb 120" as ambiguous *because* of
+    # it — but with no conversion registered, naming the unit was worse than omitting it: an
+    # explicit "Haemoglobin 55 g/L" is a panic-low value at 5.5 g/dL and was skipped outright.
+    "hemoglobin": {"g/l": 0.1},
+    # mmol/L -> mg/dL for calcium (MW 40.08). This is registered where mEq/L deliberately is not,
+    # and the distinction is the point: mEq/L depends on valence and is wrong by two for a
+    # divalent ion, whereas mmol/L is a plain molar quantity and converts cleanly whatever the
+    # valence. A calcium of 1.6 mmol/L is 6.4 mg/dL — a panic low — and was being skipped.
+    "calcium": {"mmol/l": 4.008},
 }
 
 # Spellings that mean the marker's canonical unit exactly, keyed by canonical marker. These
@@ -184,6 +273,8 @@ _UNIT_SYNONYMS: dict[str, frozenset[str]] = {
     "glucose": frozenset({"mg%"}),
     "creatinine": frozenset({"mg%"}),
     "calcium": frozenset({"mg%"}),
+    "bun": frozenset({"mg%"}),
+    "urea": frozenset({"mg%"}),
     "hemoglobin": frozenset({"gm/dl", "gms/dl", "gm%", "g%"}),
     "bilirubin": frozenset({"mg%"}),
     # An international unit of enzyme activity is the same unit as a unit of enzyme activity,
@@ -191,6 +282,12 @@ _UNIT_SYNONYMS: dict[str, frozenset[str]] = {
     # "U/mL" is deliberately absent: that is a thousandfold different, not a spelling.
     "alt": frozenset({"iu/l", "units/l"}),
     "ast": frozenset({"iu/l", "units/l"}),
+    # 10^9/L is the SI cell-count unit and is numerically identical to 10^3/µL — 10^9 per litre
+    # is 10^3 per microlitre, the same count written against a different power of ten on both
+    # sides. So it is a spelling, not a conversion, and carries no arithmetic. Registering it as
+    # a synonym rather than a factor of 1 keeps that visible.
+    "platelets": frozenset({"109/l", "x109/l", "10e9/l", "109/liter", "109/litre"}),
+    "wbc": frozenset({"109/l", "x109/l", "10e9/l", "109/liter", "109/litre"}),
     # Same g/dL spellings as haemoglobin, which is printed by the same analyser on the same page.
     "albumin": frozenset({"gm/dl", "gms/dl", "gm%", "g%"}),
 }
@@ -252,6 +349,15 @@ _UNITLESS_BANDS: dict[str, _UnitlessBands] = {
     # U/L is effectively the only scale these are printed in.
     "alt": _UnitlessBands(canonical=(1.0, 20000.0)),
     "ast": _UnitlessBands(canonical=(1.0, 20000.0)),
+    # mg/dL vs mmol/L. Unlike every other marker here, these two spans overlap across the whole
+    # of the normal range — a urea of 5 is 5 mg/dL (low) or 5 mmol/L (30 mg/dL, normal), and no
+    # band can separate them because the scales genuinely coincide there. The consequence is
+    # deliberate and worth stating: a urea or BUN printed with no unit is reported unreadable
+    # rather than evaluated, unless it is high enough that only the mg/dL reading is physically
+    # possible — which is precisely the region the critical threshold sits in. So the guard still
+    # fires on the values it exists to catch, and stays quiet, and says it is quiet, on the rest.
+    "bun": _UnitlessBands(canonical=(1.0, 400.0), others=((0.5, 60.0),)),
+    "urea": _UnitlessBands(canonical=(2.0, 800.0), others=((0.5, 60.0),)),
     # g/dL vs g/L (x10), exactly as for haemoglobin. The two spans do not overlap, so a bare
     # albumin is readable either way — but a bare *urine* albumin in mg/L lands squarely in the
     # g/L span, which is a second reason the marker table above admits no urine spelling.
@@ -270,12 +376,182 @@ def _canonical_when_unitless(canonical: str, value: float) -> float | None:
     return None if any(lo <= value <= hi for lo, hi in bands.others) else value
 
 
-_NORM_RE = re.compile(r"[^a-z0-9+ ]")
+# --- Marker identification ---------------------------------------------------------------------
+#
+# The alias table above is matched against a normalised form of whatever a lab report printed,
+# and normalising by deleting every character outside [a-z0-9+ ] — which is what this did — is
+# only right for the punctuation that is noise. It is wrong for the punctuation that separates,
+# and Indian lab reports separate constantly:
+#
+#   "Potassium (K+)"          -> "potassium k+"   -- no such alias
+#   "ALT/SGPT"                -> "altsgpt"        -- two names welded into one word
+#   "Bilirubin - Total"       -> "bilirubin  total" (two spaces) -- no such alias
+#   "Platelet Count (PLT)"    -> "platelet count plt"
+#
+# Every one of those is a marker this module holds a critical-value threshold for, and every one
+# came back unidentified — which is not reported as unreadable either, because ``unreadable_lab``
+# only speaks for markers it could identify. So a potassium of 7.2 printed as "Potassium (K+)"
+# was silently dropped by the guard whose entire purpose is to catch it, and the screen rendered
+# it exactly as it renders a normal result.
+#
+# So the name is resolved against several candidate spellings rather than one, in order:
+# punctuation deleted (a "T.Bili" is one word), punctuation as a separator (an "ALT/SGPT" is
+# two), — for a name qualified in brackets — the part before the bracket and the part inside it,
+# since a parenthetical is a synonym or a qualifier and either half may be the name the alias
+# table knows, and finally the name with a leading specimen word removed.
+#
+# That last one is what "S." is. Indian reports label the specimen in front of nearly every
+# biochemistry line — "S. Creatinine", "S.Bilirubin", "P. Glucose", "B. Urea", "Total Calcium" —
+# and the alias table cannot list the cross-product of every prefix with every marker. It was
+# carrying exactly one such spelling by hand ("s albumin"), which is the tell: the prefix is a
+# rule, not a synonym. Without it "S.Creatinine" was an unidentified row, and a creatinine is the
+# input to the eGFR that the metformin hard block hangs off, so the chart lost the block and the
+# renal check reported itself unevaluated on a chart that did have a creatinine on it.
+#
+# Widening a match is exactly how a different analyte gets read as this one, so the widening is
+# fenced by ``_NOT_SERUM_SPECIMEN`` and ``_DIFFERENT_ANALYTE`` below rather than by the narrowness
+# of the old comparison. "Albumin (Urine)" must not become a serum albumin by taking the part
+# before the bracket, and a urine albumin lands squarely in the g/L band a serum albumin is also
+# read in.
+
+# Wordings that mean the row is a different specimen or a derived quantity, not the serum analyte
+# these thresholds are written for. Checked against the separator-folded name before any alias
+# lookup. The same judgement as ``app.core.clinical._NOT_SERUM_CREATININE``, which exists because
+# a urine creatinine fed to CKD-EPI produced a confident eGFR of 0.4.
+#
+# Deliberately NOT a bare "ratio": the "R" in INR is Ratio, and "INR (International Normalized
+# Ratio)" is an ordinary way for an analyser to print it. The albumin/creatinine and
+# protein/creatinine ratios are excluded by their own two-word phrases instead.
+_NOT_SERUM_SPECIMEN: tuple[str, ...] = (
+    "urine",
+    "urinary",
+    "csf",
+    "ascitic",
+    "pleural",
+    "synovial",
+    "dialysate",
+    "stool",
+    "saliva",
+    "clearance",
+    "crcl",
+    "excretion",
+    "spot",
+    "microalbumin",
+    "albumin creatinine",
+    "protein creatinine",
+    "creatinine ratio",
+    "24h",
+    "24 h",
+)
+
+# Qualifiers that make the row a *different measurement* on a different scale from the curated
+# one, even though the specimen is the same serum. A direct (conjugated) bilirubin is not the
+# total bilirubin the 15 mg/dL threshold is written for; an ionised calcium runs about 1.2 mmol/L
+# where a total calcium runs about 9.5 mg/dL, so reading one as the other is a panic-low flag on
+# a normal result.
+#
+# Every one of these is already unmatched by the alias table, which lists no spelling for them.
+# They are fenced explicitly anyway, because the prefix rule below strips leading words and the
+# fence is what stops it stripping a word that carried the analyte's identity: without it,
+# "Total Calcium" correctly becoming "calcium" would come with "Ionised Calcium" doing the same.
+#
+# "free" is here for the thyroid and hormone panels an extraction pass will hand this module
+# alongside the rows it does curate; none of them resolve today, and none should start to by
+# way of a prefix strip.
+_DIFFERENT_ANALYTE: tuple[str, ...] = (
+    # Also catches "indirect", which is the other half of the same split and equally not total.
+    "direct",
+    "conjugated",
+    "unconjugated",
+    "ionized",
+    "ionised",
+    "free",
+)
+
+# Leading words that name the specimen or say "the whole of this analyte", rather than naming a
+# different analyte. Stripped one at a time from the front of the folded name — see the block
+# comment above. Order is irrelevant; each is matched as a whole token, never as a substring, so
+# the "b" that means blood cannot eat the "b" of "bilirubin".
+_SPECIMEN_PREFIXES: frozenset[str] = frozenset({"s", "p", "b", "serum", "plasma", "blood", "total"})
+
+# Punctuation deleted, so "T.Bili" stays one word.
+_NORM_DELETE_RE = re.compile(r"[^a-z0-9+ ]")
+# Punctuation folded to a space, so "ALT/SGPT" becomes two.
+_NORM_SEPARATE_RE = re.compile(r"[^a-z0-9+]+")
+# A trailing or embedded parenthetical: "Potassium (K+)" -> "Potassium" + "K+".
+_PARENTHETICAL_RE = re.compile(r"\(([^)]*)\)")
+
+
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _without_specimen_prefix(folded: str) -> str:
+    """``folded`` with any run of leading specimen words removed ("s creatinine" -> "creatinine").
+
+    Never strips the last remaining token: "S" alone, or "Total" alone, is not a marker name, and
+    reducing it to "" would then be looked up as one. Stripping stops there rather than at one
+    word so that "S. Total Bilirubin", which is one line on a real liver panel, reaches
+    "bilirubin".
+    """
+    tokens = folded.split()
+    index = 0
+    while index < len(tokens) - 1 and tokens[index] in _SPECIMEN_PREFIXES:
+        index += 1
+    return " ".join(tokens[index:])
+
+
+def _marker_candidates(marker_name: str) -> tuple[str, ...]:
+    """The spellings of ``marker_name`` to try against the alias table, most literal first.
+
+    Most literal first is what keeps the prefix rule from changing an answer the table already
+    had: "total leucocyte count" is looked up whole, and matches, before anything considers
+    stripping its "total" down to a "leucocyte count" the table does not list.
+    """
+    lowered = (marker_name or "").strip().lower()
+    if not lowered:
+        return ()
+    deleted = _collapse(_NORM_DELETE_RE.sub("", lowered))
+    folded = _collapse(_NORM_SEPARATE_RE.sub(" ", lowered))
+    candidates = [deleted, folded]
+    inner = _PARENTHETICAL_RE.findall(lowered)
+    if inner:
+        outer = _PARENTHETICAL_RE.sub(" ", lowered)
+        candidates.append(_collapse(_NORM_SEPARATE_RE.sub(" ", outer)))
+        candidates.extend(_collapse(_NORM_SEPARATE_RE.sub(" ", part)) for part in inner)
+    # Appended last, and applied to every candidate above rather than only to the whole name, so
+    # that "S. Creatinine (Serum)" and "S.Cr" reduce as readily as "S. Creatinine".
+    candidates.extend(_without_specimen_prefix(candidate) for candidate in list(candidates))
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return tuple(unique)
 
 
 def _normalize_marker(marker_name: str) -> str | None:
-    key = _NORM_RE.sub("", (marker_name or "").strip().lower()).strip()
-    return _ALIASES.get(key)
+    """The canonical marker this row is, or None for one this module does not curate.
+
+    None rather than a best guess, for the reason stated throughout this module: which analyte a
+    row is, is the report's to say, and inferring it puts a number in the patient's chart that no
+    document supports.
+    """
+    # The fence is tested against the separator-folded *whole* name, computed here rather than
+    # taken from the candidate list: the list drops duplicates, so its second entry is not
+    # reliably the folded form — for "Albumin (Urine)", whose two folded spellings coincide, the
+    # second entry is "albumin" and the fence would have read a urine albumin as a serum one.
+    folded = _collapse(_NORM_SEPARATE_RE.sub(" ", (marker_name or "").strip().lower()))
+    if not folded:
+        return None
+    if any(term in folded for term in (*_NOT_SERUM_SPECIMEN, *_DIFFERENT_ANALYTE)):
+        return None
+    for candidate in _marker_candidates(marker_name):
+        canonical = _ALIASES.get(candidate)
+        if canonical is not None:
+            return canonical
+    return None
 
 
 def _micro(unit: str) -> str:
