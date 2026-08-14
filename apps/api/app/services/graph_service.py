@@ -6,12 +6,13 @@ derived markers (eGFR via CKD-EPI 2021) when the inputs are available.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import Numeric, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clinical import (
@@ -47,7 +48,9 @@ def _resolvable_names(entities: list[dict]) -> list[str]:
                 names.append(name)
         elif (
             entity.get("entity_type") == "allergy"
-            and (fields.get("allergen_type") or "drug") == "drug"
+            # Same normalisation _merge_allergy applies, so an "Drug"/"drug " spelling is
+            # prefetched rather than falling through to a lazy per-line lookup.
+            and _enum(Allergy, "allergen_type", fields.get("allergen_type"), "drug") == "drug"
         ):
             name = fields.get("allergen_name")
             if isinstance(name, str):
@@ -75,13 +78,158 @@ def _as_text(value: object) -> object:
     return str(value)
 
 
+# What Numeric(18, 6) can physically hold, read off the column so it tracks the schema rather
+# than a number copied into this file. Scale 6 fixes the quantum; the remaining 12 integer digits
+# fix the ceiling.
+_VALUE_COLUMN = cast(Numeric, LabResult.__table__.c.value_numeric.type)
+_DECIMAL_QUANTUM = Decimal(1).scaleb(-int(_VALUE_COLUMN.scale or 0))
+_DECIMAL_CEILING = Decimal(10) ** (
+    int(_VALUE_COLUMN.precision or 0) - int(_VALUE_COLUMN.scale or 0)
+)
+
+
 def _to_decimal(value: object) -> Decimal | None:
+    """An extracted value as a number the column can hold, or ``None`` if it cannot hold it.
+
+    ``None`` covers three things beyond "not a number at all", and all three arrive from OCR and
+    from vision models rather than from anything a person typed:
+
+    * a magnitude past the column's range. ``Numeric(18, 6)`` keeps 12 integer digits, and a
+      smudged decimal point in a scanned report turns one lab value into twenty digits. SQLite
+      stores it happily; PostgreSQL raises ``numeric field overflow`` at flush, which 500s the
+      approval and takes every *other* entity on that document down with it.
+    * a non-finite value. ``Decimal("inf")`` and ``Decimal("nan")`` parse without complaint, and
+      a NaN compares false against every reference bound — so a value nobody can interpret would
+      be recorded as a lab result that is *not* abnormal.
+    * more precision than the column keeps. Quantizing here rather than letting the database
+      round means the row and its ``dedup_key`` describe the same number. A *nonzero* value that
+      quantizes all the way to zero is dropped instead of stored, because scale 6 cannot tell
+      ``1e-400`` from ``0`` and the two are not the same reading: a stored ``0.000000`` is a
+      precise claim the source never made, and for creatinine it is the one value that makes
+      eGFR undefined.
+
+    Dropping the numeric is not dropping the reading: ``_merge_lab`` keeps the raw text in
+    ``value_text``, which makes the row qualitative — and ``LabSafetyService`` already skips
+    qualitative rows rather than coercing them, which is the correct handling for a value that
+    could not be read. Refusing the whole approval instead would discard the entities that
+    extracted perfectly well alongside it.
+    """
     if value is None:
         return None
     try:
-        return Decimal(str(value))
+        parsed = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+    if not parsed.is_finite():
+        return None
+    try:
+        quantized = parsed.quantize(_DECIMAL_QUANTUM)
+    except InvalidOperation:
+        # More digits than the decimal context carries — necessarily past the ceiling below.
+        return None
+    if abs(quantized) >= _DECIMAL_CEILING:
+        return None
+    if not quantized and parsed:
+        return None  # underflowed to zero; see the third bullet above
+    return quantized
+
+
+# Sentinel so `_enum` can tell "caller omitted `invalid`" from "caller passed None", which is a
+# meaningful value for the nullable severity columns.
+_UNSET: Any = object()
+
+
+def _allowed_enum_values(model: type[Any]) -> dict[str, frozenset[str]]:
+    """The value sets the model's ``CHECK ... IN (...)`` constraints permit, per column.
+
+    Read out of the constraints rather than restated as a constant here, so the merge and the
+    schema cannot drift apart: adding a severity level to the model automatically admits it.
+    """
+    allowed: dict[str, set[str]] = {}
+    for constraint in model.__table__.constraints:
+        sqltext = str(getattr(constraint, "sqltext", ""))
+        match = re.search(r"(\w+)\s+IN\s*\(([^)]*)\)", sqltext, re.IGNORECASE)
+        if match:
+            allowed.setdefault(match.group(1), set()).update(
+                re.findall(r"'([^']*)'", match.group(2))
+            )
+    return {column: frozenset(values) for column, values in allowed.items()}
+
+
+_ENUM_VALUES: dict[str, dict[str, frozenset[str]]] = {
+    model.__name__: _allowed_enum_values(model)
+    for model in (Allergy, Condition, MedicationEvent, LabResult)
+}
+
+
+def _enum(
+    model: type[Any],
+    column: str,
+    value: object,
+    missing: str | None,
+    invalid: str | None = _UNSET,
+) -> str | None:
+    """An extracted value normalised into what the column's CHECK constraint permits.
+
+    ``severity``, ``status``, ``event_type`` and ``allergen_type`` all arrive from extraction and
+    all sit behind a ``CHECK ... IN (...)``, but nothing between the two validated them. A vision
+    model that answers "moderate-severe", or a clinician correction — ``FieldCorrection.value``
+    accepts any 500-character string for any field name — put an unlisted value straight into the
+    ``INSERT``, and the constraint rejected it at ``flush``. Unlike the length and range overflows
+    above, this one fails on SQLite too; it simply had no test exercising it.
+
+    The cost of that is the same and it is the reason this is coerced rather than raised on: the
+    error surfaces at flush, so it does not fail the one bad field, it 500s the approval and rolls
+    back every entity that extracted correctly on the same document.
+
+    Falling back is a clinical choice, not just a technical one, so callers pass it explicitly:
+    ``None`` for a nullable ``severity`` (absent is honest, invented is not), and ``"continue"``
+    for a medication event — the reading under which the patient is still taking the drug and the
+    safety checks therefore still run on it.
+
+    ``missing`` and ``invalid`` are separated because a field the document never stated and a
+    field whose value could not be read are different claims, and for ``Condition.status`` they
+    differ: an absent status keeps the column's long-standing ``"active"`` default, while an
+    unreadable one records ``"unknown"`` rather than asserting an active diagnosis nobody made.
+    Where the two coincide, ``invalid`` defaults to ``missing``.
+    """
+    if invalid is _UNSET:
+        invalid = missing
+    if value is None or value == "":
+        return missing
+    if isinstance(value, str):
+        normalised = value.strip().lower().replace(" ", "_").replace("-", "_")
+        if normalised in _ENUM_VALUES[model.__name__].get(column, frozenset()):
+            return normalised
+    return invalid
+
+
+def _fitted(model: type[Any], **values: Any) -> dict[str, Any]:
+    """Row keyword arguments with every string trimmed to what its own column can hold.
+
+    Same failure as the numeric ceiling above and the same asymmetry behind it: SQLite ignores a
+    ``VARCHAR`` length, PostgreSQL raises ``value too long for type character varying(n)``, so an
+    over-long extracted string passes every test here and 500s the approval in production. A
+    900-character run of OCR noise read as one drug name is enough to reach it, and the
+    deterministic parser will produce exactly that from a scan with a bad line break.
+
+    Trimmed rather than refused for the same reason as above — one unreadable line must not cost
+    the clinician the rest of the document — and safe to trim because nothing downstream matches
+    on a truncated string: the drug vocabulary resolves against the *full* extracted name before
+    this runs, so a name too long to be any real drug simply resolves to nothing, exactly as it
+    did before it was shortened.
+
+    Limits are read from the mapped columns, so a column that is widened or narrowed does not
+    leave a stale constant behind here.
+    """
+    columns = model.__table__.c
+    fitted: dict[str, Any] = {}
+    for name, value in values.items():
+        limit = getattr(columns[name].type, "length", None) if name in columns else None
+        fitted[name] = (
+            value[:limit] if isinstance(value, str) and limit and len(value) > limit else value
+        )
+    return fitted
 
 
 class GraphService:
@@ -227,22 +375,27 @@ class GraphService:
         seen.add(key)
 
         med = MedicationEvent(
-            patient_id=patient.id,
-            source_document_id=source_doc_id,
-            drug_vocabulary_id=vocab_id,
-            brand_name_raw=fields.get("brand_name_raw"),
-            generic_name=generic,
-            dose=fields.get("dose"),
-            dose_unit=fields.get("dose_unit"),
-            frequency=fields.get("frequency"),
-            route=fields.get("route"),
-            event_type=fields.get("event_type") or "continue",
-            event_date=_parse_date(fields.get("event_date")),
-            is_current=True,
-            extraction_region=region,
-            extraction_confidence=confidence,
-            clinician_confirmed=True,
-            clinician_confirmed_at=datetime.now(UTC),
+            **_fitted(
+                MedicationEvent,
+                patient_id=patient.id,
+                source_document_id=source_doc_id,
+                drug_vocabulary_id=vocab_id,
+                brand_name_raw=fields.get("brand_name_raw"),
+                generic_name=generic,
+                dose=fields.get("dose"),
+                dose_unit=fields.get("dose_unit"),
+                frequency=fields.get("frequency"),
+                route=fields.get("route"),
+                event_type=_enum(
+                    MedicationEvent, "event_type", fields.get("event_type"), "continue"
+                ),
+                event_date=_parse_date(fields.get("event_date")),
+                is_current=True,
+                extraction_region=region,
+                extraction_confidence=confidence,
+                clinician_confirmed=True,
+                clinician_confirmed_at=datetime.now(UTC),
+            )
         )
         self.db.add(med)
         return True
@@ -284,24 +437,27 @@ class GraphService:
         seen.add(key)
 
         lab = LabResult(
-            patient_id=patient.id,
-            source_document_id=source_doc_id,
-            dedup_key=key,
-            marker_name=marker,
-            value_numeric=value_numeric,
-            value_text=str(fields.get("value_numeric"))
-            if fields.get("value_numeric") is not None
-            else fields.get("value_text"),
-            unit=fields.get("unit"),
-            reference_range_low=low,
-            reference_range_high=high,
-            is_abnormal=is_abnormal,
-            abnormality_direction=direction,
-            sample_date=sample_date,
-            extraction_region=region,
-            extraction_confidence=confidence,
-            clinician_confirmed=True,
-            clinician_confirmed_at=datetime.now(UTC),
+            **_fitted(
+                LabResult,
+                patient_id=patient.id,
+                source_document_id=source_doc_id,
+                dedup_key=key,
+                marker_name=marker,
+                value_numeric=value_numeric,
+                value_text=str(fields.get("value_numeric"))
+                if fields.get("value_numeric") is not None
+                else fields.get("value_text"),
+                unit=fields.get("unit"),
+                reference_range_low=low,
+                reference_range_high=high,
+                is_abnormal=is_abnormal,
+                abnormality_direction=direction,
+                sample_date=sample_date,
+                extraction_region=region,
+                extraction_confidence=confidence,
+                clinician_confirmed=True,
+                clinician_confirmed_at=datetime.now(UTC),
+            )
         )
         self.db.add(lab)
         return lab
@@ -322,16 +478,19 @@ class GraphService:
             return False
         seen.add(name.lower())
         cond = Condition(
-            patient_id=patient.id,
-            source_document_id=source_doc_id,
-            condition_name=name,
-            icd10_code=fields.get("icd10_code"),
-            status=fields.get("status") or "active",
-            severity=fields.get("severity"),
-            extraction_region=region,
-            extraction_confidence=confidence,
-            clinician_confirmed=True,
-            clinician_confirmed_at=datetime.now(UTC),
+            **_fitted(
+                Condition,
+                patient_id=patient.id,
+                source_document_id=source_doc_id,
+                condition_name=name,
+                icd10_code=fields.get("icd10_code"),
+                status=_enum(Condition, "status", fields.get("status"), "active", "unknown"),
+                severity=_enum(Condition, "severity", fields.get("severity"), None),
+                extraction_region=region,
+                extraction_confidence=confidence,
+                clinician_confirmed=True,
+                clinician_confirmed_at=datetime.now(UTC),
+            )
         )
         self.db.add(cond)
         return True
@@ -351,24 +510,30 @@ class GraphService:
         if name.lower() in seen:
             return False
         seen.add(name.lower())
-        allergen_type = fields.get("allergen_type") or "drug"
+        # Normalised before the resolve decision below, not just before the INSERT: an
+        # unreadable allergen type falls back to "drug", which is the reading that gets
+        # cross-checked against the vocabulary rather than the one that skips the check.
+        allergen_type = _enum(Allergy, "allergen_type", fields.get("allergen_type"), "drug")
         vocab_id = None
         if allergen_type == "drug":
             resolved = await self.resolver.resolve(name)
             vocab_id = resolved.vocabulary_id if resolved else None
         allergy = Allergy(
-            patient_id=patient.id,
-            source_document_id=source_doc_id,
-            allergen_name=name,
-            allergen_type=allergen_type,
-            reaction_description=fields.get("reaction_description"),
-            severity=fields.get("severity"),
-            status="active",
-            drug_vocabulary_id=vocab_id,
-            extraction_region=region,
-            extraction_confidence=confidence,
-            clinician_confirmed=True,
-            clinician_confirmed_at=datetime.now(UTC),
+            **_fitted(
+                Allergy,
+                patient_id=patient.id,
+                source_document_id=source_doc_id,
+                allergen_name=name,
+                allergen_type=allergen_type,
+                reaction_description=fields.get("reaction_description"),
+                severity=_enum(Allergy, "severity", fields.get("severity"), None),
+                status="active",
+                drug_vocabulary_id=vocab_id,
+                extraction_region=region,
+                extraction_confidence=confidence,
+                clinician_confirmed=True,
+                clinician_confirmed_at=datetime.now(UTC),
+            )
         )
         self.db.add(allergy)
         return True

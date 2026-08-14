@@ -50,3 +50,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    # Tests needing a real PostgreSQL. They skip themselves when none is reachable, so they are
+    # safe to leave in the default run; deselect explicitly with -m 'not postgres'. These cover
+    # the constraints SQLite does not enforce (VARCHAR lengths, NUMERIC range), which is a class
+    # of bug the in-memory suite cannot see. Point them with TEST_POSTGRES_URL.
+    "postgres: requires a reachable PostgreSQL (skips otherwise)",
+]
