@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import assert_production_config, settings
 from app.db.session import dispose_engine, get_sessionmaker
@@ -42,6 +43,31 @@ API_PREFIX = "/api/v1"
 # Keys of a Pydantic error dict that are safe to return to the client. Everything outside this
 # set is dropped by _safe_validation_errors.
 _SAFE_ERROR_KEYS = ("type", "loc", "msg")
+
+# Copy for the HTTP errors Starlette's *router* raises, before any application code runs: an
+# address that matches no route, and a method a route does not accept. No application code
+# raises HTTPException — domain failures are AetherError — so this table is the whole set in
+# practice, with a generic fallback for anything a future dependency introduces.
+#
+# The message is written here rather than taken from ``exc.detail`` because that is Starlette's
+# developer prose ("Not Found", "Method Not Allowed"), which tells the clinician reading a toast
+# mid-consultation nothing about what to do next.
+_ROUTER_ERROR_COPY: dict[int, tuple[str, str]] = {
+    404: (
+        "not_found",
+        "That address is not part of this application. The link may be out of date — open the "
+        "record from the patient list instead.",
+    ),
+    405: (
+        "method_not_allowed",
+        "That request could not be carried out as sent, so nothing was changed. Reload the page "
+        "and try again.",
+    ),
+}
+_ROUTER_ERROR_FALLBACK = (
+    "error",
+    "That request could not be completed, so nothing was changed. Reload the page and try again.",
+)
 
 
 def _safe_validation_errors(exc: RequestValidationError) -> list[dict]:
@@ -127,6 +153,9 @@ def create_app() -> FastAPI:
             "failures are the one exception and return FastAPI's `{detail: [...]}` — with the "
             "rejected input stripped out, since for a missing-field error that input is the "
             "whole submitted body.\n\n"
+            "**Correlation.** Every response carries `X-Request-Id`, echoing the one you sent "
+            "if you sent one. A 500 repeats it in the body as `request_id`, because that is the "
+            "reference a clinician reads back to an administrator without opening devtools.\n\n"
             "**Auth** is a bearer access token from `POST /api/v1/auth/login`. A record "
             "belonging to another account returns 404, not 403, so the API never confirms that "
             "a chart it will not show you exists."
@@ -168,6 +197,33 @@ def create_app() -> FastAPI:
             content={"code": exc.code, "message": exc.message},
             # Almost always None. A 429 carries Retry-After here, because the status code alone
             # does not tell a client how long to back off. See AetherError.headers.
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def router_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        """Render Starlette's own HTTP errors in the same ``{code, message}`` shape.
+
+        Without this, the two errors the router raises before reaching any handler — 404 for an
+        unmatched address, 405 for a method a route does not accept — were the only responses in
+        the API answering ``{"detail": "Not Found"}``. A client that matches on ``code``, which
+        is what the OpenAPI description tells it to do, had nothing to match, and the clinician
+        got Starlette's developer prose.
+
+        ``exc.headers`` is carried through because the 405 arrives with ``Allow`` on it, and a
+        405 without ``Allow`` is not a 405.
+        """
+        code, message = _ROUTER_ERROR_COPY.get(exc.status_code, _ROUTER_ERROR_FALLBACK)
+        logger.info(
+            "HTTP %s (%s): %s [request_id=%s]",
+            exc.status_code,
+            code,
+            exc.detail,
+            getattr(request.state, "request_id", None),
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"code": code, "message": message},
             headers=exc.headers,
         )
 
