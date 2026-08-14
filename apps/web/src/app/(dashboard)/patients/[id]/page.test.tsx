@@ -1,6 +1,13 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuditEntry, LongitudinalRecord, Paginated, Patient } from '@/lib/types';
+import type {
+  AuditEntry,
+  LongitudinalRecord,
+  Paginated,
+  PaginationMeta,
+  Patient,
+  RecordSection,
+} from '@/lib/types';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -36,8 +43,29 @@ function patient(overrides: Partial<Patient> = {}): Patient {
   };
 }
 
+const SECTIONS: RecordSection[] = [
+  'medications',
+  'lab_results',
+  'conditions',
+  'allergies',
+  'derived_markers',
+];
+
+/** Paging metadata derived from the rows the fixture was actually given, so a fixture can
+ *  never claim a complete record while holding a truncated one (or the reverse). */
+function completePaging(
+  rows: Omit<LongitudinalRecord, 'pagination'>,
+): Record<RecordSection, PaginationMeta> {
+  return Object.fromEntries(
+    SECTIONS.map((section) => [
+      section,
+      { total: rows[section].length, limit: 100, offset: 0, has_more: false },
+    ]),
+  ) as Record<RecordSection, PaginationMeta>;
+}
+
 function record(overrides: Partial<LongitudinalRecord> = {}): LongitudinalRecord {
-  return {
+  const { pagination, ...rows } = {
     patient_id: 'pat-1',
     medications: [],
     lab_results: [],
@@ -46,6 +74,7 @@ function record(overrides: Partial<LongitudinalRecord> = {}): LongitudinalRecord
     derived_markers: [],
     ...overrides,
   };
+  return { ...rows, pagination: pagination ?? completePaging(rows) };
 }
 
 function auditPage(items: AuditEntry[]): Paginated<AuditEntry> {

@@ -190,7 +190,17 @@ export const api = {
   createPatient: (data: Record<string, unknown>) =>
     request<Patient>('/patients', { method: 'POST', body: JSON.stringify(data) }),
 
-  getRecord: (id: string) => request<LongitudinalRecord>(`/patients/${id}/record`),
+  /** One page of each section of the chart. `limit`/`offset` apply to every section
+   *  independently — see `LongitudinalRecord['pagination']`. Omit them and the API's own
+   *  default applies; this client deliberately does not restate that number, so there is no
+   *  second copy of it to drift. */
+  getRecord: (id: string, page?: { limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    if (page?.limit !== undefined) query.set('limit', String(page.limit));
+    if (page?.offset !== undefined) query.set('offset', String(page.offset));
+    const suffix = query.size > 0 ? `?${query}` : '';
+    return request<LongitudinalRecord>(`/patients/${id}/record${suffix}`);
+  },
 
   listDocuments: (id: string) =>
     request<DocumentResponse[]>(`/patients/${id}/documents`),

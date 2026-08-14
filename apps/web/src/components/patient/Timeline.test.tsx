@@ -1,10 +1,31 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Timeline, buildTimeline } from './Timeline';
-import type { LongitudinalRecord } from '@/lib/types';
+import type { LongitudinalRecord, PaginationMeta, RecordSection } from '@/lib/types';
+
+const SECTIONS: RecordSection[] = [
+  'medications',
+  'lab_results',
+  'conditions',
+  'allergies',
+  'derived_markers',
+];
+
+/** Paging metadata derived from the rows the fixture was actually given, so a fixture can
+ *  never claim a complete record while holding a truncated one (or the reverse). */
+function completePaging(
+  rows: Omit<LongitudinalRecord, 'pagination'>,
+): Record<RecordSection, PaginationMeta> {
+  return Object.fromEntries(
+    SECTIONS.map((section) => [
+      section,
+      { total: rows[section].length, limit: 100, offset: 0, has_more: false },
+    ]),
+  ) as Record<RecordSection, PaginationMeta>;
+}
 
 function record(overrides: Partial<LongitudinalRecord> = {}): LongitudinalRecord {
-  return {
+  const { pagination, ...rows } = {
     patient_id: 'p1',
     medications: [],
     lab_results: [],
@@ -13,6 +34,7 @@ function record(overrides: Partial<LongitudinalRecord> = {}): LongitudinalRecord
     derived_markers: [],
     ...overrides,
   };
+  return { ...rows, pagination: pagination ?? completePaging(rows) };
 }
 
 describe('buildTimeline', () => {

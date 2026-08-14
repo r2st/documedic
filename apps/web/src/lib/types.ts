@@ -31,9 +31,16 @@ export interface Patient extends PatientSummary {
   created_at: string;
 }
 
+export interface PaginationMeta {
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export interface Paginated<T> {
   items: T[];
-  pagination: { total: number; limit: number; offset: number; has_more: boolean };
+  pagination: PaginationMeta;
 }
 
 export interface DocumentResponse {
@@ -71,6 +78,13 @@ export interface ExtractionResult {
   confirmation_required_count: number;
 }
 
+export type RecordSection =
+  | 'medications'
+  | 'lab_results'
+  | 'conditions'
+  | 'allergies'
+  | 'derived_markers';
+
 export interface LongitudinalRecord {
   patient_id: string;
   medications: Array<Record<string, unknown>>;
@@ -78,6 +92,9 @@ export interface LongitudinalRecord {
   conditions: Array<Record<string, unknown>>;
   allergies: Array<Record<string, unknown>>;
   derived_markers: Array<Record<string, unknown>>;
+  /** Per-section paging state. Each section is paged independently — a section's array being
+   *  shorter than its `total` means the rest was not fetched, not that it does not exist. */
+  pagination: Record<RecordSection, PaginationMeta>;
 }
 
 export interface SafetyFlag {

@@ -23,13 +23,18 @@ class MedicationEvent(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base
             "event_type IN ('start', 'stop', 'change', 'continue', 'one_time')",
             name="ck_medication_events_event_type",
         ),
-        # Serves the patient_id lookup for the longitudinal-record read. It carries that
-        # read's sort columns (current medications first, then most recent) but does not save
-        # it the sort: measured on PostgreSQL 16 with 1200 events for one patient, the planner
-        # bitmap-scans on patient_id and sorts. RecordService.assemble takes the whole set with
-        # no LIMIT, so there is nothing for the ordering to stop early on and sequential heap
-        # access plus a quicksort beats an ordered index scan's random I/O. The trailing
-        # columns would pay off if this read ever gained a LIMIT.
+        # Serves the patient_id lookup for the longitudinal-record read, and carries that
+        # read's sort columns (current medications first, then most recent). Measured on
+        # PostgreSQL 16 with 1200 events for one patient when 0008 landed, the planner
+        # bitmap-scanned on patient_id and sorted -- correct at the time, because
+        # RecordService.assemble took the whole set with no LIMIT and so had nothing to stop
+        # early on. The trailing columns were kept for "if this read ever gained a LIMIT".
+        #
+        # It has: assemble pages every section now. Same caveat as
+        # ix_lab_results_patient_sample_date -- the read's ORDER BY ends in the primary key so
+        # that paging over ties is stable, this index does not carry it, and whether the
+        # planner takes an incremental sort over the prefix or falls back to the bitmap scan
+        # is unmeasured at production row counts.
         Index(
             "ix_medication_events_patient_current_date",
             "patient_id",

@@ -30,7 +30,7 @@ from app.models.patient import Patient
 from app.models.reasoning_session import ReasoningSession
 from app.services.audit_service import AuditDraft, AuditService
 from app.services.guideline_service import GuidelineService
-from app.services.record_service import RecordService
+from app.services.record_service import REASONING_SNAPSHOT_LIMIT, RecordService
 from app.services.safety_service import SafetyService
 
 
@@ -84,7 +84,16 @@ class ReasoningService:
         return session
 
     async def _snapshot(self, patient_id: uuid.UUID) -> dict[str, Any]:
-        record = await self.records.assemble(patient_id)
+        """Freeze the patient graph into the dict the agents reason over.
+
+        Takes ``REASONING_SNAPSHOT_LIMIT`` per section rather than the record endpoint's
+        default: that default is sized for what a clinician can see on a chart, and what a
+        differential is built from is not the same question. The bound is still deliberate --
+        this is the read that used to have none -- and the dumped ``pagination`` travels into
+        ``case_state`` with it, so a session run against a truncated chart says so in the
+        immutable record of that session rather than looking like a complete one.
+        """
+        record = await self.records.assemble(patient_id, limit=REASONING_SNAPSHOT_LIMIT)
         return record.model_dump(mode="json")
 
     async def _safety_evaluator(

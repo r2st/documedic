@@ -12,6 +12,9 @@ chain covers the whole thing — and assert the invariants that only hold *acros
 * a ClinicalSuggestion is never mutated: corrections are new rows pointing at the original,
   and the DB rejects UPDATE/DELETE outright (Rule #7)
 * a second account is 404-invisible at *every* step of the journey, not just the entry point
+* everything approved into a chart can be read back out of it, however many documents built it
+  up and however many pages it now takes to read — the record is paged, and a paging bug loses
+  clinical rows in exactly the case a single-document test cannot reach
 
 They deliberately use the deterministic offline path (no LLM), so they assert real behaviour
 rather than mocked behaviour.
@@ -512,6 +515,61 @@ async def test_cross_account_isolation_across_the_whole_journey(auth_client, cli
 
     # And the owner's journey is undamaged by the probing.
     assert (await auth_client.get(f"/api/v1/patients/{pid}/audit/verify")).json()["chain_valid"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_a_chart_built_from_many_documents_reads_back_whole_across_pages(auth_client):
+    """The journey a long-standing patient actually produces: many visits, then one chart.
+
+    Every other record test seeds rows directly or approves a single document, so both stay
+    inside one page and never cross a boundary. This builds the chart the way the product does
+    — a document per visit, each approved into the graph — and then reads it back the way a
+    client has to now that the response is bounded: page by page, following `has_more`.
+
+    The assertion is the clinical one rather than an arithmetic one. Every marker that was
+    approved into the record must come back out of it, exactly once. A paging bug does not
+    raise here; it quietly drops a lab from a chart a clinician is about to prescribe against,
+    or shows the same one twice and invents a trend.
+    """
+    patient = await create_patient(auth_client, full_name="Long History")
+    pid = patient["id"]
+
+    # Six visits, three labs each: 18 markers, read four at a time, so the walk crosses five
+    # page boundaries and ends on a partial page.
+    expected: set[str] = set()
+    for visit in range(6):
+        markers = [f"Marker{visit}{i}" for i in range(3)]
+        expected.update(markers)
+        body = b"%PDF-1.4\nLABS:\n" + "".join(
+            f"{name}: {10 + i}.5 mg/dL (1.0-9.0)\n" for i, name in enumerate(markers)
+        ).encode()
+        doc = (await _upload(auth_client, pid, content=body, name=f"visit{visit}.pdf")).json()
+        approve = await auth_client.post(
+            f"/api/v1/patients/{pid}/documents/{doc['id']}/approve",
+            json={"corrections": [], "rejected_entity_indexes": []},
+        )
+        assert approve.status_code == 200, approve.text
+        assert approve.json()["merged"]["lab_results"] == 3
+
+    seen: list[str] = []
+    offset = 0
+    for _ in range(10):  # bounded so a `has_more` that never clears fails instead of hanging
+        resp = await auth_client.get(
+            f"/api/v1/patients/{pid}/record", params={"limit": 4, "offset": offset}
+        )
+        assert resp.status_code == 200, resp.text
+        page = resp.json()
+        seen.extend(lab["marker_name"] for lab in page["lab_results"])
+        assert page["pagination"]["lab_results"]["total"] == len(expected)
+        if not page["pagination"]["lab_results"]["has_more"]:
+            break
+        offset += len(page["lab_results"])
+    else:
+        pytest.fail("paging never reported the end of the lab history")
+
+    assert sorted(seen) == sorted(expected), "the paged walk did not reconstruct the chart"
+    assert len(seen) == len(set(seen)), "a lab was served on more than one page"
 
 
 @pytest.mark.asyncio

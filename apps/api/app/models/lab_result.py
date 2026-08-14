@@ -32,24 +32,29 @@ class LabResult(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "('high', 'low', 'critical_high', 'critical_low')",
             name="ck_lab_results_abnormality_direction",
         ),
-        # Serves the patient_id lookup for the longitudinal-record and lab-safety reads. It
-        # does NOT save them their sort, despite carrying the sort columns -- measured, see
-        # below. Labs accumulate per document ingested, so this is the set that grows fastest
-        # for a long-running patient.
+        # Serves the patient_id lookup for the longitudinal-record and lab-safety reads. Labs
+        # accumulate per document ingested, so this is the set that grows fastest for a
+        # long-running patient.
         #
-        # Measured on PostgreSQL 16, 3000 labs for one patient: the planner bitmap-scans on
-        # patient_id and then sorts, rather than reading the index in order. That is the
-        # correct choice -- RecordService.assemble takes the whole set with no LIMIT, so an
-        # ordered index scan would have to fetch every heap row in index order (random I/O)
-        # where the bitmap scan reads the heap sequentially and sorts 3000 rows in 445 kB of
-        # work_mem. The trailing sort columns only start paying if this read ever gains a
-        # LIMIT, at which point the scan could stop early; until then they make the index
-        # wider for no gain, which is worth revisiting.
+        # The trailing sort columns were measured NOT to pay when 0008 landed: with 3000 labs
+        # for one patient, PostgreSQL 16 bitmap-scanned on patient_id and sorted rather than
+        # reading the index in order. That was the correct choice while RecordService.assemble
+        # took the whole set -- with no LIMIT there is nothing to stop early on, and the bitmap
+        # scan reads the heap sequentially and sorts 3000 rows in 445 kB of work_mem where an
+        # ordered index scan would fetch every heap row in index order (random I/O). They were
+        # kept for exactly the case the comment named: "if this read ever gains a LIMIT".
         #
-        # The NULLS LAST is still required for that future case: both readers sort NULLS LAST
-        # (sample_date is nullable) and a DESC index in PostgreSQL is NULLS FIRST unless told
-        # otherwise. SQLite's parser rejects NULLS LAST inside a CREATE INDEX at any version,
-        # hence the PostgreSQL-only emission and the sibling below.
+        # It has. RecordService.assemble pages every section, so the ordering now has something
+        # to stop early on. One caveat before trusting that: the read's ORDER BY ends in the
+        # primary key -- a total order is what makes LIMIT/OFFSET a partition rather than a
+        # lottery over ties -- and this index does not carry it, so the planner is choosing
+        # between an incremental sort over the index prefix and the old bitmap-scan-and-sort.
+        # Which it picks at production row counts has NOT been re-measured on PostgreSQL 16.
+        #
+        # The NULLS LAST is required either way: both readers sort NULLS LAST (sample_date is
+        # nullable) and a DESC index in PostgreSQL is NULLS FIRST unless told otherwise.
+        # SQLite's parser rejects NULLS LAST inside a CREATE INDEX at any version, hence the
+        # PostgreSQL-only emission and the sibling below.
         Index(
             "ix_lab_results_patient_sample_date",
             "patient_id",

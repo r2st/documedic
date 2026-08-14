@@ -557,8 +557,13 @@ async def test_only_the_paginated_reads_can_use_their_index_ordering(db, engine)
 
     An index's ordering only earns its keep when the query has a LIMIT: without one the planner
     must read the whole matched set regardless, and sequential heap access plus a quicksort
-    beats fetching every row in index order. Measured on PostgreSQL 16, only the two paginated
-    reads take the ordered scan; the other four bitmap-scan the leading column and sort.
+    beats fetching every row in index order. Measured on PostgreSQL 16 when 0008 landed, only
+    two of its six composites served a read that could stop early; the other four bitmap-scanned
+    the leading column and sorted.
+
+    Two of those four have since been paginated -- the longitudinal record's labs and
+    medication events -- which is what the composites' trailing columns were left in place for.
+    The document list is the one still reading its whole set.
 
     That measurement cannot be reproduced here -- the suite runs on SQLite, which has a
     different planner -- but its *cause* can be. This asserts which reads carry a LIMIT, which
@@ -607,11 +612,21 @@ async def test_only_the_paginated_reads_can_use_their_index_ordering(db, engine)
         "ordering after all, so update the comments in 0008 and app/models/document.py"
     )
 
+    # --- paginated as of the record-pagination change: assemble pages every section, so its
+    # ordered reads carry a LIMIT and the lab_results / medication_events composites can stop
+    # early on their ordering. If this ever reverts to whole-set reads, the comments in 0008
+    # and in the two ORM models go back to describing the old measurement.
     with _captured_sql(engine) as sql:
         await RecordService(db).assemble(patient.id)
     record_reads = _ordered_selects(sql)
     assert len(record_reads) >= 2, record_reads
-    assert not any("LIMIT" in s.upper() for s in record_reads), (
-        "RecordService.assemble is now paginated; the lab_results / medication_events "
-        "composites can serve their ordering after all, so update their comments"
+    assert all("LIMIT" in s.upper() for s in record_reads), (
+        "RecordService.assemble stopped paginating one of its sections; the comments in 0008 "
+        "and app/models/{lab_result,medication_event}.py describe a paginated read"
     )
+    # The count that makes `total` truthful must not be paying for a sort it discards. Matched
+    # on "COUNT(" rather than "COUNT": four of the five sections select an `encounter_id`, and
+    # a bare substring match finds the "count" inside "encounter".
+    counts = [s for s in sql if "COUNT(" in s.upper()]
+    assert len(counts) == 5, counts
+    assert not any("ORDER BY" in s.upper() for s in counts), counts

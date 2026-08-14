@@ -6,7 +6,9 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.common import PaginationMeta
 
 
 class SourceLink(BaseModel):
@@ -91,6 +93,29 @@ class DerivedMarkerItem(BaseModel):
     computed_at: datetime
 
 
+class RecordPagination(BaseModel):
+    """Where each section of the record stopped.
+
+    The record is five independent collections, and `limit`/`offset` are applied to each of
+    them separately rather than to some flattened whole — there is no single sequence that a
+    shared cursor could walk. So a request is a page *of each section*, and this reports the
+    outcome per section: the section's `total` before paging, and `has_more` when the client
+    is holding a truncated view of it.
+
+    That per-section `has_more` is the reason this is a required field rather than a
+    convenience. A clinician looking at a chart cannot be left to infer that the labs they can
+    see are all the labs there are, and neither can an agent reading the snapshot: the
+    difference between "no further results" and "further results not fetched" has to be
+    carried in the payload, not left to the caller's arithmetic on `len(items)`.
+    """
+
+    medications: PaginationMeta
+    lab_results: PaginationMeta
+    conditions: PaginationMeta
+    allergies: PaginationMeta
+    derived_markers: PaginationMeta
+
+
 class LongitudinalRecord(BaseModel):
     patient_id: uuid.UUID
     medications: list[MedicationItem]
@@ -98,6 +123,13 @@ class LongitudinalRecord(BaseModel):
     conditions: list[ConditionItem]
     allergies: list[AllergyItem]
     derived_markers: list[DerivedMarkerItem]
+    pagination: RecordPagination = Field(
+        ...,
+        description=(
+            "Per-section paging state. Each section was paged independently with the same "
+            "`limit`/`offset`; check `has_more` on the section you care about."
+        ),
+    )
 
 
 class CriticalLabFlagItem(BaseModel):

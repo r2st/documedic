@@ -140,6 +140,31 @@ describe('endpoint contracts', () => {
     expect(callAt().url).toBe(`${PREFIX}/guidelines/search?q=dengue%20%26%20shock`);
   });
 
+  it('sends both record paging parameters when they are given', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}));
+    await api.getRecord('pat-1', { limit: 25, offset: 50 });
+    expect(callAt().url).toBe(`${PREFIX}/patients/pat-1/record?limit=25&offset=50`);
+  });
+
+  it.each([
+    ['an offset alone', { offset: 20 }, 'offset=20'],
+    ['a limit alone', { limit: 5 }, 'limit=5'],
+    // Zero is a meaningful offset and a truthiness check would drop it. The failure would be
+    // quiet — the API's own default offset is 0 too — right up until a caller resets to the
+    // first page and needs the parameter actually sent.
+    ['a zero offset', { offset: 0 }, 'offset=0'],
+  ])('sends %s', async (_label, page, expected) => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}));
+    await api.getRecord('pat-1', page);
+    expect(callAt().url).toBe(`${PREFIX}/patients/pat-1/record?${expected}`);
+  });
+
+  it('omits the query string entirely for an empty paging object, leaving the API its default', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}));
+    await api.getRecord('pat-1', {});
+    expect(callAt().url).toBe(`${PREFIX}/patients/pat-1/record`);
+  });
+
   it.each([
     ['getPatient', () => api.getPatient('pat-1'), `${PREFIX}/patients/pat-1`, 'GET'],
     ['getRecord', () => api.getRecord('pat-1'), `${PREFIX}/patients/pat-1/record`, 'GET'],
