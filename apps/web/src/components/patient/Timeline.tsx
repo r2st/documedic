@@ -162,7 +162,7 @@ export function Timeline({ record }: { record: LongitudinalRecord | null | undef
                 </span>
                 <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between">
                   <div className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
-                    <span className="text-slate-400">{meta.icon}</span>
+                    <span aria-hidden="true" className="text-slate-400">{meta.icon}</span>
                     {entry.title}
                   </div>
                   <span className="text-xs text-slate-400">{formatDate(entry.date)}</span>

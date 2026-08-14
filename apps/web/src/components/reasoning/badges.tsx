@@ -15,7 +15,7 @@ export function AutonomyBadge({ tier }: { tier: AutonomyTier }) {
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${t.cls}`}>
       {tier === 'flag_for_review' && (
-        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <svg aria-hidden="true" className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
         </svg>
       )}
@@ -44,7 +44,7 @@ export function ProbabilityBandBadge({ band }: { band: ProbabilityBand }) {
 export function CantMissBadge() {
   return (
     <span className="inline-flex animate-pulse items-center gap-1.5 rounded-full bg-orange-100 px-2.5 py-1 text-xs font-bold uppercase text-orange-900 ring-1 ring-inset ring-orange-300">
-      <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-orange-500" />
       Can&apos;t miss
     </span>
   );

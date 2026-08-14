@@ -1,8 +1,8 @@
 export default function DashboardLoading() {
   return (
-    <div className="flex items-center justify-center py-24">
+    <div role="status" aria-busy="true" className="flex items-center justify-center py-24">
       <div className="text-center">
-        <div className="relative mx-auto mb-4 h-10 w-10">
+        <div aria-hidden="true" className="relative mx-auto mb-4 h-10 w-10">
           <div className="absolute inset-0 animate-ping rounded-full bg-brand-200 opacity-75" />
           <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-brand-100">
             <svg

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useRequireAuth, useAuth } from '@/lib/auth';
@@ -50,6 +50,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Escape is how every other expanded menu on the web closes. Without it the only way out of
+  // this one is to find the toggle again, which on a phone means tabbing back up through the
+  // whole panel.
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mobileMenuOpen]);
+
   if (loading || !account) {
     return (
       <main className="grid min-h-screen place-items-center">
@@ -65,6 +77,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Every screen puts the same header — logo, three nav links, account, sign out — ahead of
+          its content, so a keyboard user pays for it on every page load. This is the standard
+          escape: off-screen until focused, first in the tab order, jumps past the header. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-brand-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+      >
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-sm shadow-nav">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-6">
           {/* Logo + Brand */}
@@ -109,6 +130,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             className="inline-flex items-center justify-center rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 md:hidden"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
             aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-menu"
             aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
           >
             {mobileMenuOpen ? (
@@ -125,7 +147,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Mobile menu panel */}
         {mobileMenuOpen && (
-          <div className="animate-slide-down border-t border-slate-100 bg-white shadow-elevated md:hidden">
+          <div id="mobile-menu" className="animate-slide-down border-t border-slate-100 bg-white shadow-elevated md:hidden">
             <nav className="flex flex-col gap-1 px-4 py-3">
               <MobileNavLink href="/patients" onClick={closeMobileMenu}>Patients</MobileNavLink>
               <MobileNavLink href="/guidelines" onClick={closeMobileMenu}>Guidelines</MobileNavLink>
@@ -155,7 +177,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         )}
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8 animate-fade-in">{children}</main>
+      <main
+        id="main-content"
+        // Focusable so the skip link actually moves focus here rather than only moving the
+        // viewport; -1 keeps it out of the normal tab order.
+        tabIndex={-1}
+        className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8 animate-fade-in focus:outline-none"
+      >
+        {children}
+      </main>
     </div>
   );
 }

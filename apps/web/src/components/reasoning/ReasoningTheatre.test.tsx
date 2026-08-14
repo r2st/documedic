@@ -134,7 +134,8 @@ describe('ReasoningTheatre', () => {
     });
     expect(screen.getByText('Verifier verdict')).toBeInTheDocument();
     expect(screen.getByText('Status: approved')).toBeInTheDocument();
-    expect(screen.getByText('• Limited history available')).toBeInTheDocument();
+    // The bullet is a decorative sibling span (aria-hidden), so the caveat text stands alone.
+    expect(screen.getByText('Limited history available')).toBeInTheDocument();
   });
 
   it('surfaces stream errors', async () => {
@@ -273,7 +274,7 @@ describe('ReasoningTheatre caveat rendering', () => {
       source.emit('verifier', { status: 'approved', case_caveats: [null, 'Limited history'] });
     });
 
-    expect(screen.getByText('• Limited history')).toBeInTheDocument();
+    expect(screen.getByText('Limited history')).toBeInTheDocument();
     expect(screen.queryByText(/null/)).not.toBeInTheDocument();
   });
 });

@@ -47,7 +47,9 @@ function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'a
       <ul className="space-y-1.5">
         {items.map((e, i) => (
           <li key={i} className={`flex items-start gap-2 text-sm ${styles.text}`}>
-            <span className={`mt-0.5 flex-shrink-0 ${styles.icon}`}>{styles.marker}</span>
+            {/* The tick/cross repeats the "Evidence supporting"/"Evidence against" heading above;
+                read aloud on every row it is noise, so it stays decorative. */}
+            <span aria-hidden="true" className={`mt-0.5 flex-shrink-0 ${styles.icon}`}>{styles.marker}</span>
             <span>
               {asText(e.text)}
               {e.source_ref ? (
@@ -74,7 +76,7 @@ function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
   return (
     <div className="mt-4 rounded-xl border-l-4 border-purple-500 bg-purple-50 p-4">
       <div className="mb-2 flex items-center gap-2">
-        <svg className="h-4 w-4 text-purple-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <svg aria-hidden="true" className="h-4 w-4 text-purple-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
         </svg>
         <p className="text-xs font-bold uppercase tracking-wider text-purple-800">
@@ -122,22 +124,33 @@ export function SuggestionCard({
   }
 
   if (s.is_hard_block) {
+    const reasonId = `override-reason-${s.id}`;
+    const overrideHintId = `override-hint-${s.id}`;
     return (
-      <div className="animate-slide-up rounded-xl border-2 border-red-600 bg-red-50 p-5 shadow-sm">
+      // A hard block stops the clinician from proceeding; it is not something to be discovered
+      // by wandering the page, so it is announced the moment it renders.
+      <div role="alert" className="animate-slide-up rounded-xl border-2 border-red-600 bg-red-50 p-5 shadow-sm">
         <div className="mb-2 flex items-center gap-2">
-          <svg className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <svg aria-hidden="true" className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636" />
           </svg>
           <p className="text-sm font-bold uppercase tracking-wide text-red-800">Hard block — cannot proceed</p>
         </div>
         <p className="text-sm text-red-900">{asText(s.body)}</p>
         {decided ? (
-          <p className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-xs font-medium text-red-800">
+          <p role="status" className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-xs font-medium text-red-800">
             Recorded decision: {decided}
           </p>
         ) : (
           <div className="mt-4 space-y-3 border-t border-red-200 pt-4">
+            {/* This field had a placeholder and no label. A placeholder is not an accessible
+                name — it vanishes on the first keystroke, and it left the one control that
+                documents an override of a clinical hard block announced as "edit text, blank". */}
+            <label htmlFor={reasonId} className="block text-sm font-medium text-red-900">
+              Reason for overriding this hard block
+            </label>
             <textarea
+              id={reasonId}
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
               placeholder="Documented clinical reasoning is required to override a hard block."
@@ -149,6 +162,7 @@ export function SuggestionCard({
                 className="w-full sm:w-auto"
                 variant="danger"
                 disabled={!overrideReason.trim()}
+                aria-describedby={overrideHintId}
                 onClick={() => record('overridden', overrideReason)}
               >
                 Override with documented reason
@@ -157,6 +171,13 @@ export function SuggestionCard({
                 Acknowledge (do not override)
               </Button>
             </div>
+            {/* A disabled control with no stated reason is a dead end for anyone who cannot see
+                that the field above it is empty. */}
+            <p id={overrideHintId} className="sr-only">
+              {overrideReason.trim()
+                ? 'A reason is recorded; the override can be submitted.'
+                : 'Enter a reason above to enable the override.'}
+            </p>
           </div>
         )}
       </div>
@@ -183,7 +204,7 @@ export function SuggestionCard({
       {/* Engagement gate for flag-for-review: clinician must actively click through. */}
       {!acknowledged ? (
         <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-5 text-center">
-          <svg className="mx-auto mb-2 h-8 w-8 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <svg aria-hidden="true" className="mx-auto mb-2 h-8 w-8 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
           </svg>
           <p className="mb-3 text-sm font-medium text-amber-900">
@@ -245,7 +266,9 @@ export function SuggestionCard({
           )}
 
           {decided && (
-            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
+            // The only confirmation that a decision reached the audit log, rendered without
+            // moving focus off the button that was just pressed.
+            <p role="status" className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
               Recorded decision: {decided}
             </p>
           )}

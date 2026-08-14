@@ -29,10 +29,14 @@ describe('OfflineBanner', () => {
 
   beforeEach(() => setOnLine(true));
 
-  it('renders nothing while online', () => {
+  it('shows nothing while online, but keeps its live region mounted and empty', () => {
     setOnLine(true);
-    const { container } = render(<OfflineBanner />);
-    expect(container).toBeEmptyDOMElement();
+    render(<OfflineBanner />);
+
+    expect(screen.queryByText(/Offline Mode/)).not.toBeInTheDocument();
+    // The region has to pre-exist the message it will carry: a live region that appears
+    // already populated is not reliably announced. See the comment in Banners.tsx.
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('appears when the browser goes offline and clears the AI-features caveat, keeping records available', () => {
