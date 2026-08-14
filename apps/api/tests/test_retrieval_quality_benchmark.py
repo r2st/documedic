@@ -193,6 +193,46 @@ def test_no_section_from_another_condition_is_citable(
     assert not wrong, f"{label} (about {condition}) could cite {wrong}"
 
 
+# --- the query asks for management, so the management section has to be reachable -----------
+
+
+@pytest.mark.parametrize(
+    ("label", "diagnoses", "complaint", "condition"),
+    CASES,
+    ids=[c[0] for c in CASES],
+)
+def test_the_case_can_cite_its_own_management_section(
+    corpus, label, diagnoses, complaint, condition
+):
+    """R34's known limitation, asserted as a requirement.
+
+    ``guideline_rag`` exists to produce *management* options, and the excerpts it may cite are
+    whatever cleared the threshold. Before section-intent scoring, the diagnosis section outscored
+    the management section in every document that has both, and three of these seven cases --
+    dengue, hypertension, malaria -- could not put their own management section over the line at
+    all. The agent still emitted options, grounded in the only thing available: diagnosis text.
+    "Guidelines support considering: Diagnosis and staging of hypertension..." is a citation to
+    the wrong kind of section, and no threshold setting fixes it, because the section that should
+    have won was ranked below one that should not have.
+    """
+    cited = {r["section_id"] for r in _cited(_query(diagnoses, complaint), corpus)}
+    management = {sid for sid in cited if "MGMT" in sid}
+
+    assert management, f"{label}: nothing that answers a management question is citable"
+    assert all(_document_of(sid) == condition for sid in management)
+
+
+def test_no_case_grounds_management_only_in_diagnosis_text(corpus):
+    """The aggregate: every case, not most of them."""
+    without = [
+        label
+        for label, diagnoses, complaint, _condition in CASES
+        if not any("MGMT" in r["section_id"] for r in _cited(_query(diagnoses, complaint), corpus))
+    ]
+
+    assert not without, f"cases with no citable management section: {without}"
+
+
 def test_citation_precision_and_recall_over_the_whole_benchmark(corpus):
     """The aggregate the individual cases add up to, asserted as one number each.
 

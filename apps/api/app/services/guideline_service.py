@@ -73,6 +73,23 @@ _NEGATION_SCOPE = 5
 _CLAUSE = re.compile(r"[.,;:!?()\[\]|/]+")
 
 
+def _unnegated(query: str) -> str:
+    """The query with every span a cue marks as *absent* removed. See ``query_tokens``."""
+    kept: list[str] = []
+    for clause in _CLAUSE.split(query or ""):
+        remaining = 0
+        for word in clause.split():
+            token = word.strip("-'\"").lower()
+            if token in _NEGATION_CUES:
+                remaining = _NEGATION_SCOPE
+                continue
+            if remaining:
+                remaining -= 1
+                continue
+            kept.append(word)
+    return " ".join(kept)
+
+
 def query_tokens(query: str) -> set[str]:
     """The tokens of a retrieval query, with findings recorded as *absent* left out.
 
@@ -95,19 +112,44 @@ def query_tokens(query: str) -> set[str]:
     ("NSAIDs should be avoided in dengue"), and a clinician searching for NSAIDs in dengue must
     still find that section -- so chunk body tokens keep their negations.
     """
-    kept: list[str] = []
-    for clause in _CLAUSE.split(query or ""):
-        remaining = 0
-        for word in clause.split():
-            token = word.strip("-'\"").lower()
-            if token in _NEGATION_CUES:
-                remaining = _NEGATION_SCOPE
-                continue
-            if remaining:
-                remaining -= 1
-                continue
-            kept.append(word)
-    return _tokens(" ".join(kept))
+    return _tokens(_unnegated(query))
+
+
+# Words that name a section, or a query, as being about *what to do* rather than about what the
+# patient has. Matched against a section's heading, section_id and curated keywords, and against
+# the query -- see ``is_management_intent``.
+_MANAGEMENT_CUES = frozenset(
+    {
+        "management",
+        "managing",
+        "manage",
+        "mgmt",
+        "treatment",
+        "treatments",
+        "treating",
+        "treat",
+        "therapy",
+        "therapies",
+        "therapeutic",
+        "pharmacological",
+        "pharmacotherapy",
+        "prescribe",
+        "prescribed",
+        "prescribing",
+        "regimen",
+    }
+)
+
+
+def is_management_intent(text: str) -> bool:
+    """Whether this text is about *what to do* — a management section, or a management query.
+
+    Deliberately read from the un-negated text (``_unnegated``) for the same reason scoring is:
+    "he takes no regular therapy" is a clinician recording an absence, not a request for therapy
+    options. It is *not* read through ``query_tokens``, because "management" is a stopword there
+    -- which is the whole problem this exists to solve (see ``_intent_weight``).
+    """
+    return bool(_MANAGEMENT_CUES & set(_TOKEN.findall(_unnegated(text).lower())))
 
 
 # A query token counts as a keyword hit if it *is* a keyword word, or is that word give or take
@@ -187,6 +229,10 @@ class RetrievableChunk:
     # flattened union of them, kept because it answers "is this word a keyword word at all".
     keyword_phrases: tuple[frozenset[str], ...] = ()
     keyword_tokens: frozenset[str] = frozenset()
+    # Whether this section is about what to *do* about the condition rather than how to
+    # recognise it. Derived once here, from the section's own metadata, for the same reason the
+    # token sets are: every query is scored against every chunk in the corpus.
+    is_management: bool = False
 
     def __post_init__(self) -> None:
         # Derived, never passed: a directly-constructed chunk (tests, fixtures) would otherwise
@@ -198,6 +244,18 @@ class RetrievableChunk:
                 self,
                 "keyword_tokens",
                 frozenset(t for words in self.keyword_phrases for t in words),
+            )
+        if not self.is_management:
+            # Heading first (it is what a curator writes the section's purpose into), then the
+            # section_id, whose "-MGMT" convention survives a re-worded heading, then the
+            # curated keywords. Never the body: guideline prose discusses treatment inside a
+            # diagnosis section all the time, and that does not make it a management section.
+            object.__setattr__(
+                self,
+                "is_management",
+                is_management_intent(
+                    f"{self.heading or ''} {self.section_id} {' '.join(self.keywords)}"
+                ),
             )
 
     @classmethod
@@ -250,21 +308,101 @@ def _keyword_weight(q_tokens: set[str], phrases: tuple[frozenset[str], ...]) -> 
     return total
 
 
-def lexical_score(query: str, chunks: Sequence[RetrievableChunk], k: int) -> list[dict]:
+def _normalise(raw: float) -> float:
+    """Saturating relevance: independent of query length so a long multi-diagnosis query is not
+    penalised. raw>=4.5 (≈3 keyword hits, or 2 hits + body overlap) clears the 0.75 threshold."""
+    return round(raw / (raw + _KEYWORD_WEIGHT), 4) if raw else 0.0
+
+
+def _document_key(chunk: RetrievableChunk) -> tuple[str, str]:
+    return (chunk.source, chunk.document_title)
+
+
+# What a matched intent is worth, in the same units as a keyword hit (×1.5) -- so roughly one and
+# a third keyword hits. Calibrated against the shipped corpus as the smallest weight that carries
+# every benchmark case's own management section over the citation threshold; see
+# ``_intent_weight`` for why over-shooting it cannot cost precision.
+_INTENT_WEIGHT = 2.0
+
+
+def _intent_weight(
+    query_is_management: bool,
+    chunk: RetrievableChunk,
+    raw: float,
+    confirmed_documents: frozenset[tuple[str, str]],
+) -> float:
+    """Evidence that this section answers the *kind* of question the query is asking.
+
+    ``guideline_rag`` asks one question and only one: "management of {leading diagnoses} |
+    {complaint}". The retriever could not hear the "management" part of it. "management" is a
+    stopword in ``_STOP`` -- it has to be, because it is also a curated keyword on nearly every
+    management section, so scoring it as an ordinary token lifted every management section in the
+    corpus at once -- and dropping it left the query with nothing but the diagnosis names and the
+    presenting complaint. Both of those are *symptom* vocabulary, and symptom vocabulary is what
+    diagnosis sections are keyed on ("headache", "chest pain", "cough", "polyuria"). Management
+    sections are keyed on therapy vocabulary ("amlodipine", "artemisinin", "ORS") that a query
+    built from diagnoses and a complaint never contains.
+
+    So the ranking within the right document came out backwards, systematically. Measured on the
+    shipped corpus across the seven benchmark cases, the diagnosis section outscored the
+    management section in *every* document that has both, and three cases -- dengue,
+    hypertension, malaria -- could not put their own management section over the citation
+    threshold at all. ``guideline_rag`` then grounded its management options in diagnosis text:
+    "Guidelines support considering: Diagnosis and staging of hypertension...". That is R34's
+    known limitation, and it is a retrieval defect rather than a threshold that is set too high.
+
+    The intent match is real evidence and is scored as such, under two gates:
+
+      * **the section must already have lexical evidence for this query** (``raw > 0``). Being a
+        management section is not on its own a reason to cite one.
+      * **the section's document must already be citable on topical evidence alone.** This is the
+        gate that makes the whole thing safe: promotion happens strictly *inside* a document some
+        section of which already cleared the threshold without any intent credit. No document can
+        become citable that was not already, so citation precision -- which the benchmark judges
+        per document, because any section of the right condition is a defensible grounding and no
+        section of a different condition is -- cannot fall, by construction rather than by
+        measurement. The weight above is therefore a recall knob only.
+    """
+    if not query_is_management or raw <= 0 or not chunk.is_management:
+        return 0.0
+    return _INTENT_WEIGHT if _document_key(chunk) in confirmed_documents else 0.0
+
+
+def lexical_score(
+    query: str,
+    chunks: Sequence[RetrievableChunk],
+    k: int,
+    *,
+    threshold: float | None = None,
+) -> list[dict]:
     """Deterministic lexical retriever: keyword evidence (×1.5) + body token overlap, normalised.
 
     Shared by the async ``GuidelineService.retrieve`` and the sync retriever closure the
     ReasoningContext needs (it has no event loop / DB access).
+
+    Scored in two passes. The first is topical only, and decides which documents the query is
+    about; the second adds intent evidence within those documents (``_intent_weight``).
+    ``threshold`` is the citation threshold the caller will apply to the result -- it is what
+    "this document is about the case" means -- and defaults to the one the reasoning engine uses.
     """
     q_tokens = query_tokens(query)
     if not q_tokens or not chunks:
         return []
+    cut = settings.guideline_retrieval_threshold if threshold is None else threshold
+
+    topical = [
+        (
+            chunk,
+            _keyword_weight(q_tokens, chunk.keyword_phrases) + len(q_tokens & chunk.body_tokens),
+        )
+        for chunk in chunks
+    ]
+    confirmed = frozenset(_document_key(c) for c, raw in topical if _normalise(raw) >= cut)
+
+    query_is_management = is_management_intent(query)
     scored: list[tuple[float, RetrievableChunk]] = []
-    for chunk in chunks:
-        raw = _keyword_weight(q_tokens, chunk.keyword_phrases) + len(q_tokens & chunk.body_tokens)
-        # Saturating relevance: independent of query length so a long multi-diagnosis query
-        # is not penalised. raw>=4.5 (≈3 keyword hits, or 2 hits + body overlap) clears 0.75.
-        score = round(raw / (raw + _KEYWORD_WEIGHT), 4) if raw else 0.0
+    for chunk, raw in topical:
+        score = _normalise(raw + _intent_weight(query_is_management, chunk, raw, confirmed))
         if score > 0:
             scored.append((score, chunk))
     scored.sort(key=lambda x: x[0], reverse=True)
