@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # The longest INN in the WHO list is around 60 characters; Indian brand names with a strength
 # qualifier ("Augmentin Duo 625 Tablet") are shorter still. 200 is generous for anything a
@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field, model_validator
 MAX_DRUG_NAME_CHARS = 200
 # reference_id is a curated internal key ("DRUG-0042"), not user-authored text.
 MAX_DRUG_REFERENCE_ID_CHARS = 64
+
+# The floor on a hard-block override's documented justification, counted after stripping.
+MIN_OVERRIDE_REASONING_CHARS = 10
 
 
 class SafetyCheckRequest(BaseModel):
@@ -89,10 +92,35 @@ class DrugSafetyOverrideRequest(BaseModel):
     drug_safety_check_id: uuid.UUID
     reasoning: str = Field(
         ...,
-        min_length=10,
+        min_length=MIN_OVERRIDE_REASONING_CHARS,
         max_length=2000,
         description="Documented clinical justification for overriding the hard block",
     )
+
+    @field_validator("reasoning")
+    @classmethod
+    def _reasoning_is_not_blank(cls, value: str) -> str:
+        """Apply the floor to the *stripped* text, and store the stripped form.
+
+        ``min_length`` counts raw characters, and ``SafetyService.override_hard_block`` strips
+        before storing. Ten spaces satisfied the first and became ``""`` in the second, so the
+        one sanctioned path past a hard block -- a documented allergy or absolute
+        contraindication, per Critical Safety Rule #3 -- could be walked with no documentation
+        at all. The resulting ``drug_safety_overrides`` row recorded that a clinician had
+        justified prescribing past the block and held nothing they had said, which is the
+        record a CDSCO audit or an adverse-event review reads to reconstruct the decision.
+
+        Stripping here rather than in the service is what keeps the validated value and the
+        stored value the same string; the service's own ``.strip()`` is now a no-op it can keep
+        for the non-HTTP callers.
+        """
+        stripped = value.strip()
+        if len(stripped) < MIN_OVERRIDE_REASONING_CHARS:
+            raise ValueError(
+                f"reasoning must be at least {MIN_OVERRIDE_REASONING_CHARS} characters of "
+                "actual justification"
+            )
+        return stripped
 
 
 class DrugSafetyOverrideResponse(BaseModel):
