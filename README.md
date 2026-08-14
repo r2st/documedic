@@ -115,10 +115,10 @@ prescription/lab document, confirm the extraction, then run a drug-safety check.
 ## Testing
 
 ```bash
-# Backend — 1,483 tests
+# Backend — 1,489 tests
 cd apps/api
 ../../.venv/bin/python -m pytest
-../../.venv/bin/python -m pytest --cov=app       # core safety 98–100%
+../../.venv/bin/python -m pytest --cov=app       # 100% statement coverage
 ../../.venv/bin/ruff check app tests             # lint
 ../../.venv/bin/mypy app                         # strict type check
 
