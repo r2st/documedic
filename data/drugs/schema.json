@@ -33,8 +33,28 @@
         "condition_name": {"type": "string"},
         "severity": {"enum": ["relative", "absolute", "dose_adjustment_required"]},
         "is_absolute": {"type": "boolean"},
-        "renal_threshold": {"type": ["object", "null"]},
-        "hepatic_threshold": {"type": ["object", "null"]}
+        "renal_threshold": {
+          "description": "eGFR band in mL/min. Applied by app.core.safety._evaluate_renal.",
+          "type": ["object", "null"],
+          "properties": {
+            "egfr_below": {"type": "number"},
+            "egfr_above": {"type": "number"},
+            "action": {"type": "string"}
+          }
+        },
+        "hepatic_threshold": {
+          "description": "Liver-function thresholds, applied by app.core.safety._evaluate_hepatic. A rule naming both markers is breached by EITHER. Only these marker keys are evaluated: a threshold written on any other key can never fire, which is the failure the evaluator was added to end — tests/test_hepatic_dose_adjustment.py holds this file to it.",
+          "type": ["object", "null"],
+          "properties": {
+            "bilirubin_above": {"description": "Total bilirubin, mg/dL", "type": "number"},
+            "alt_above": {"description": "ALT/SGPT, U/L", "type": "number"},
+            "action": {
+              "description": "'contraindicated' is a hard block; anything else is a warning.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
       }
     }
   }

@@ -68,6 +68,15 @@ _RANGES: dict[str, CriticalRange] = {
         unit="10^3/ul", panic_low=1.0, critical_low=2.0, critical_high=30.0, panic_high=50.0
     ),
     "calcium": CriticalRange(unit="mg/dl", panic_low=6.0, critical_low=7.0, critical_high=13.0),
+    "bilirubin": CriticalRange(unit="mg/dl", critical_high=15.0),
+    # Registered for their canonical unit, not for a threshold. There is no standard critical
+    # value for a transaminase — the number that matters is a multiple of the assay's own upper
+    # limit, in the context of the bilirubin and the clinical picture — so this table states
+    # none, and ``evaluate_critical_value`` therefore never flags them. What the entry buys is
+    # marker identification and unit normalisation for the hepatic dose-adjustment thresholds
+    # in ``app.core.safety``, which need "this row is an ALT, in U/L" and nothing more.
+    "alt": CriticalRange(unit="u/l"),
+    "ast": CriticalRange(unit="u/l"),
 }
 
 # Free-text marker names (as extracted from prescriptions/lab reports) -> canonical key.
@@ -105,6 +114,26 @@ _ALIASES: dict[str, str] = {
     "calcium": "calcium",
     "serum calcium": "calcium",
     "ca": "calcium",
+    # Liver panel. Indian reports print the SGPT/SGOT names at least as often as ALT/AST.
+    "bilirubin": "bilirubin",
+    "total bilirubin": "bilirubin",
+    "serum bilirubin": "bilirubin",
+    "serum bilirubin total": "bilirubin",
+    "bilirubin total": "bilirubin",
+    "t bilirubin": "bilirubin",
+    "tbili": "bilirubin",
+    "alt": "alt",
+    "sgpt": "alt",
+    "alt sgpt": "alt",
+    "sgpt alt": "alt",
+    "alanine aminotransferase": "alt",
+    "alanine transaminase": "alt",
+    "ast": "ast",
+    "sgot": "ast",
+    "ast sgot": "ast",
+    "sgot ast": "ast",
+    "aspartate aminotransferase": "ast",
+    "aspartate transaminase": "ast",
 }
 
 # Unit conversion factors to the canonical unit in CriticalRange.unit, keyed by canonical marker.
@@ -120,6 +149,8 @@ _UNIT_CONVERSIONS: dict[str, dict[str, float]] = {
     # than the thousands-scaled one ("PLATELET COUNT 8,000 /cumm").
     "platelets": {"/cumm": 0.001, "cells/cumm": 0.001, "/mm3": 0.001, "cells/mm3": 0.001},
     "wbc": {"/cumm": 0.001, "cells/cumm": 0.001, "/mm3": 0.001, "cells/mm3": 0.001},
+    # µmol/L -> mg/dL. ASCII key only, as for creatinine above.
+    "bilirubin": {"umol/l": 1 / 17.104},
 }
 
 # Spellings that mean the marker's canonical unit exactly, keyed by canonical marker. These
@@ -136,6 +167,12 @@ _UNIT_SYNONYMS: dict[str, frozenset[str]] = {
     "creatinine": frozenset({"mg%"}),
     "calcium": frozenset({"mg%"}),
     "hemoglobin": frozenset({"gm/dl", "gms/dl", "gm%", "g%"}),
+    "bilirubin": frozenset({"mg%"}),
+    # An international unit of enzyme activity is the same unit as a unit of enzyme activity,
+    # and the "units/L" long form is the same again — all three are printed interchangeably.
+    # "U/mL" is deliberately absent: that is a thousandfold different, not a spelling.
+    "alt": frozenset({"iu/l", "units/l"}),
+    "ast": frozenset({"iu/l", "units/l"}),
 }
 
 
@@ -190,6 +227,11 @@ _UNITLESS_BANDS: dict[str, _UnitlessBands] = {
     "calcium": _UnitlessBands(canonical=(2.0, 20.0), others=((0.5, 5.0),)),
     # A ratio has no unit to lose.
     "inr": _UnitlessBands(canonical=(0.1, 30.0)),
+    # mg/dL vs µmol/L (x17.1).
+    "bilirubin": _UnitlessBands(canonical=(0.05, 60.0), others=((70.0, 1000.0),)),
+    # U/L is effectively the only scale these are printed in.
+    "alt": _UnitlessBands(canonical=(1.0, 20000.0)),
+    "ast": _UnitlessBands(canonical=(1.0, 20000.0)),
 }
 
 
@@ -261,6 +303,28 @@ def creatinine_to_mg_dl(value: float, unit: str | None) -> float | None:
     creatinine in units this module cannot interpret has to be skipped, not assumed.
     """
     return _to_canonical_value("creatinine", value, unit)
+
+
+def canonical_lab_value(
+    marker_name: str, value: float | None, unit: str | None
+) -> tuple[str, float] | None:
+    """``(canonical marker, value in that marker's canonical unit)``, or None.
+
+    The general form of ``creatinine_to_mg_dl``, for callers that need to identify the marker
+    as well as convert it — the hepatic dose-adjustment thresholds in ``app.core.safety`` have
+    to know a bilirubin from an ALT before they can compare either to anything.
+
+    None for a marker this module does not curate, and for a value it cannot place on a scale.
+    Both are the same answer to the caller for the same reason as everywhere else here: a guess
+    about which analyte or which unit is a number in the patient's chart.
+    """
+    if value is None:
+        return None
+    canonical = _normalize_marker(marker_name)
+    if canonical is None:
+        return None
+    converted = _to_canonical_value(canonical, value, unit)
+    return None if converted is None else (canonical, converted)
 
 
 def _normalize_unit_key(unit: str | None) -> str:

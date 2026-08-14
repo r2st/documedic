@@ -170,6 +170,25 @@ class ContraindicationRule:
 
 
 @dataclass(frozen=True)
+class HepaticPanel:
+    """The measured liver function a hepatic dose-adjustment rule can be applied to.
+
+    Two markers, in the canonical units ``app.core.lab_safety`` normalises to: total bilirubin
+    in mg/dL and ALT in U/L. Deliberately not a Child-Pugh class, which is what the hepatic
+    dosing literature is actually written against — Child-Pugh needs ascites and encephalopathy
+    graded by a clinician, neither of which is in this record as structured data, and inferring
+    a class from labs alone would be exactly the confident-wrong number this engine refuses
+    elsewhere. What is here is what the chart measures.
+    """
+
+    bilirubin_mg_dl: float | None = None
+    alt_u_l: float | None = None
+
+    def __bool__(self) -> bool:
+        return self.bilirubin_mg_dl is not None or self.alt_u_l is not None
+
+
+@dataclass(frozen=True)
 class SafetyContext:
     """Everything the engine needs about a patient + reference data."""
 
@@ -177,6 +196,7 @@ class SafetyContext:
     allergies: list[PatientAllergy] = field(default_factory=list)
     conditions: list[PatientCondition] = field(default_factory=list)
     egfr: float | None = None
+    hepatic: HepaticPanel = field(default_factory=HepaticPanel)
     interaction_rules: list[InteractionRule] = field(default_factory=list)
     contraindication_rules: list[ContraindicationRule] = field(default_factory=list)
     # Names of current medications that could not be matched to the vocabulary at all, and so
@@ -648,11 +668,16 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
         if rule.drug_reference_id != proposed.reference_id:
             continue
 
-        # --- Renal-threshold evaluation (works even if the named condition is absent,
-        #     because eGFR is a measured value). ---
+        # --- Measured-threshold evaluation (works even if the named condition is absent,
+        #     because eGFR and the liver panel are measured values). ---
         renal_flag = _evaluate_renal(proposed, rule, ctx)
         if renal_flag is not None:
             flags.append(renal_flag)
+            continue
+
+        hepatic_flag = _evaluate_hepatic(proposed, rule, ctx)
+        if hepatic_flag is not None:
+            flags.append(hepatic_flag)
             continue
 
         match = _match_condition(rule, ctx.conditions)
@@ -789,6 +814,113 @@ def _evaluate_renal(
             "proposed_drug": proposed.generic_name,
             "egfr": ctx.egfr,
             "egfr_threshold": below,
+            "action": action,
+            "condition": rule.condition_name,
+        },
+        contraindication_id=rule.contraindication_id,
+    )
+
+
+# The markers a hepatic threshold may be written against: the key a curated rule uses, the
+# field it reads on ``HepaticPanel``, and how to say it. Two, because two are what this record
+# reliably carries — see ``HepaticPanel`` for why this is not a Child-Pugh class.
+_HEPATIC_MARKERS: tuple[tuple[str, str, str, str], ...] = (
+    ("bilirubin_above", "bilirubin_mg_dl", "total bilirubin", "mg/dL"),
+    ("alt_above", "alt_u_l", "ALT", "U/L"),
+)
+
+
+def _evaluate_hepatic(
+    proposed: DrugRef, rule: ContraindicationRule, ctx: SafetyContext
+) -> SafetyFlag | None:
+    """Apply a curated hepatic dose-adjustment threshold to the chart's liver panel.
+
+    ``hepatic_threshold`` has been a column on the contraindication table, a documented field in
+    the curated-data schema, and a value this engine loads into ``ContraindicationRule`` since
+    the table was written — and nothing read it. ``hepatic_dose`` was likewise a permitted
+    ``check_type`` in the database constraint, in the shared enums and in this module's own
+    ``CheckType``, produced by nothing. A rule keyed on a hepatic threshold therefore loaded,
+    matched no condition name, and fell out of the loop reporting nothing: the drug came back
+    with a clean check because the only rule that bore on it was written on an axis with no
+    evaluator. The same "a check that did not run reporting itself as a check that passed"
+    this file has now been corrected for four times over.
+
+    Mirrors ``_evaluate_renal`` deliberately, including the part that matters most: when the
+    threshold exists and there is nothing to apply it to, that is stated rather than passed
+    over. Prescribing methotrexate to a chart with no LFTs on it is precisely when a clinician
+    wants to be told there are no LFTs on it.
+    """
+    threshold = rule.hepatic_threshold
+    if not threshold:
+        return None
+
+    stated = [
+        (key, field_name, label, unit)
+        for key, field_name, label, unit in _HEPATIC_MARKERS
+        if threshold.get(key) is not None
+    ]
+    if not stated:
+        return None
+
+    action = threshold.get("action", "review")
+
+    if not ctx.hepatic:
+        # No liver panel at all. Same judgement as the renal branch: unevaluated is not the
+        # same as fine, and a warning is the honest answer where a block would be an
+        # unclearable alert on every chart without an LFT.
+        wanted = ", ".join(
+            f"{label} above {threshold[key]} {unit}" for key, _f, label, unit in stated
+        )
+        return SafetyFlag(
+            check_type="hepatic_dose",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"Hepatic check not performed for {proposed.generic_name} "
+                f"({rule.condition_name}): no liver function tests on this chart. Guidelines "
+                f"set a threshold of {wanted} (action: {action}); a current bilirubin or ALT is "
+                "needed to apply it."
+            ),
+            details={
+                "proposed_drug": proposed.generic_name,
+                "hepatic_thresholds": {key: threshold[key] for key, _f, _l, _u in stated},
+                "action": action,
+                "condition": rule.condition_name,
+                "evaluated": False,
+            },
+            contraindication_id=rule.contraindication_id,
+        )
+
+    # Every marker the rule names and the chart measures. A rule naming two is breached by
+    # either — the thresholds are alternative pieces of evidence for one impairment, not
+    # conditions to be met together — and a marker the chart does not carry cannot breach.
+    breached = [
+        (label, getattr(ctx.hepatic, field_name), threshold[key], unit)
+        for key, field_name, label, unit in stated
+        if getattr(ctx.hepatic, field_name) is not None
+        and getattr(ctx.hepatic, field_name) > threshold[key]
+    ]
+    if not breached:
+        return None
+
+    is_hard = action == "contraindicated"
+    measured = "; ".join(
+        f"{label} {value} {unit} (threshold {limit})" for label, value, limit, unit in breached
+    )
+    return SafetyFlag(
+        check_type="hepatic_dose",
+        severity="hard_block" if is_hard else "warning",
+        is_hard_block=is_hard,
+        summary=(
+            f"Hepatic alert for {proposed.generic_name} ({rule.condition_name}): {measured}. "
+            f"Recommended action: {action}."
+        ),
+        details={
+            "proposed_drug": proposed.generic_name,
+            "breached": [
+                {"marker": label, "value": value, "threshold": limit, "unit": unit}
+                for label, value, limit, unit in breached
+            ],
             "action": action,
             "condition": rule.condition_name,
         },

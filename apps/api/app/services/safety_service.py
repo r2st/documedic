@@ -11,12 +11,14 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import replace
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
     ContraindicationRule,
     DrugRef,
+    HepaticPanel,
     InteractionRule,
     PatientAllergy,
     PatientCondition,
@@ -130,6 +132,7 @@ class SafetyService:
                 unresolved_allergies=unidentified_allergies,
                 conditions=await self._conditions(patient_id),
                 egfr=await self._latest_egfr(patient_id),
+                hepatic=await self._hepatic_panel(patient_id),
             )
         return self._facts[patient_id]
 
@@ -310,6 +313,55 @@ class SafetyService:
         )
         value = result.scalars().first()
         return float(value) if value is not None else None
+
+    async def _hepatic_panel(self, patient_id: uuid.UUID) -> HepaticPanel:
+        """The chart's current liver function, for the hepatic dose-adjustment thresholds.
+
+        The most recent value per marker, in the canonical unit — the same ordering argument as
+        ``_latest_egfr`` (sample date, not ingestion time, because this product reads histories
+        uploaded in whatever order the folder produced them) and the same refusal to guess as
+        everywhere else: a row this cannot identify or convert is left out, which makes the
+        panel empty, which makes ``_evaluate_hepatic`` report itself unevaluated rather than
+        pass. Both markers come from one query; the narrowing predicate is the marker-name
+        prefix set, and the rows are few enough per patient that the conversion happens here.
+        """
+        # The predicate narrows; ``canonical_lab_value`` decides. A patient's lab history is
+        # unbounded — ``LabSafetyService`` was rewritten once already for reading all of it to
+        # use a handful of rows — so the marker names are filtered in SQL rather than in
+        # Python. Deliberately loose (a substring, not the alias list): the alias table matches
+        # on a normalised form the database cannot compute, so SQL's job here is only to keep
+        # the transfer proportional to the liver panel instead of to the whole chart.
+        name = func.lower(LabResult.marker_name)
+        result = await self.db.execute(
+            select(LabResult.marker_name, LabResult.value_numeric, LabResult.unit)
+            .where(
+                LabResult.patient_id == patient_id,
+                LabResult.is_deleted.is_(False),
+                LabResult.value_numeric.is_not(None),
+                or_(
+                    name.like("%bilirubin%"),
+                    name.like("%alt%"),
+                    name.like("%ast%"),
+                    name.like("%sgpt%"),
+                    name.like("%sgot%"),
+                    name.like("%transaminase%"),
+                    name.like("%aminotransferase%"),
+                ),
+            )
+            .order_by(
+                LabResult.sample_date.desc().nullslast(),
+                LabResult.created_at.desc(),
+                LabResult.id,
+            )
+        )
+        latest: dict[str, float] = {}
+        for marker_name, value_numeric, unit in result.all():
+            canonical = canonical_lab_value(marker_name, float(value_numeric), unit)
+            # First row wins: the query is already newest-first, so a later row for the same
+            # marker is an older draw.
+            if canonical is not None and canonical[0] not in latest:
+                latest[canonical[0]] = canonical[1]
+        return HepaticPanel(bilirubin_mg_dl=latest.get("bilirubin"), alt_u_l=latest.get("alt"))
 
     async def _load_interactions(self, reference_ids: set[str]) -> list[InteractionRule]:
         """Interaction rules whose *both* endpoints are drugs in play.
