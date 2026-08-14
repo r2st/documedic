@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.safety import SafetyFlag, has_hard_block
 from app.db.session import get_db
 from app.dependencies import get_current_account
+from app.models.drug_vocabulary import DrugVocabulary
 from app.models.user import Account
 from app.openapi import PATIENT_ERRORS
 from app.schemas.safety import (
@@ -26,7 +27,19 @@ from app.services.safety_service import SafetyService
 router = APIRouter(prefix="/patients/{patient_id}/drug-safety", tags=["drug-safety"])
 
 
-def _flag_to_response(flag: SafetyFlag, check_id: uuid.UUID | None = None) -> SafetyFlagResponse:
+def _flag_to_response(
+    flag: SafetyFlag,
+    check_id: uuid.UUID | None = None,
+    drug: DrugVocabulary | None = None,
+) -> SafetyFlagResponse:
+    """One flag as it goes over the wire.
+
+    ``drug`` names the current medication the flag was raised about, and is passed only by the
+    endpoint that evaluates several — see ``SafetyFlagResponse.drug_reference_id``. Left null by
+    ``POST ../check``, where every per-drug flag is about the single proposed drug the response
+    already names at the top level, and by the chart-level notes, which are about the record
+    rather than about any medication.
+    """
     return SafetyFlagResponse(
         id=check_id,
         check_type=flag.check_type,
@@ -37,6 +50,8 @@ def _flag_to_response(flag: SafetyFlag, check_id: uuid.UUID | None = None) -> Sa
         drug_interaction_id=_uuid(flag.drug_interaction_id),
         contraindication_id=_uuid(flag.contraindication_id),
         allergy_id=_uuid(flag.allergy_id),
+        drug_reference_id=drug.reference_id if drug else None,
+        drug_name=drug.generic_name if drug else None,
     )
 
 
@@ -132,8 +147,14 @@ async def active_flags(
     service = SafetyService(db)
     results = await service.active_flags(account_id=account.id, patient_id=patient_id)
     flags: list[SafetyFlagResponse] = []
-    for _vocab, flag_list in results:
-        flags.extend(_flag_to_response(f) for f in flag_list)
+    for vocab, flag_list in results:
+        # Attributed to the medication it was raised about. A pairwise finding legitimately
+        # appears twice here — warfarin's interaction with aspirin is a fact about both, and a
+        # clinician scanning what is wrong with each drug wants it under each — but only if the
+        # response says which drug each row is under. Flattening it away turned a chart with
+        # four current medications and four interacting pairs into eight indistinguishable
+        # rows, and the duplication scales with the square of the medication list.
+        flags.extend(_flag_to_response(f, None, vocab) for f in flag_list)
     # Once for the chart, not once per drug: a medication or an allergen the resolver could
     # not read is missing from every drug's evaluation here, so an empty list above is not
     # the same as a clean one. Served from the facts the call above already loaded.

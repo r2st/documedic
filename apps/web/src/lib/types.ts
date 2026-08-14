@@ -99,6 +99,12 @@ export interface SafetyFlag {
   is_hard_block: boolean;
   summary: string;
   details: Record<string, unknown>;
+  /** The current medication this flag concerns, on `GET ../flags` where several are evaluated.
+   *  Null on `POST ../check` — every per-drug flag there is about the single proposed drug the
+   *  response already names — and null for the chart-level flags, which are statements about
+   *  the record rather than about any one medication. */
+  drug_reference_id?: string | null;
+  drug_name?: string | null;
 }
 
 export interface SafetyCheckResponse {

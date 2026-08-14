@@ -65,6 +65,25 @@ class SafetyFlagResponse(BaseModel):
     drug_interaction_id: uuid.UUID | None = None
     contraindication_id: uuid.UUID | None = None
     allergy_id: uuid.UUID | None = None
+    # Which of the patient's current medications this flag was raised *about*, on the endpoint
+    # that evaluates all of them. `GET ../flags` runs every current medication against every
+    # other, so a pairwise finding — an interaction, a duplicate therapy — is legitimately
+    # raised twice, once from each side of the pair. The service keeps that grouped by drug;
+    # the response used to flatten it and discard the drug, leaving a clinician on eight
+    # medications with a list of interactions reported twice each and no way to tell which
+    # medication any of them belonged to.
+    #
+    # Null means the flag is not about a particular drug: the chart-level notes (what could not
+    # be read, the Child-Pugh window) are statements about the record itself, and are served
+    # once for the whole chart rather than under any one medication.
+    drug_reference_id: str | None = Field(
+        default=None,
+        description="Current medication this flag concerns; null for chart-level flags",
+    )
+    drug_name: str | None = Field(
+        default=None,
+        description="Generic (INN) name of `drug_reference_id`; null for chart-level flags",
+    )
 
 
 class SafetyCheckResponse(BaseModel):
