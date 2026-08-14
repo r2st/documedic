@@ -239,6 +239,85 @@ describe('EncounterPage', () => {
     ]);
   });
 
+  it('lifts a flag-for-review management option above the differentials it was buried under', async () => {
+    vi.mocked(api.startReasoning).mockResolvedValue(
+      intakeState({ intake_complete: true, pending_questions: [] }),
+    );
+    // The shape the synthesis agent emits for a guideline option that conflicts with this
+    // patient's record without hard-blocking: escalated tier, retitled, not a hard block.
+    // Arrives in the order the synthesis agent builds it: differentials, then management last.
+    vi.mocked(api.listSuggestions).mockResolvedValue([
+      suggestion({ id: 's1', title: 'Leading differential', output_type: 'differential' }),
+      suggestion({ id: 's2', title: 'Second differential', output_type: 'differential' }),
+      suggestion({
+        id: 's3',
+        title: 'Conflicting management option',
+        output_type: 'management',
+        autonomy_tier: 'flag_for_review',
+      }),
+    ]);
+    const user = await enterComplaint();
+    await user.click(await screen.findByRole('button', { name: 'finish reasoning' }));
+
+    const rendered = (await screen.findAllByRole('listitem')).slice(4);
+    expect(rendered.map((li) => li.textContent?.replace(/Review evidence.*/, '').trim())).toEqual([
+      'Conflicting management option',
+      'Leading differential',
+      'Second differential',
+    ]);
+  });
+
+  it('keeps a hard block and a cant-miss above a flag-for-review output', async () => {
+    vi.mocked(api.startReasoning).mockResolvedValue(
+      intakeState({ intake_complete: true, pending_questions: [] }),
+    );
+    vi.mocked(api.listSuggestions).mockResolvedValue([
+      suggestion({
+        id: 's3',
+        title: 'Flagged management option',
+        output_type: 'management',
+        autonomy_tier: 'flag_for_review',
+      }),
+      suggestion({
+        id: 's2',
+        title: 'Aortic dissection',
+        output_type: 'cant_miss',
+        cant_miss_flag: true,
+        autonomy_tier: 'flag_for_review',
+      }),
+      suggestion({
+        id: 's1',
+        title: 'Allergy hard block',
+        output_type: 'safety',
+        is_hard_block: true,
+        autonomy_tier: 'flag_for_review',
+      }),
+    ]);
+    const user = await enterComplaint();
+    await user.click(await screen.findByRole('button', { name: 'finish reasoning' }));
+
+    const rendered = (await screen.findAllByRole('listitem')).slice(4);
+    const titles = rendered.map((li) => li.textContent ?? '');
+    expect(titles[0]).toContain('Allergy hard block');
+    expect(titles[1]).toContain('Aortic dissection');
+    expect(titles[2]).toContain('Flagged management option');
+  });
+
+  it('sorts an output_type this build does not recognise last rather than dropping it', async () => {
+    vi.mocked(api.startReasoning).mockResolvedValue(
+      intakeState({ intake_complete: true, pending_questions: [] }),
+    );
+    vi.mocked(api.listSuggestions).mockResolvedValue([
+      suggestion({ id: 's2', title: 'Novel output', output_type: 'prognosis' as never }),
+      suggestion({ id: 's1', title: 'Leading differential', output_type: 'differential' }),
+    ]);
+    const user = await enterComplaint();
+    await user.click(await screen.findByRole('button', { name: 'finish reasoning' }));
+
+    const rendered = (await screen.findAllByRole('listitem')).slice(4);
+    expect(rendered.map((li) => li.textContent)).toEqual(['Leading differential', 'Novel output']);
+  });
+
   it("surfaces the API's own message and stays on the complaint step", async () => {
     vi.mocked(api.startReasoning).mockRejectedValue(
       new ApiError(422, 'validation_error', 'A presenting complaint is required.'),

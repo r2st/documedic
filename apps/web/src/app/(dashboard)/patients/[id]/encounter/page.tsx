@@ -266,11 +266,39 @@ export default function EncounterPage() {
   );
 }
 
+/**
+ * Where a suggestion sorts on the results list. Lower is nearer the top.
+ *
+ * Severity first, then category — the same judgement the Safety screen's ordering makes, and for
+ * the same reason. Below the two unmissable tiers this used to fall straight through to
+ * `output_type`, which made position a statement about what *kind* of output something is rather
+ * than about how much it matters, and the two come apart in exactly one place.
+ *
+ * A management option that conflicts with the patient's own record is escalated by the synthesis
+ * agent to flag-for-review and retitled to say so — that module calls it "the most dangerous
+ * thing this pipeline can emit, precisely because everything about its presentation says it was
+ * checked". A moderate interaction or a cross-reactive allergy makes it conflicted without making
+ * it a hard block, so it cleared neither of the first two tests and landed in the `management`
+ * bucket: below every differential, below the investigations card, at the bottom of the list.
+ * The one card on the screen the clinician is being asked to actively engage with was the one
+ * they had to scroll for.
+ *
+ * So flag-for-review sorts above the categories. Read off `autonomy_tier` rather than re-derived
+ * from the conflict, because the tier is the field the Verifier owns and the conservative
+ * classification has already won by the time it is set (Critical Safety Rule #2); anything else
+ * escalated for any other reason gets lifted by the same rule.
+ *
+ * The sort is stable, so within each band the server's own ordering survives — this only ever
+ * lifts a more severe suggestion past a less severe one. An `output_type` this build does not
+ * recognise sorts last rather than being dropped, for the reason the Safety screen renders an
+ * unknown check type from its raw name: the web app and the API deploy separately.
+ */
 function rank(s: ClinicalSuggestion): number {
   if (s.is_hard_block) return 0;
   if (s.cant_miss_flag) return 1;
-  if (s.output_type === 'differential') return 2;
-  if (s.output_type === 'investigation') return 3;
-  if (s.output_type === 'management') return 4;
-  return 5;
+  if (s.autonomy_tier === 'flag_for_review') return 2;
+  if (s.output_type === 'differential') return 3;
+  if (s.output_type === 'investigation') return 4;
+  if (s.output_type === 'management') return 5;
+  return 6;
 }
