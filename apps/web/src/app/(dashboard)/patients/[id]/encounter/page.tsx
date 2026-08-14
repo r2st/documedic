@@ -6,11 +6,11 @@ import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { ClinicalSuggestion, IntakeQuestion } from '@/lib/types';
-import { Button, Card, ErrorBanner } from '@/components/ui';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
 import { ReasoningTheatre } from '@/components/reasoning/ReasoningTheatre';
 import { SuggestionCard } from '@/components/reasoning/SuggestionCard';
+import { Button, Card, ErrorBanner } from '@aether/ui';
 
 type Phase = 'complaint' | 'intake' | 'reasoning' | 'results';
 

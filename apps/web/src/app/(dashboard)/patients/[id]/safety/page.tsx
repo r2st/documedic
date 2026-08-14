@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { SafetyCheckResponse } from '@/lib/types';
-import { Button, Card, ErrorBanner, SafetyFlagCard } from '@/components/ui';
+import { Button, Card, ErrorBanner } from '@aether/ui';
+import { SafetyFlagCard } from '@/components/ui';
 
 export default function SafetyPage({ params }: { params: { id: string } }) {
   const { id } = params;

@@ -4,8 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
-import { Button, Card, ErrorBanner } from '@/components/ui';
-import { LoadingBlock, Skeleton } from '@/components/Skeleton';
+import { Button, Card, ErrorBanner, LoadingBlock, Skeleton } from '@aether/ui';
 
 // `as const` (rather than Record<string, string>) makes the key set a closed union, so
 // TypeScript rejects an unknown metric label at the call site instead of silently

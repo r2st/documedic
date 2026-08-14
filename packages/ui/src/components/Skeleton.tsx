@@ -8,7 +8,7 @@
 
 import type { ReactNode } from 'react';
 
-import { Card } from './ui';
+import { Card } from './Card';
 
 /**
  * One placeholder bar. Always `aria-hidden` — it carries no information, and the enclosing

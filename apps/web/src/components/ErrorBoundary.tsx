@@ -1,8 +1,7 @@
 'use client';
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-
-import { Button } from './ui';
+import { Button } from '@aether/ui';
 
 interface Props {
   /**

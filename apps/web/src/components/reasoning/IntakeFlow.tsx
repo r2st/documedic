@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { IntakeQuestion } from '@/lib/types';
-import { Button, Card, ErrorBanner } from '@/components/ui';
+import { Button, Card, ErrorBanner } from '@aether/ui';
 
 const TYPE_STYLE: Record<string, string> = {
   red_flag: 'bg-red-50 text-red-700 ring-1 ring-red-200',

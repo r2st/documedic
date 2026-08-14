@@ -4,8 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { Citation } from '@/lib/types';
-import { Button, Card, ErrorBanner } from '@/components/ui';
-import { LoadingBlock, SkeletonList } from '@/components/Skeleton';
+import { Button, Card, ErrorBanner, LoadingBlock, SkeletonList } from '@aether/ui';
 
 export default function GuidelinesPage() {
   const [query, setQuery] = useState('');

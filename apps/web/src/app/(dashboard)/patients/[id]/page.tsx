@@ -4,10 +4,9 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import type { AuditEntry, LongitudinalRecord, Patient } from '@/lib/types';
-import { Button, Card } from '@/components/ui';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { LoadingBlock, Skeleton, SkeletonCards } from '@/components/Skeleton';
 import { Timeline } from '@/components/patient/Timeline';
+import { Button, Card, LoadingBlock, Skeleton, SkeletonCards } from '@aether/ui';
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
   Allergies: (

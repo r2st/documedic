@@ -5,8 +5,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { PatientSummary } from '@/lib/types';
-import { Button, Card, ErrorBanner } from '@/components/ui';
-import { LoadingBlock, SkeletonList } from '@/components/Skeleton';
+import { Button, Card, ErrorBanner, LoadingBlock, SkeletonList } from '@aether/ui';
 
 export default function PatientsPage() {
   const [patients, setPatients] = useState<PatientSummary[]>([]);

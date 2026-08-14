@@ -57,7 +57,8 @@ import SafetyPage from '@/app/(dashboard)/patients/[id]/safety/page';
 import GuidelinesPage from '@/app/(dashboard)/guidelines/page';
 import UploadPage from '@/app/(dashboard)/patients/[id]/upload/page';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
-import { Button, ConfidenceBadge, ErrorBanner } from '@/components/ui';
+import { Button, ErrorBanner } from '@aether/ui';
+import { ConfidenceBadge } from '@/components/ui';
 
 const EMPTY_ROSTER: Paginated<PatientSummary> = {
   items: [],

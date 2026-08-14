@@ -4,8 +4,8 @@ import { useState } from 'react';
 import type { AutonomyTier, ClinicalSuggestion } from '@/lib/types';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
-import { Button, ErrorBanner } from '@/components/ui';
 import { AutonomyBadge, CantMissBadge, ProbabilityBandBadge } from './badges';
+import { Button, ErrorBanner } from '@aether/ui';
 
 interface EvidenceItem {
   text: string;

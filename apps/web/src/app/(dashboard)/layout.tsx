@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useRequireAuth, useAuth } from '@/lib/auth';
-import { Button } from '@/components/ui';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { Button } from '@aether/ui';
 
 function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   const pathname = usePathname();

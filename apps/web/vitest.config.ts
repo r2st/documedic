@@ -31,6 +31,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Resolved to source rather than through node_modules so the shared components are
+      // transformed by this app's React plugin like any other .tsx file under test.
+      '@aether/ui': path.resolve(__dirname, '../../packages/ui/src/index.ts'),
     },
   },
 });

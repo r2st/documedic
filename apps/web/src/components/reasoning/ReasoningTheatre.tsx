@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card, ErrorBanner } from '@/components/ui';
 import { useReasoningStream } from '@/hooks/useReasoningStream';
 import type { AgentLane } from '@/hooks/useReasoningStream';
 import { AutonomyBadge } from './badges';
 import type { AutonomyTier } from '@/lib/types';
+import { Card, ErrorBanner } from '@aether/ui';
 
 // Keyed by the lane status union rather than by `string`, so both maps are total by
 // construction: a lane's status is only ever assigned by the stream reducer (never taken from

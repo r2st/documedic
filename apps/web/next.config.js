@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // @aether/ui is published as TypeScript source rather than a build artifact, so Next
+  // compiles it alongside the app instead of expecting pre-built JavaScript.
+  transpilePackages: ['@aether/ui'],
   // Enable gzip/brotli compression
   compress: true,
   // Power bundle splitting — more granular chunks for better caching

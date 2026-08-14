@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { ExtractionResult } from '@/lib/types';
-import { Button, Card, ConfidenceBadge, ErrorBanner } from '@/components/ui';
+import { Button, Card, ErrorBanner } from '@aether/ui';
+import { ConfidenceBadge } from '@/components/ui';
 
 export default function UploadPage({ params }: { params: { id: string } }) {
   const { id } = params;

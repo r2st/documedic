@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import { useAuth } from '@/lib/auth';
-import { Button, ErrorBanner } from '@/components/ui';
+import { Button, ErrorBanner } from '@aether/ui';
 
 export default function SignupPage() {
   const router = useRouter();
