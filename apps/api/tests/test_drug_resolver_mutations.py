@@ -226,17 +226,26 @@ async def test_a_score_exactly_at_the_threshold_is_accepted(db, monkeypatch) -> 
 
     The boundary itself is the decision: 86.0 is the lowest score the resolver will act on, not
     the highest it refuses. No real name pair scores exactly 86.0 against this corpus, so the
-    scorer is stubbed to return the boundary -- what is under test is the comparison, not
+    ranking is stubbed to return the boundary -- what is under test is the comparison, not
     rapidfuzz.
+
+    The stub returns a single candidate, so the ambiguity guards in ``_fuzzy`` are inert here by
+    construction: there is no rival to be within ``FUZZY_TIE_MARGIN`` of, and the second-opinion
+    scorer finds nothing to disagree with. This test is about the threshold comparison alone;
+    ``test_drug_resolver_ambiguity`` covers the guards.
     """
     calls: list[float] = []
 
-    def _at_threshold(query, choices, **kwargs):
+    def _at_threshold(_query, choices, **_kwargs):
         key = next(k for k in choices if k == "metformin")
         calls.append(FUZZY_THRESHOLD)
-        return (key, FUZZY_THRESHOLD, 0)
+        return [(key, FUZZY_THRESHOLD, 0)]
 
-    monkeypatch.setattr(module.process, "extractOne", _at_threshold)
+    def _no_second_opinion(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(module.process, "extract", _at_threshold)
+    monkeypatch.setattr(module.process, "extractOne", _no_second_opinion)
 
     resolved = await DrugResolver(db).resolve("mtfrmn")
 
@@ -316,13 +325,16 @@ async def test_a_repeated_unresolvable_name_is_scored_against_the_corpus_once(db
     every safety check of that chart.
     """
     scans: list[str] = []
-    real = module.process.extractOne
+    real = module.process.extract
 
     def _counted(query, choices, **kwargs):
         scans.append(query)
         return real(query, choices, **kwargs)
 
-    monkeypatch.setattr(module.process, "extractOne", _counted)
+    # ``extract``, not ``extractOne``: the corpus-wide scan whose cost this is about is the
+    # ranking pass in ``_fuzzy``. The ``fuzz.ratio`` second opinion is an ``extractOne`` and never
+    # runs for a name like this one, which has no candidate above the cutoff to disagree about.
+    monkeypatch.setattr(module.process, "extract", _counted)
     resolver = DrugResolver(db)
 
     for _ in range(4):

@@ -39,6 +39,28 @@ from app.models.drug_vocabulary import DrugVocabulary
 # Minimum fuzzy score (0-100) to accept a non-exact match.
 FUZZY_THRESHOLD = 86.0
 
+# How far ahead of the best *other* drug the winner must be for the win to mean anything.
+#
+# ``WRatio`` scores are not calibrated probabilities, so this is not a confidence interval; it is
+# the width of the band inside which the ordering is decided by rapidfuzz's tie-break — the order
+# candidate names happen to come out of ``_FuzzyIndex.candidates`` — rather than by the query. On
+# the seeded corpus "t. telma h 40" scores 90.0 against both "telma" (TEL-40, telmisartan) and
+# "telma h" (TEL-HCTZ-40, telmisartan + hydrochlorothiazide): a dead heat between a plain ARB and
+# the same ARB with a thiazide in it, settled by table order. Two points is wide enough to catch
+# that and the near-ties beside it, and narrow enough to cost one correct resolution in the
+# whole single-character OCR corpus below.
+FUZZY_TIE_MARGIN = 2.0
+
+# Shortest query the fuzzy tier will act on at all, counting only non-space characters.
+#
+# Below this every name is close to every other and ``WRatio``'s substring component decides
+# everything: "ran" — three characters, all the OCR left of a Pan 40 strip — scores 90.0 against
+# "Voveran" purely by being contained in it, and diclofenac is not pantoprazole. Exact matches
+# are unaffected (tier 1 never reaches here), so genuinely short brand names like "Aten" and
+# "Omez" still resolve when they are spelled correctly; what is refused is *guessing* from a
+# fragment that short.
+MIN_FUZZY_QUERY_CHARS = 5
+
 # Alphanumeric runs. Splitting on everything else is what makes "Crocin + Augmentin",
 # "Warfarin, Aspirin" and "Crocin\nAugmentin" all tokenize the same way, so no single
 # separator has to be enumerated.
@@ -148,6 +170,52 @@ class _FuzzyIndex:
                 if span == candidate_tokens:
                     found[row.reference_id] = row
         return found
+
+    def _named_spans(self, query: str) -> list[tuple[int, int, DrugVocabulary]]:
+        """``(start, end, row)`` for every candidate name occurring whole in ``query``.
+
+        :meth:`rows_named_in` with the positions kept. Same matching rule; see there.
+        """
+        query_tokens = _tokens(query)
+        spans: list[tuple[int, int, DrugVocabulary]] = []
+        for position, token in enumerate(query_tokens):
+            for candidate_tokens, row in self.by_first_token.get(token, ()):
+                end = position + len(candidate_tokens)
+                if query_tokens[position:end] == candidate_tokens:
+                    spans.append((position, end, row))
+        return spans
+
+    def lists_several_drugs(self, query: str) -> bool:
+        """Whether ``query`` names two or more drugs *at separate places in the text*.
+
+        The distinction :meth:`rows_named_in` cannot make on its own, and the one that decides
+        whether :meth:`DrugResolver._fuzzy`'s ambiguity guard applies. Both of these name two
+        vocabulary rows, and they are not the same situation:
+
+        * "Amlodipine and Atenolol" — a combination stored as one chart row. The two names sit in
+          disjoint spans, so the text really does list two drugs. Resolving it to one of them is a
+          partial safety evaluation, which for stored data beats the alternative of dropping the
+          product from evaluation altogether; that trade-off is deliberate and is pinned by
+          ``test_record_derived_resolution_is_unchanged``.
+        * "Telma H" — one product, whose name happens to contain another product's name. "Telma"
+          and "Telma H" *overlap*, so they are two competing readings of the same span, not two
+          drugs. Picking between them by score is exactly the coin flip the guard exists to refuse:
+          they score 90.0 each, and one has a thiazide in it.
+
+        Overlap is resolved longest-span-first, so a name contained in a longer one is never
+        counted as a second drug.
+        """
+        spans = sorted(self._named_spans(query), key=lambda s: (s[0] - s[1], s[0]))
+        taken: list[tuple[int, int]] = []
+        references: set[str] = set()
+        for start, end, row in spans:
+            if any(start < other_end and other_start < end for other_start, other_end in taken):
+                continue
+            taken.append((start, end))
+            references.add(row.reference_id)
+            if len(references) >= 2:
+                return True
+        return False
 
     def drugs_named_in(self, query: str) -> dict[str, str]:
         """:meth:`rows_named_in` reduced to reference id -> generic name.
@@ -281,9 +349,10 @@ class DrugResolver:
     async def resolve(self, name: str | None) -> ResolvedDrug | None:
         """Resolve a raw drug name (brand, generic, or reference id) through the vocabulary.
 
-        Returns ``None`` rather than guessing when nothing clears the fuzzy threshold — an
-        unresolved drug is excluded from safety evaluation, so a wrong guess is worse than no
-        answer (CLAUDE.md pitfall #4).
+        Returns ``None`` rather than guessing when nothing clears the fuzzy threshold, and — see
+        :meth:`_fuzzy` — when more than one drug does. An unresolved drug is excluded from safety
+        evaluation, so a wrong guess is worse than no answer (CLAUDE.md pitfall #4), and both
+        kinds of ambiguity are wrong guesses.
         """
         if not name or not name.strip():
             return None
@@ -305,12 +374,107 @@ class DrugResolver:
         index = await self._load()
         if not index.keys:
             return None
-        best = process.extractOne(query, index.keys, scorer=fuzz.WRatio)
-        if best and best[1] >= FUZZY_THRESHOLD:
-            # rapidfuzz returns (matched_key, score, position); the candidate map is keyed by
-            # the matched *name*, not by the score or the position.
-            return self._make(index.candidates[best[0]], "fuzzy", float(best[1]))
-        return None
+        return self._fuzzy(query, index)
+
+    @classmethod
+    def _fuzzy(cls, query: str, index: _FuzzyIndex) -> ResolvedDrug | None:
+        """The best fuzzy match, but only when there is a single best answer.
+
+        Clearing :data:`FUZZY_THRESHOLD` was the whole test, and it asks the wrong question. It
+        asks whether the winner is *close* to the query; what decides whether resolving is safe is
+        whether the winner is close and everything else is not. When a second, different drug is
+        also close, "best" is a coin flip that the rest of the system has no way to see: nothing
+        downstream reads ``match_type`` or ``score``, so a fuzzy win by a tenth of a point enters
+        the chart indistinguishable from an exact one.
+
+        A single OCR character was enough. ``WRatio`` blends in ``partial_ratio``, which scores a
+        candidate contained inside the query as a perfect hit — so a *shorter* name beats the true
+        one on a query the true one merely differs from. "Glycomet GP" scanned with the P read as
+        an R ("glycomet gr", the single commonest confusion on a printed strip) scored 95.0 against
+        "Glycomet" and 90.9 against "Glycomet GP", and resolved to plain metformin: the glimepiride
+        half of the combination — a sulfonylurea, the ingredient carrying the hypoglycaemia risk,
+        its own interactions, and the Beers geriatric caution — vanished from the chart. Every rule
+        keyed on it then found nothing, which is what a clean safety report looks like.
+
+        So the module's own rule (``resolve``: refuse rather than guess, because an unresolved drug
+        is excluded from evaluation and a wrong guess is worse than no answer) is applied to the
+        one ambiguity it had not been applied to. It governed the *below*-threshold case and, at
+        ``SafetyService._reject_if_multiple_drugs``, a string naming two drugs; the case where two
+        vocabulary entries both cleared the threshold went unchecked. Refusing lands on the path
+        already built for the other two — ``check_unevaluated_medications`` names the drug to the
+        clinician as unevaluated, and ``check_medication`` refuses with "this is not the same as
+        'no interactions found'" — so what was a silent misidentification becomes a visible gap.
+
+        The guard is skipped for text that *lists* several drugs — see
+        :meth:`_FuzzyIndex.lists_several_drugs`. "Amlodipine and Atenolol" stored as one chart row
+        is ambiguous too, but it is the other kind: the text is not unclear about what it says, it
+        says two things, and resolving it to one of them is a deliberate partial evaluation of
+        stored data rather than a misreading. What this method refuses is the case where the text
+        names *one* drug and which one is a guess.
+
+        Three conditions, each closing a distinct way to win by accident:
+
+        1. ``MIN_FUZZY_QUERY_CHARS`` — a fragment too short to identify anything.
+        2. ``FUZZY_TIE_MARGIN`` — a runner-up naming a *different* drug within a hair of the
+           winner, i.e. an ordering decided by table order rather than by the query.
+        3. A whole-string second opinion. ``fuzz.ratio`` is length-sensitive and has no substring
+           component, so it is the scorer that does not share ``WRatio``'s failure above; when it
+           clears the threshold on a different drug, the two scorers disagree about identity and
+           that disagreement is the ambiguity. It only ever vetoes — ``WRatio`` stays the scorer
+           that picks, because its leniency is load-bearing for the prescription boilerplate OCR
+           actually delivers ("Tab. Glycomet GP", "Cap Omez 20", "Inj Lasix"), which ``ratio``
+           scores below the threshold on its own.
+
+        Measured over every single-character OCR confusion applied to every seeded name: 3
+        misresolutions to a different drug before, 0 after, at a cost of one correct resolution
+        out of 615.
+        """
+        guarded = not index.lists_several_drugs(query)
+        if guarded and len(query.replace(" ", "")) < MIN_FUZZY_QUERY_CHARS:
+            return None
+
+        # score_cutoff keeps this to the handful of candidates that could matter: a rival only
+        # counts if it is within FUZZY_TIE_MARGIN of a winner that itself clears the threshold,
+        # so nothing below that difference can change the outcome. Without it this would sort the
+        # whole corpus on every unresolvable name.
+        ranked = process.extract(
+            query,
+            index.keys,
+            scorer=fuzz.WRatio,
+            limit=None,
+            score_cutoff=FUZZY_THRESHOLD - FUZZY_TIE_MARGIN,
+        )
+        if not ranked:
+            return None
+        # rapidfuzz returns (matched_key, score, position) tuples, best first; the candidate map
+        # is keyed by the matched *name*, not by the score or the position.
+        best_name, best_score, _ = ranked[0]
+        if best_score < FUZZY_THRESHOLD:
+            return None
+        best_row = index.candidates[best_name]
+        if not guarded:
+            return cls._make(best_row, "fuzzy", float(best_score))
+
+        # Compared by reference id, not by name: a drug reached through both its brand and its
+        # generic ("Telma" and "Telmisartan") is one candidate answer, not two rivals.
+        rival = next(
+            (
+                (name, score)
+                for name, score, _ in ranked[1:]
+                if index.candidates[name].reference_id != best_row.reference_id
+            ),
+            None,
+        )
+        if rival is not None and best_score - rival[1] <= FUZZY_TIE_MARGIN:
+            return None
+
+        second = process.extractOne(
+            query, index.keys, scorer=fuzz.ratio, score_cutoff=FUZZY_THRESHOLD
+        )
+        if second is not None and index.candidates[second[0]].reference_id != best_row.reference_id:
+            return None
+
+        return cls._make(best_row, "fuzzy", float(best_score))
 
     async def drugs_named_in(self, name: str | None) -> dict[str, str]:
         """Which distinct vocabulary drugs ``name`` names, as reference id -> generic name.

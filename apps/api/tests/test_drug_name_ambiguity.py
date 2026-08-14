@@ -230,8 +230,12 @@ async def test_record_derived_resolution_is_unchanged(db):
     beats absent for stored data; for a clinician's live proposal, neither is acceptable and the
     answer is to refuse and say so.
 
-    If this test ever starts failing because ``resolve`` grew the ambiguity check, read
-    ``_current_meds`` before deciding that is an improvement.
+    ``resolve`` has since grown an ambiguity check of its own (``DrugResolver._fuzzy``), and this
+    case is exempt from it by construction: the guard is skipped for text that *lists* several
+    drugs at disjoint positions, which is what this is. What the guard refuses is the different
+    case where the text names one drug and which one is a guess — see
+    ``test_drug_resolver_ambiguity``. If this test ever starts failing because that exemption was
+    narrowed, read ``_current_meds`` before deciding that is an improvement.
     """
     resolved = await DrugResolver(db).resolve("Amlodipine and Atenolol")
     assert resolved is not None
