@@ -143,10 +143,12 @@ class ReasoningService:
 
     async def _make_retriever(self) -> Retriever:
         # Pull the whole active corpus once; score in-memory (the agent's retriever is sync and
-        # has no DB/event-loop access).
+        # has no DB/event-loop access). ``_load_corpus`` caches the tokenised corpus per version
+        # behind a one-aggregate freshness check, so this is not a full read per request — see
+        # GuidelineService._load_corpus, which this is the heaviest caller of.
         from app.services.guideline_service import lexical_score
 
-        chunks = await self.guidelines._chunks(None)  # noqa: SLF001 — internal reuse
+        chunks = await self.guidelines._load_corpus(None)  # noqa: SLF001 — internal reuse
 
         def retrieve(query: str, k: int) -> list[dict]:
             return lexical_score(query, chunks, k)
@@ -188,7 +190,14 @@ class ReasoningService:
             patient_id=patient_id,
             entity_type="reasoning_session",
             entity_id=session.id,
-            payload={"presenting_complaint": complaint, "online": online},
+            # No presenting_complaint. It is free text a clinician typed about a patient —
+            # "Ramesh, 54M, crushing chest pain since 6am" is a realistic value, and unlike a
+            # marker name or a count it can carry a direct identifier. audit_logs.payload is
+            # unencrypted, immutable and never pruned, so a name written here outlives the
+            # patients row it was copied from and cannot be corrected or erased on a DPDP
+            # request. The complaint is on reasoning_sessions, which entity_id points at.
+            # Same reasoning as document_uploaded and file_name.
+            payload={"online": online, "complaint_chars": len(complaint)},
         )
         await self.db.commit()
         return session, questions
@@ -517,7 +526,15 @@ class ReasoningService:
             patient_id=suggestion.patient_id,
             entity_type="clinical_suggestion",
             entity_id=suggestion_id,
-            payload={"decision": decision, "reason": reason},
+            # The reasoning itself stays on clinician_decision_records, which this points at.
+            # It is free text about a patient and audit_logs.payload is unencrypted, immutable
+            # and never pruned — see reasoning_session_started. What the trail has to show is
+            # that reasoning *was* documented when the tier required it, which is a boolean.
+            payload={
+                "decision": decision,
+                "decision_record_id": str(record.id),
+                "reason_recorded": bool(reason and reason.strip()),
+            },
         )
         await self.db.commit()
         return record

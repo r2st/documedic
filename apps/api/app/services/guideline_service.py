@@ -10,8 +10,11 @@ its citation metadata (source, section_id, page_range, corpus_version).
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -42,7 +45,47 @@ def _tokens(text: str) -> set[str]:
     return {t for t in _TOKEN.findall((text or "").lower()) if t not in _STOP and len(t) > 2}
 
 
-def lexical_score(query: str, chunks: list[GuidelineChunk], k: int) -> list[dict]:
+@dataclass(frozen=True)
+class RetrievableChunk:
+    """A guideline chunk with its retrieval tokens already computed.
+
+    The lexical retriever scores a query against every chunk in the corpus, and it used to
+    tokenise each chunk's heading and body *inside that loop* — so the whole corpus was
+    re-tokenised on every query, and the reasoning engine issues one query per hypothesis per
+    run. The tokens depend only on the chunk, so they are computed once when the corpus is
+    read and reused by every query against it (see ``_load_corpus``).
+
+    Deliberately not a ``GuidelineChunk``. These outlive the session that read them, and a
+    detached ORM instance is a lazy-load waiting to happen on a thread with no event loop.
+    Field names match the model's so ``GuidelineService._to_dict`` renders either.
+    """
+
+    section_id: str
+    source: str
+    document_title: str
+    heading: str | None
+    content: str
+    page_range: str | None
+    corpus_version: str
+    keywords: tuple[str, ...]
+    body_tokens: frozenset[str]
+
+    @classmethod
+    def of(cls, chunk: GuidelineChunk) -> RetrievableChunk:
+        return cls(
+            section_id=chunk.section_id,
+            source=chunk.source,
+            document_title=chunk.document_title,
+            heading=chunk.heading,
+            content=chunk.content,
+            page_range=chunk.page_range,
+            corpus_version=chunk.corpus_version,
+            keywords=tuple(str(x).lower() for x in (chunk.keywords or [])),
+            body_tokens=frozenset(_tokens(f"{chunk.heading or ''} {chunk.content}")),
+        )
+
+
+def lexical_score(query: str, chunks: Sequence[RetrievableChunk], k: int) -> list[dict]:
     """Deterministic lexical retriever: keyword hits (×1.5) + body token overlap, normalised.
 
     Shared by the async ``GuidelineService.retrieve`` and the sync retriever closure the
@@ -51,12 +94,11 @@ def lexical_score(query: str, chunks: list[GuidelineChunk], k: int) -> list[dict
     q_tokens = _tokens(query)
     if not q_tokens or not chunks:
         return []
-    scored: list[tuple[float, GuidelineChunk]] = []
+    scored: list[tuple[float, RetrievableChunk]] = []
     for chunk in chunks:
-        kw = {str(x).lower() for x in (chunk.keywords or [])}
-        body = _tokens(f"{chunk.heading or ''} {chunk.content}")
+        kw = chunk.keywords
         kw_hits = sum(1 for t in q_tokens if t in kw or any(t in k2 for k2 in kw))
-        overlap = len(q_tokens & body)
+        overlap = len(q_tokens & chunk.body_tokens)
         # Saturating relevance: independent of query length so a long multi-diagnosis query
         # is not penalised. raw>=4.5 (≈3 keyword hits, or 2 hits + body overlap) clears 0.75.
         raw = 1.5 * kw_hits + overlap
@@ -67,26 +109,74 @@ def lexical_score(query: str, chunks: list[GuidelineChunk], k: int) -> list[dict
     return [GuidelineService._to_dict(c, s) for s, c in scored[:k]]
 
 
+# corpus_version -> (stamp, chunks). See GuidelineService._load_corpus for why this is safe.
+_CORPUS_CACHE: dict[str, tuple[tuple[int, datetime | None], tuple[RetrievableChunk, ...]]] = {}
+
+# The corpus is versioned reference data, so in practice one entry is live at a time and a
+# second appears only across an ingestion. The cap is a leak-stopper, not a tuning knob.
+_MAX_CACHED_CORPUS_VERSIONS = 3
+
+
+def reset_corpus_cache() -> None:
+    """Drop every cached corpus. For tests that rebuild the schema underneath the process."""
+    _CORPUS_CACHE.clear()
+
+
 class GuidelineService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def _chunks(self, corpus_version: str | None) -> list[GuidelineChunk]:
+    async def _load_corpus(self, corpus_version: str | None) -> tuple[RetrievableChunk, ...]:
+        """The corpus for a version, tokenised, cached per process.
+
+        Without the cache this is the most expensive read in the application. Every retrieval
+        pulled every chunk of the corpus — full guideline text, thousands of rows once the ICMR
+        spine is loaded — into ORM instances, and ``ReasoningService._build_context`` does it on
+        *every* reasoning request, including the intake rounds that never retrieve anything.
+
+        Caching it is safe because of what this data is: a curated corpus, published under a
+        version, identical for every patient and every account. There is nothing per-request in
+        it to go stale, and nothing patient-specific to leak between requests.
+
+        The cache is still validated rather than trusted, because ingestion appends to a live
+        version and a stale corpus means a management option cites a guideline the corpus no
+        longer says. The check is one indexed aggregate — row count and latest ``updated_at`` —
+        against the alternative of transferring and instantiating the whole corpus. It sees
+        appends, edits, and deletes; it would miss a delete and an insert of exactly the same
+        number of rows all timestamped no later than what was already cached, which append-only
+        versioned reference data does not do.
+        """
         version = corpus_version or settings.guideline_corpus_version
+        stamp_row = (
+            await self.db.execute(
+                select(func.count(), func.max(GuidelineChunk.updated_at)).where(
+                    GuidelineChunk.corpus_version == version
+                )
+            )
+        ).one()
+        stamp = (int(stamp_row[0] or 0), stamp_row[1])
+
+        cached = _CORPUS_CACHE.get(version)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+
         result = await self.db.execute(
             select(GuidelineChunk).where(GuidelineChunk.corpus_version == version)
         )
-        return list(result.scalars().all())
+        chunks = tuple(RetrievableChunk.of(c) for c in result.scalars().all())
+        if len(_CORPUS_CACHE) >= _MAX_CACHED_CORPUS_VERSIONS:
+            _CORPUS_CACHE.clear()
+        _CORPUS_CACHE[version] = (stamp, chunks)
+        return chunks
 
     async def retrieve(
         self, query: str, k: int = 6, *, corpus_version: str | None = None
     ) -> list[dict]:
         """Return up to ``k`` chunk dicts with a 0..1 ``score`` (lexical fallback retriever)."""
-        chunks = await self._chunks(corpus_version)
-        return lexical_score(query, chunks, k)
+        return lexical_score(query, await self._load_corpus(corpus_version), k)
 
     @staticmethod
-    def _to_dict(chunk: GuidelineChunk, score: float) -> dict:
+    def _to_dict(chunk: GuidelineChunk | RetrievableChunk, score: float) -> dict:
         return {
             "section_id": chunk.section_id,
             "source": chunk.source,
@@ -126,5 +216,16 @@ class GuidelineService:
         return [self._to_dict(chunks[sid], 1.0) for sid in section_ids if sid in chunks]
 
     async def count(self, corpus_version: str | None = None) -> int:
-        chunks = await self._chunks(corpus_version)
-        return len(chunks)
+        """How many chunks the corpus holds — counted in SQL.
+
+        This used to load every chunk, with its full guideline text, to call ``len()`` on the
+        list. It backs an unauthenticated status endpoint, so the corpus was transferred and
+        instantiated once per caller who wanted a number.
+        """
+        version = corpus_version or settings.guideline_corpus_version
+        total = await self.db.scalar(
+            select(func.count())
+            .select_from(GuidelineChunk)
+            .where(GuidelineChunk.corpus_version == version)
+        )
+        return int(total or 0)

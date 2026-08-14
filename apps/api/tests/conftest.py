@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.dependencies import limiter
 from app.main import create_app
 from app.models import Base
+from app.services.guideline_service import reset_corpus_cache
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +42,27 @@ def _reset_rate_limiter():
     limiter.reset()
     yield
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_guideline_corpus_cache():
+    """Clear the process-wide guideline corpus cache around every test.
+
+    ``GuidelineService._load_corpus`` caches per ``corpus_version``, keyed on a freshness stamp
+    of (row count, latest ``updated_at``). In production that is sound: the corpus is versioned
+    reference data in one database, and an ingestion moves both halves of the stamp.
+
+    Here it is not, and for a reason peculiar to the test environment. Every test builds a
+    *fresh in-memory database* behind the same process, so two tests can seed the same version
+    with different chunks; if they seed the same number of rows, the counts match, and SQLite's
+    ``CURRENT_TIMESTAMP`` has one-second granularity, so the timestamps match too. The second
+    test would then score against the first one's corpus. Nothing in production creates a new
+    empty database underneath a running process, which is the assumption the stamp is allowed
+    to make and this fixture restores.
+    """
+    reset_corpus_cache()
+    yield
+    reset_corpus_cache()
 
 
 @pytest.fixture(autouse=True)

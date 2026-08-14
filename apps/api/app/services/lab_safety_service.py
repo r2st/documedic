@@ -118,9 +118,15 @@ class LabSafetyService:
                 account_id=account_id,
                 patient_id=patient_id,
                 entity_type="lab_result",
+                # Structured values, not free text, so nothing here can carry an identifier —
+                # but the row each finding came from was not recorded, which left the entry
+                # unable to answer "which result was this" on a post-incident review. The
+                # entry's own entity_id cannot carry it (a screen flags several results at
+                # once), so the ids go in the payload alongside the values they describe.
                 payload={
                     "flags": [
                         {
+                            "lab_result_id": str(lab.id),
                             "marker_name": lab.marker_name,
                             "value": flag.value,
                             "unit": flag.unit,

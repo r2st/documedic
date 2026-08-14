@@ -452,10 +452,17 @@ class SafetyService:
             patient_id=patient_id,
             entity_type="drug_safety_check",
             entity_id=check.id,
+            # Not the reasoning text. It is free text a clinician typed to justify prescribing
+            # past a hard block, so it is the payload most likely to name someone — and
+            # audit_logs.payload is unencrypted, immutable and never pruned, which makes a name
+            # written here impossible to correct or erase on a DPDP request. It is stored on
+            # drug_safety_overrides, an append-only table this row now points at by id, so the
+            # trail still leads to the documented justification without copying it.
             payload={
                 "check_type": check.check_type,
                 "summary": check.summary,
-                "reasoning": override.reasoning,
+                "override_id": str(override.id),
+                "reasoning_chars": len(override.reasoning),
             },
         )
         await self.db.commit()
