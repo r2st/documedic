@@ -200,6 +200,26 @@ describe('UploadPage', () => {
     expect(screen.getByText('Review extraction')).toBeInTheDocument();
   });
 
+  it('clears a failed approval before retrying it', async () => {
+    vi.mocked(api.approveExtraction)
+      .mockRejectedValueOnce(new ApiError(409, 'conflict', 'Document already merged'))
+      .mockResolvedValueOnce({ merged: {} });
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Review extraction');
+
+    await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
+    expect(await screen.findByText('Document already merged')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
+
+    // The banner tells the clinician the approval "may not have completed" and to reload before
+    // retrying. Left up during the retry it describes the previous attempt as the current one.
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/patients/pat-1'));
+    expect(screen.queryByText('Document already merged')).not.toBeInTheDocument();
+  });
+
   it('falls back to a generic message for non-API upload failures', async () => {
     vi.mocked(api.uploadDocument).mockRejectedValue(new TypeError('Failed to fetch'));
     const user = userEvent.setup();

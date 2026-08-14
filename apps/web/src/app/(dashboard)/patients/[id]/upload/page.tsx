@@ -56,6 +56,10 @@ export default function UploadPage({ params }: { params: { id: string } }) {
   }
 
   async function approve(docId: string) {
+    // Cleared before the retry, as onUpload does. A failed approval says the work "may not have
+    // completed" and to reload before retrying, so leaving that banner up while the retry is in
+    // flight describes the previous attempt as though it were the current one.
+    setError(null);
     setBusy(true);
     try {
       await api.approveExtraction(id, docId, [...rejected]);
