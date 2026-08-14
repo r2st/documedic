@@ -265,3 +265,43 @@ describe('SafetyPage retries', () => {
     expect(screen.queryByText('Ibuprofen')).not.toBeInTheDocument();
   });
 });
+
+describe('SafetyPage loading state', () => {
+  beforeEach(() => {
+    vi.mocked(api.checkDrugSafety).mockReset();
+  });
+
+  it('names the wait while the check is in flight', async () => {
+    let release: ((value: SafetyCheckResponse) => void) | undefined;
+    vi.mocked(api.checkDrugSafety).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await runCheck();
+
+    // A set of grey boxes says "loading" to the eye and nothing at all to a screen reader,
+    // so the block around them has to name what is being waited on.
+    const block = await screen.findByRole('status', {
+      name: "Checking this drug against the patient's record",
+    });
+    expect(block).toHaveAttribute('aria-busy', 'true');
+
+    release?.(result());
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByText('Ibuprofen')).toBeInTheDocument();
+  });
+
+  it('does not leave the placeholder up when the check fails', async () => {
+    vi.mocked(api.checkDrugSafety).mockRejectedValue(new TypeError('Failed to fetch'));
+    await runCheck();
+
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('status', { name: /Checking this drug/ })).not.toBeInTheDocument();
+  });
+
+  it('shows no placeholder before the clinician has asked for anything', () => {
+    render(<SafetyPage params={{ id: 'pat-1' }} />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});

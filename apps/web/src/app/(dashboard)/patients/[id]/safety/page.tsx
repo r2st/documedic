@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { SafetyCheckResponse } from '@/lib/types';
-import { Button, Card, ErrorBanner } from '@aether/ui';
+import { Button, Card, ErrorBanner, LoadingBlock, Skeleton } from '@aether/ui';
 import { SafetyFlagCard } from '@/components/ui';
 
 export default function SafetyPage({ params }: { params: { id: string } }) {
@@ -118,6 +118,24 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
           />
         )}
       </Card>
+
+      {/* Held outside the live region below rather than inside it: `LoadingBlock` is a
+          `role="status"` region of its own, and nesting one live region in another is how the
+          same wait gets announced twice. */}
+      {busy && (
+        <LoadingBlock label="Checking this drug against the patient's record" className="block">
+          <Card>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <Skeleton className="mb-2 h-6 w-40 bg-slate-200" />
+                <Skeleton className="h-3 w-28" />
+              </div>
+              <Skeleton className="h-7 w-32 rounded-full" />
+            </div>
+            <Skeleton className="h-16 w-full" />
+          </Card>
+        </LoadingBlock>
+      )}
 
       {/* The verdict arrives without moving focus, so it has to be announced. Polite rather
           than assertive: the clinician asked for this answer and is waiting on it. */}

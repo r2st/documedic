@@ -454,3 +454,63 @@ describe('EncounterPage when the results boundary’s own retry fails', () => {
     consoleError.mockRestore();
   });
 });
+
+describe('EncounterPage results loading', () => {
+  beforeEach(() => {
+    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(intakeState());
+    vi.mocked(api.listSuggestions).mockReset();
+  });
+
+  it('names the wait between the run finishing and the cards arriving', async () => {
+    // A finished run with no cards on screen is indistinguishable from a run that produced
+    // nothing, which is the automation-bias failure in reverse.
+    let release: ((value: ClinicalSuggestion[]) => void) | undefined;
+    vi.mocked(api.listSuggestions).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const user = await enterComplaint();
+
+    await user.click(await screen.findByRole('button', { name: 'finish intake' }));
+    await user.click(await screen.findByRole('button', { name: 'finish reasoning' }));
+
+    const block = await screen.findByRole('status', { name: 'Fetching the reasoning results' });
+    expect(block).toHaveAttribute('aria-busy', 'true');
+    // Still on the reasoning step: the results heading must not appear before the results do.
+    expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument();
+
+    release?.([suggestion()]);
+    expect(await screen.findByRole('heading', { name: 'Results' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('status', { name: 'Fetching the reasoning results' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('clears the placeholder when the results cannot be read', async () => {
+    vi.mocked(api.listSuggestions).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = await enterComplaint();
+
+    await user.click(await screen.findByRole('button', { name: 'finish intake' }));
+    await user.click(await screen.findByRole('button', { name: 'finish reasoning' }));
+
+    await screen.findByRole('alert');
+    expect(
+      screen.queryByRole('status', { name: 'Fetching the reasoning results' }),
+    ).not.toBeInTheDocument();
+    // The retry is still the one that re-reads rather than re-running the agents.
+    expect(screen.getByRole('button', { name: 'Fetch results again' })).toBeInTheDocument();
+  });
+
+  it('shows no placeholder while the agents are still deliberating', async () => {
+    vi.mocked(api.listSuggestions).mockResolvedValue([]);
+    const user = await enterComplaint();
+
+    await user.click(await screen.findByRole('button', { name: 'finish intake' }));
+    await screen.findByText('theatre:sess-1');
+
+    expect(
+      screen.queryByRole('status', { name: 'Fetching the reasoning results' }),
+    ).not.toBeInTheDocument();
+  });
+});

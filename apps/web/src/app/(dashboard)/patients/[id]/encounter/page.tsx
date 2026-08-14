@@ -10,7 +10,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
 import { ReasoningTheatre } from '@/components/reasoning/ReasoningTheatre';
 import { SuggestionCard } from '@/components/reasoning/SuggestionCard';
-import { Button, Card, ErrorBanner } from '@aether/ui';
+import { Button, Card, ErrorBanner, LoadingBlock, SkeletonCards } from '@aether/ui';
 
 type Phase = 'complaint' | 'intake' | 'reasoning' | 'results';
 
@@ -224,6 +224,16 @@ export default function EncounterPage() {
               sessionId={sessionId}
               onComplete={() => void loadResults(sessionId)}
             />
+            {/* The gap between the theatre reading "Complete" and the cards appearing. The
+                agents have finished and their output is being read back from the server, and
+                until this there was nothing on screen that said so — the run simply looked
+                finished with no results, which is indistinguishable from a run that produced
+                none. */}
+            {resultsLoading && (
+              <LoadingBlock label="Fetching the reasoning results" className="mt-4 block space-y-3">
+                <SkeletonCards count={2} className="space-y-3" />
+              </LoadingBlock>
+            )}
             <p className="mt-3 text-center text-xs text-slate-400">
               Evidence and dissent are shown before conclusions to counter automation bias.
             </p>
