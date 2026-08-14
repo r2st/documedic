@@ -48,7 +48,10 @@ describe('requestErrorMessage', () => {
 
   it('never surfaces raw transport jargon to the clinician', () => {
     setOnline(true);
-    const message = requestErrorMessage(new TypeError('NetworkError when attempting to fetch'), 'x');
+    const message = requestErrorMessage(
+      new TypeError('NetworkError when attempting to fetch'),
+      'x',
+    );
     expect(message).not.toContain('NetworkError');
     expect(message).not.toContain('fetch');
   });

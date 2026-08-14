@@ -60,7 +60,9 @@ export default function GuidelinesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Clinical guideline corpus</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+          Clinical guideline corpus
+        </h1>
         {info && (
           <p className="mt-1 text-sm text-slate-500">
             {info.chunk_count} chunks · corpus {info.corpus_version} · ICMR Standard Treatment
@@ -69,8 +71,8 @@ export default function GuidelinesPage() {
         )}
         {infoFailed && (
           <p className="mt-1 text-sm text-slate-500">
-            Corpus details are unavailable — searching still works, and every result carries its
-            own citation.
+            Corpus details are unavailable — searching still works, and every result carries its own
+            citation.
           </p>
         )}
       </div>
@@ -133,7 +135,9 @@ export default function GuidelinesPage() {
                       <span className="inline-flex items-center rounded-md bg-brand-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-700 ring-1 ring-inset ring-brand-200">
                         {c.source}
                       </span>
-                      <span className="text-sm font-semibold text-slate-900">{c.document_title}</span>
+                      <span className="text-sm font-semibold text-slate-900">
+                        {c.document_title}
+                      </span>
                     </div>
                     {c.heading && (
                       <p className="mt-1.5 text-sm font-medium text-slate-700">{c.heading}</p>
@@ -200,9 +204,12 @@ export default function GuidelinesPage() {
                 d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"
               />
             </svg>
-            <h3 className="mt-3 text-sm font-semibold text-slate-900">Search the guideline corpus</h3>
+            <h3 className="mt-3 text-sm font-semibold text-slate-900">
+              Search the guideline corpus
+            </h3>
             <p className="mt-1 text-sm text-slate-500">
-              Enter a clinical query to retrieve grounded, citable guidance from ICMR, WHO, and NICE sources.
+              Enter a clinical query to retrieve grounded, citable guidance from ICMR, WHO, and NICE
+              sources.
             </p>
           </div>
         )}

@@ -56,7 +56,10 @@ afterEach(() => {
 });
 
 /** The socket opens only after the session-scoped token round trip resolves. */
-async function openStream(start: (id: string, onComplete?: () => void) => Promise<void>, onComplete?: () => void) {
+async function openStream(
+  start: (id: string, onComplete?: () => void) => Promise<void>,
+  onComplete?: () => void,
+) {
   await act(async () => {
     await start('s1', onComplete);
   });

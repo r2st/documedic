@@ -16,7 +16,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // The intake and theatre widgets have their own suites; here they are reduced to their
 // contract with the page — an id in, an onComplete out.
 vi.mock('@/components/reasoning/IntakeFlow', () => ({
-  IntakeFlow: ({ sessionId, questions, onComplete }: {
+  IntakeFlow: ({
+    sessionId,
+    questions,
+    onComplete,
+  }: {
     sessionId: string;
     questions: IntakeQuestion[];
     onComplete: () => void;
@@ -166,7 +170,7 @@ describe('EncounterPage', () => {
     expect(await screen.findByText('theatre:sess-1')).toBeInTheDocument();
   });
 
-  it('advances intake → reasoning → results and loads that session\'s suggestions', async () => {
+  it("advances intake → reasoning → results and loads that session's suggestions", async () => {
     vi.mocked(api.listSuggestions).mockResolvedValue([suggestion()]);
     const user = await enterComplaint();
 
@@ -198,7 +202,7 @@ describe('EncounterPage', () => {
     expect(await screen.findByText(/The clinician is the decision-maker/)).toBeInTheDocument();
   });
 
-  it('surfaces hard blocks first, then can\'t-miss, then differentials, investigations, management', async () => {
+  it("surfaces hard blocks first, then can't-miss, then differentials, investigations, management", async () => {
     vi.mocked(api.startReasoning).mockResolvedValue(
       intakeState({ intake_complete: true, pending_questions: [] }),
     );
@@ -206,8 +210,18 @@ describe('EncounterPage', () => {
       suggestion({ id: 's5', title: 'Management option', output_type: 'management' }),
       suggestion({ id: 's4', title: 'Next test', output_type: 'investigation' }),
       suggestion({ id: 's3', title: 'Leading differential', output_type: 'differential' }),
-      suggestion({ id: 's2', title: 'Aortic dissection', output_type: 'cant_miss', cant_miss_flag: true }),
-      suggestion({ id: 's1', title: 'Allergy hard block', output_type: 'safety', is_hard_block: true }),
+      suggestion({
+        id: 's2',
+        title: 'Aortic dissection',
+        output_type: 'cant_miss',
+        cant_miss_flag: true,
+      }),
+      suggestion({
+        id: 's1',
+        title: 'Allergy hard block',
+        output_type: 'safety',
+        is_hard_block: true,
+      }),
       suggestion({ id: 's6', title: 'Case summary', output_type: 'summary' }),
     ]);
     const user = await enterComplaint();
@@ -225,7 +239,7 @@ describe('EncounterPage', () => {
     ]);
   });
 
-  it('surfaces the API\'s own message and stays on the complaint step', async () => {
+  it("surfaces the API's own message and stays on the complaint step", async () => {
     vi.mocked(api.startReasoning).mockRejectedValue(
       new ApiError(422, 'validation_error', 'A presenting complaint is required.'),
     );
@@ -262,9 +276,9 @@ describe('EncounterPage', () => {
 
 describe('EncounterPage when the results cannot be fetched', () => {
   beforeEach(() => {
-    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(
-      intakeState({ intake_complete: true, pending_questions: [] }),
-    );
+    vi.mocked(api.startReasoning)
+      .mockReset()
+      .mockResolvedValue(intakeState({ intake_complete: true, pending_questions: [] }));
     vi.mocked(api.listSuggestions).mockReset();
   });
 
@@ -378,9 +392,9 @@ describe('EncounterPage results error boundary', () => {
     // flag or a hard block. Silently showing fewer cards than the Verifier passed is the
     // automation-bias failure rule #5 exists to prevent, arrived at by accident.
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(
-      intakeState({ intake_complete: true, pending_questions: [] }),
-    );
+    vi.mocked(api.startReasoning)
+      .mockReset()
+      .mockResolvedValue(intakeState({ intake_complete: true, pending_questions: [] }));
     vi.mocked(api.listSuggestions)
       .mockReset()
       .mockResolvedValue([
@@ -415,9 +429,9 @@ describe('EncounterPage when the results boundary’s own retry fails', () => {
     // failed. The boundary's own button is still there, so a second one alongside it would
     // just be two controls for the same action.
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(
-      intakeState({ intake_complete: true, pending_questions: [] }),
-    );
+    vi.mocked(api.startReasoning)
+      .mockReset()
+      .mockResolvedValue(intakeState({ intake_complete: true, pending_questions: [] }));
     vi.mocked(api.listSuggestions)
       .mockReset()
       .mockResolvedValueOnce([suggestion({ title: CRASHING_TITLE })])

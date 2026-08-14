@@ -28,7 +28,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
   const apiOrigin = (() => {
-    try { return new URL(apiUrl).origin; } catch { return ''; }
+    try {
+      return new URL(apiUrl).origin;
+    } catch {
+      return '';
+    }
   })();
 
   return (

@@ -42,13 +42,30 @@ describe('buildTimeline', () => {
     const entries = buildTimeline(
       record({
         medications: [
-          { id: 'm1', generic_name: 'Metformin', event_date: '2024-01-10', dose: '500mg', frequency: 'BD' },
+          {
+            id: 'm1',
+            generic_name: 'Metformin',
+            event_date: '2024-01-10',
+            dose: '500mg',
+            frequency: 'BD',
+          },
         ],
         lab_results: [
-          { id: 'l1', marker_name: 'HbA1c', sample_date: '2024-06-01', value_numeric: 9.2, unit: '%' },
+          {
+            id: 'l1',
+            marker_name: 'HbA1c',
+            sample_date: '2024-06-01',
+            value_numeric: 9.2,
+            unit: '%',
+          },
         ],
         conditions: [
-          { id: 'c1', condition_name: 'Type 2 Diabetes Mellitus', onset_date: '2023-03-15', status: 'active' },
+          {
+            id: 'c1',
+            condition_name: 'Type 2 Diabetes Mellitus',
+            onset_date: '2023-03-15',
+            status: 'active',
+          },
         ],
       }),
     );
@@ -59,7 +76,12 @@ describe('buildTimeline', () => {
     const entries = buildTimeline(
       record({
         medications: [
-          { id: 'm1', generic_name: 'Amoxicillin', event_date: '2024-01-01', end_date: '2024-01-08' },
+          {
+            id: 'm1',
+            generic_name: 'Amoxicillin',
+            event_date: '2024-01-01',
+            end_date: '2024-01-08',
+          },
         ],
       }),
     );
@@ -71,7 +93,14 @@ describe('buildTimeline', () => {
   it('does not emit a stop entry when end_date equals event_date', () => {
     const entries = buildTimeline(
       record({
-        medications: [{ id: 'm1', generic_name: 'Paracetamol', event_date: '2024-01-01', end_date: '2024-01-01' }],
+        medications: [
+          {
+            id: 'm1',
+            generic_name: 'Paracetamol',
+            event_date: '2024-01-01',
+            end_date: '2024-01-01',
+          },
+        ],
       }),
     );
     expect(entries).toHaveLength(1);
@@ -97,7 +126,13 @@ describe('buildTimeline', () => {
     const entries = buildTimeline(
       record({
         derived_markers: [
-          { id: 'd1', marker_name: 'eGFR', computed_at: '2024-05-02', value_numeric: 48, unit: 'mL/min/1.73m2' },
+          {
+            id: 'd1',
+            marker_name: 'eGFR',
+            computed_at: '2024-05-02',
+            value_numeric: 48,
+            unit: 'mL/min/1.73m2',
+          },
         ],
       }),
     );
@@ -121,7 +156,12 @@ describe('buildTimeline', () => {
     const entries = buildTimeline(
       record({
         derived_markers: [
-          { id: 'd1', marker_name: 'BP category', computed_at: '2024-05-02', value_numeric: 'stage 2' },
+          {
+            id: 'd1',
+            marker_name: 'BP category',
+            computed_at: '2024-05-02',
+            value_numeric: 'stage 2',
+          },
         ],
       }),
     );
@@ -131,7 +171,9 @@ describe('buildTimeline', () => {
   it('leaves the detail null when a marker carries no value at all', () => {
     const entries = buildTimeline(
       record({
-        derived_markers: [{ id: 'd1', marker_name: 'BMI', computed_at: '2024-05-02', value_numeric: null }],
+        derived_markers: [
+          { id: 'd1', marker_name: 'BMI', computed_at: '2024-05-02', value_numeric: null },
+        ],
       }),
     );
     expect(entries[0].detail).toBeNull();
@@ -174,7 +216,9 @@ describe('buildTimeline', () => {
   });
 
   it('labels a medication with neither generic nor brand name as unknown', () => {
-    const entries = buildTimeline(record({ medications: [{ id: 'm1', event_date: '2024-01-10' }] }));
+    const entries = buildTimeline(
+      record({ medications: [{ id: 'm1', event_date: '2024-01-10' }] }),
+    );
     expect(entries[0].title).toBe('Unknown medication');
     expect(entries[0].detail).toBeNull();
   });
@@ -194,7 +238,13 @@ describe('buildTimeline', () => {
     const entries = buildTimeline(
       record({
         lab_results: [
-          { id: 'l1', marker_name: 'Sodium', sample_date: '2024-02-01', value_numeric: 138, is_abnormal: false },
+          {
+            id: 'l1',
+            marker_name: 'Sodium',
+            sample_date: '2024-02-01',
+            value_numeric: 138,
+            is_abnormal: false,
+          },
         ],
       }),
     );
@@ -220,7 +270,14 @@ describe('Timeline component', () => {
       <Timeline
         record={record({
           lab_results: [
-            { id: 'l1', marker_name: 'HbA1c', sample_date: '2024-06-01', value_numeric: 9.2, unit: '%', is_abnormal: true },
+            {
+              id: 'l1',
+              marker_name: 'HbA1c',
+              sample_date: '2024-06-01',
+              value_numeric: 9.2,
+              unit: '%',
+              is_abnormal: true,
+            },
           ],
         })}
       />,
@@ -256,7 +313,13 @@ describe('Timeline component', () => {
       <Timeline
         record={record({
           derived_markers: [
-            { id: 'd1', marker_name: 'eGFR', computed_at: '2024-05-02', value_numeric: 48, unit: 'mL/min' },
+            {
+              id: 'd1',
+              marker_name: 'eGFR',
+              computed_at: '2024-05-02',
+              value_numeric: 48,
+              unit: 'mL/min',
+            },
           ],
         })}
       />,
@@ -281,7 +344,14 @@ describe('Timeline component', () => {
     render(
       <Timeline
         record={record({
-          conditions: [{ id: 'c1', condition_name: 'Hypertension', onset_date: 'not-a-date', status: 'active' }],
+          conditions: [
+            {
+              id: 'c1',
+              condition_name: 'Hypertension',
+              onset_date: 'not-a-date',
+              status: 'active',
+            },
+          ],
         })}
       />,
     );

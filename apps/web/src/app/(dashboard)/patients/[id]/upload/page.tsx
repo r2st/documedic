@@ -121,11 +121,29 @@ export default function UploadPage({ params }: { params: { id: string } }) {
           >
             {busy ? (
               <div className="flex flex-col items-center" role="status">
-                <svg aria-hidden="true" className="h-8 w-8 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <svg
+                  aria-hidden="true"
+                  className="h-8 w-8 animate-spin text-brand-600"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
                 </svg>
-                <p className="mt-3 text-sm font-medium text-slate-700">Extracting document data...</p>
+                <p className="mt-3 text-sm font-medium text-slate-700">
+                  Extracting document data...
+                </p>
                 <p className="mt-1 text-xs text-slate-500">This may take a moment</p>
               </div>
             ) : (
@@ -144,7 +162,10 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                     d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
                   />
                 </svg>
-                <label htmlFor="document-file" className="mt-3 block text-sm font-medium text-slate-700">
+                <label
+                  htmlFor="document-file"
+                  className="mt-3 block text-sm font-medium text-slate-700"
+                >
                   Drag and drop a file here, or click to browse
                 </label>
                 <p id="document-file-hint" className="mt-1 text-xs text-slate-500">
@@ -184,7 +205,8 @@ export default function UploadPage({ params }: { params: { id: string } }) {
               </div>
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              {reviewed.extraction.confirmation_required_count} field(s) need confirmation. Uncheck any entity to exclude it.
+              {reviewed.extraction.confirmation_required_count} field(s) need confirmation. Uncheck
+              any entity to exclude it.
             </p>
           </div>
 
@@ -229,11 +251,18 @@ export default function UploadPage({ params }: { params: { id: string } }) {
           </ul>
 
           <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
-            <Button className="w-full sm:w-auto" onClick={() => void approve(reviewed.docId)} disabled={busy} aria-busy={busy}>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => void approve(reviewed.docId)}
+              disabled={busy}
+              aria-busy={busy}
+            >
               {busy ? 'Saving…' : 'Confirm & merge into record'}
             </Button>
             <Link href={`/patients/${id}`} className="w-full sm:w-auto">
-              <Button className="w-full sm:w-auto" variant="secondary">Discard</Button>
+              <Button className="w-full sm:w-auto" variant="secondary">
+                Discard
+              </Button>
             </Link>
           </div>
         </Card>

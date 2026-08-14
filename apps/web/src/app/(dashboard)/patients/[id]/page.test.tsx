@@ -93,11 +93,13 @@ const AUDIT_ENTRY: AuditEntry = {
   created_at: '2026-01-02T09:30:00Z',
 };
 
-function mockAll(overrides: {
-  record?: LongitudinalRecord;
-  audit?: AuditEntry[];
-  chainValid?: boolean;
-} = {}) {
+function mockAll(
+  overrides: {
+    record?: LongitudinalRecord;
+    audit?: AuditEntry[];
+    chainValid?: boolean;
+  } = {},
+) {
   vi.mocked(api.getPatient).mockResolvedValue(patient());
   vi.mocked(api.getRecord).mockResolvedValue(overrides.record ?? record());
   vi.mocked(api.auditTrail).mockResolvedValue(auditPage(overrides.audit ?? [AUDIT_ENTRY]));
@@ -136,7 +138,12 @@ describe('PatientDetailPage', () => {
     mockAll({
       record: record({
         conditions: [
-          { id: 'c1', condition_name: 'Type 2 Diabetes Mellitus', onset_date: '2023-03-15', status: 'active' },
+          {
+            id: 'c1',
+            condition_name: 'Type 2 Diabetes Mellitus',
+            onset_date: '2023-03-15',
+            status: 'active',
+          },
         ],
       }),
     });
@@ -151,7 +158,9 @@ describe('PatientDetailPage', () => {
   it('lists clinical record sections with per-section counts', async () => {
     mockAll({
       record: record({
-        allergies: [{ id: 'a1', allergen_name: 'Penicillin', severity: 'severe', status: 'active' }],
+        allergies: [
+          { id: 'a1', allergen_name: 'Penicillin', severity: 'severe', status: 'active' },
+        ],
         medications: [{ id: 'm1', generic_name: 'Metformin', dose: '500mg', frequency: 'BD' }],
       }),
     });
@@ -289,7 +298,9 @@ describe('PatientDetailPage recovery', () => {
     const boom = new ApiError(503, 'unavailable', 'briefly unavailable');
     vi.mocked(api.getPatient).mockRejectedValueOnce(boom).mockResolvedValue(patient());
     vi.mocked(api.getRecord).mockRejectedValueOnce(boom).mockResolvedValue(record());
-    vi.mocked(api.auditTrail).mockRejectedValueOnce(boom).mockResolvedValue(auditPage([AUDIT_ENTRY]));
+    vi.mocked(api.auditTrail)
+      .mockRejectedValueOnce(boom)
+      .mockResolvedValue(auditPage([AUDIT_ENTRY]));
     vi.mocked(api.verifyAudit)
       .mockRejectedValueOnce(boom)
       .mockResolvedValue({ entries_checked: 1, chain_valid: true });
@@ -422,9 +433,10 @@ describe('PatientDetailPage retry while in flight', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
-    expect(
-      await screen.findByRole('status', { name: 'Loading patient record' }),
-    ).toHaveAttribute('aria-busy', 'true');
+    expect(await screen.findByRole('status', { name: 'Loading patient record' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
     expect(screen.queryByText(/Failed to load patient data/)).not.toBeInTheDocument();
 
     release(patient());

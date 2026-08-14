@@ -79,11 +79,7 @@ export interface ExtractionResult {
 }
 
 export type RecordSection =
-  | 'medications'
-  | 'lab_results'
-  | 'conditions'
-  | 'allergies'
-  | 'derived_markers';
+  'medications' | 'lab_results' | 'conditions' | 'allergies' | 'derived_markers';
 
 export interface LongitudinalRecord {
   patient_id: string;
@@ -130,12 +126,7 @@ export interface AuditEntry {
 // --- Phase 2/3: reasoning engine ---
 
 export type AutonomyTier = 'informational' | 'suggestive' | 'flag_for_review';
-export type ProbabilityBand =
-  | 'high'
-  | 'moderate'
-  | 'low'
-  | 'very_low'
-  | 'insufficient_data';
+export type ProbabilityBand = 'high' | 'moderate' | 'low' | 'very_low' | 'insufficient_data';
 export type ReasoningStatus =
   | 'created'
   | 'intake'

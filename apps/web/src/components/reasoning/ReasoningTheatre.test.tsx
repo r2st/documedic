@@ -117,7 +117,9 @@ describe('ReasoningTheatre', () => {
         items: [{ diagnosis_name: 'Acute coronary syndrome', why: 'Chest pain with risk factors' }],
       });
     });
-    expect(screen.getByText("Can't-miss conditions forced onto the differential")).toBeInTheDocument();
+    expect(
+      screen.getByText("Can't-miss conditions forced onto the differential"),
+    ).toBeInTheDocument();
     expect(screen.getByText('Acute coronary syndrome')).toBeInTheDocument();
   });
 

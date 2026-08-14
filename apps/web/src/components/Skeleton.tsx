@@ -15,7 +15,9 @@ import { Card } from './ui';
  * {@link LoadingBlock} is what announces the wait.
  */
 export function Skeleton({ className = '' }: { className?: string }) {
-  return <div aria-hidden="true" className={`animate-pulse rounded-md bg-slate-100 ${className}`} />;
+  return (
+    <div aria-hidden="true" className={`animate-pulse rounded-md bg-slate-100 ${className}`} />
+  );
 }
 
 /**

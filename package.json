@@ -11,6 +11,8 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
+    "format": "turbo format",
+    "format:check": "turbo format:check",
     "test": "turbo test",
     "typecheck": "turbo typecheck"
   },

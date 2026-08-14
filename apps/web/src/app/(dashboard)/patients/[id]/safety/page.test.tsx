@@ -91,9 +91,7 @@ describe('SafetyPage', () => {
     await runCheck();
 
     expect(await screen.findByText('BLOCKED')).toBeInTheDocument();
-    expect(
-      screen.getByText('Documented allergy to Ibuprofen (NSAID class).'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Documented allergy to Ibuprofen (NSAID class).')).toBeInTheDocument();
     expect(screen.queryByText('No hard block')).not.toBeInTheDocument();
   });
 
@@ -131,7 +129,12 @@ describe('SafetyPage', () => {
   it('omits the eGFR note when renal function is unknown', async () => {
     vi.mocked(api.checkDrugSafety).mockResolvedValue(
       result({
-        checked_against: { current_medications: 0, allergies: 0, conditions: 0, egfr_available: false },
+        checked_against: {
+          current_medications: 0,
+          allergies: 0,
+          conditions: 0,
+          egfr_available: false,
+        },
       }),
     );
     await runCheck();

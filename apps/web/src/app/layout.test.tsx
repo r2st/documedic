@@ -10,7 +10,11 @@ import RootLayout, { metadata, viewport } from './layout';
 function markup(apiUrl?: string): string {
   if (apiUrl === undefined) delete process.env.NEXT_PUBLIC_API_URL;
   else process.env.NEXT_PUBLIC_API_URL = apiUrl;
-  return renderToStaticMarkup(<RootLayout><p>page</p></RootLayout>);
+  return renderToStaticMarkup(
+    <RootLayout>
+      <p>page</p>
+    </RootLayout>,
+  );
 }
 
 describe('RootLayout', () => {

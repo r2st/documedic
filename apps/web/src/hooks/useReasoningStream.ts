@@ -124,11 +124,7 @@ export function useReasoningStream() {
   return { state, start, stop };
 }
 
-function reduce(
-  s: StreamState,
-  event: string,
-  data: Record<string, unknown>,
-): StreamState {
+function reduce(s: StreamState, event: string, data: Record<string, unknown>): StreamState {
   const log = [...s.log, { event, data }].slice(-200);
   let lanes = s.lanes;
 

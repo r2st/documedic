@@ -12,9 +12,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">
             Aether <span className="text-brand-600">Clinician</span>
           </h1>
-          <p className="mt-1.5 text-sm text-slate-500">
-            Diagnostic & management decision support
-          </p>
+          <p className="mt-1.5 text-sm text-slate-500">Diagnostic & management decision support</p>
         </div>
         {/* A crash here is the worst place for a white page: there is no header to navigate
             from and nobody is signed in yet, so the fallback is the only way back. */}

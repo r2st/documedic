@@ -5,11 +5,7 @@ export default function DashboardLoading() {
         <div aria-hidden="true" className="relative mx-auto mb-4 h-10 w-10">
           <div className="absolute inset-0 animate-ping rounded-full bg-brand-200 opacity-75" />
           <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-brand-100">
-            <svg
-              className="h-5 w-5 animate-spin text-brand-600"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
+            <svg className="h-5 w-5 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
               <circle
                 className="opacity-25"
                 cx="12"

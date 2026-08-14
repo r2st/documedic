@@ -1,0 +1,7 @@
+# Build output and generated reports — not source, and rewriting them is pure churn.
+.next/
+coverage/
+node_modules/
+next-env.d.ts
+tsconfig.tsbuildinfo
+public/

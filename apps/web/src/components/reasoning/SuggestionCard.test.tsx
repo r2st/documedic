@@ -88,7 +88,12 @@ describe('SuggestionCard', () => {
   });
 
   it('does not gate suggestive-tier output behind engagement', () => {
-    render(<SuggestionCard suggestion={suggestion({ autonomy_tier: 'suggestive' })} sessionId="sess-1" />);
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ autonomy_tier: 'suggestive' })}
+        sessionId="sess-1"
+      />,
+    );
     expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
   });
 
@@ -154,9 +159,7 @@ describe('SuggestionCard', () => {
     );
     expect(screen.getByText('The leading impression rests on limited data.')).toBeVisible();
     expect(screen.getByText('No chest imaging has confirmed consolidation.')).toBeVisible();
-    expect(
-      screen.getByText(/Acute bronchitis, Viral upper respiratory infection/),
-    ).toBeVisible();
+    expect(screen.getByText(/Acute bronchitis, Viral upper respiratory infection/)).toBeVisible();
     expect(screen.getByText('Most acute cough is viral and self-limiting.')).toBeVisible();
   });
 
@@ -221,7 +224,11 @@ describe('SuggestionCard', () => {
     render(
       <SuggestionCard
         suggestion={suggestion({
-          body: ['Consolidation on imaging', '', 'Raised inflammatory markers'] as unknown as string,
+          body: [
+            'Consolidation on imaging',
+            '',
+            'Raised inflammatory markers',
+          ] as unknown as string,
         })}
         sessionId="sess-1"
       />,
@@ -233,7 +240,12 @@ describe('SuggestionCard', () => {
   });
 
   it('stringifies a primitive that arrived where prose was expected', () => {
-    render(<SuggestionCard suggestion={suggestion({ body: true as unknown as string })} sessionId="sess-1" />);
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ body: true as unknown as string })}
+        sessionId="sess-1"
+      />,
+    );
     expect(screen.getByText('true')).toBeInTheDocument();
   });
 

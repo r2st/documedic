@@ -63,11 +63,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-  retry = true,
-): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
@@ -202,8 +198,7 @@ export const api = {
     return request<LongitudinalRecord>(`/patients/${id}/record${suffix}`);
   },
 
-  listDocuments: (id: string) =>
-    request<DocumentResponse[]>(`/patients/${id}/documents`),
+  listDocuments: (id: string) => request<DocumentResponse[]>(`/patients/${id}/documents`),
   uploadDocument: (id: string, file: File) => {
     const form = new FormData();
     form.append('file', file);
@@ -215,13 +210,10 @@ export const api = {
   getExtraction: (id: string, docId: string) =>
     request<ExtractionResult>(`/patients/${id}/documents/${docId}/extraction`),
   approveExtraction: (id: string, docId: string, rejected: number[] = []) =>
-    request<{ merged: Record<string, number> }>(
-      `/patients/${id}/documents/${docId}/approve`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ corrections: [], rejected_entity_indexes: rejected }),
-      },
-    ),
+    request<{ merged: Record<string, number> }>(`/patients/${id}/documents/${docId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ corrections: [], rejected_entity_indexes: rejected }),
+    }),
 
   checkDrugSafety: (id: string, body: { drug_reference_id?: string; drug_name?: string }) =>
     request<SafetyCheckResponse>(`/patients/${id}/drug-safety/check`, {
@@ -229,12 +221,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  auditTrail: (id: string) =>
-    request<Paginated<AuditEntry>>(`/patients/${id}/audit`),
+  auditTrail: (id: string) => request<Paginated<AuditEntry>>(`/patients/${id}/audit`),
   verifyAudit: (id: string) =>
-    request<{ entries_checked: number; chain_valid: boolean }>(
-      `/patients/${id}/audit/verify`,
-    ),
+    request<{ entries_checked: number; chain_valid: boolean }>(`/patients/${id}/audit/verify`),
 
   // --- Reasoning engine (Phase 2/3) ---
   startReasoning: (patientId: string, presentingComplaint: string) =>
@@ -242,8 +231,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ presenting_complaint: presentingComplaint }),
     }),
-  getSession: (sessionId: string) =>
-    request<ReasoningSession>(`/reasoning/${sessionId}`),
+  getSession: (sessionId: string) => request<ReasoningSession>(`/reasoning/${sessionId}`),
   submitIntakeAnswers: (
     sessionId: string,
     answers: Array<{ question_id: string; answer_text: string }>,
@@ -256,12 +244,7 @@ export const api = {
     request<ReasoningResult>(`/reasoning/${sessionId}/run`, { method: 'POST' }),
   listSuggestions: (sessionId: string) =>
     request<ClinicalSuggestion[]>(`/reasoning/${sessionId}/suggestions`),
-  recordDecision: (
-    sessionId: string,
-    suggestionId: string,
-    decision: string,
-    reason?: string,
-  ) =>
+  recordDecision: (sessionId: string, suggestionId: string, decision: string, reason?: string) =>
     request<{ id: string; decision: string }>(
       `/reasoning/${sessionId}/suggestions/${suggestionId}/decision`,
       { method: 'POST', body: JSON.stringify({ decision, reason: reason ?? null }) },
@@ -296,21 +279,24 @@ export const api = {
     request<ClinicalSuggestion[]>(`/reasoning/${sessionId}/management-options`),
 
   // --- Validation / regulatory / safety (Phase 4) ---
-  performanceMetrics: () =>
-    request<PerformanceMetrics>(`/metrics/performance`),
+  performanceMetrics: () => request<PerformanceMetrics>(`/metrics/performance`),
   runValidation: () => request<ValidationRun>(`/validation/run`, { method: 'POST' }),
   listValidationRuns: () =>
-    request<Array<{ id: string; vignette_count: number; metrics: Record<string, unknown>; created_at: string }>>(
-      `/validation/runs`,
-    ),
+    request<
+      Array<{
+        id: string;
+        vignette_count: number;
+        metrics: Record<string, unknown>;
+        created_at: string;
+      }>
+    >(`/validation/runs`),
   fileSafetyReport: (body: {
     category: string;
     severity: string;
     description: string;
     patient_id?: string;
     session_id?: string;
-  }) =>
-    request<SafetyReport>(`/safety-reports`, { method: 'POST', body: JSON.stringify(body) }),
+  }) => request<SafetyReport>(`/safety-reports`, { method: 'POST', body: JSON.stringify(body) }),
   listSafetyReports: () => request<SafetyReport[]>(`/safety-reports`),
   pilotStatus: () => request<{ pilot_mode: boolean; message: string }>(`/pilot/status`),
   samdDossierUrl: (format: 'json' | 'markdown' = 'markdown') =>
@@ -321,10 +307,7 @@ export const api = {
     const access = tokenStore.access;
     if (access) headers['Authorization'] = `Bearer ${access}`;
 
-    const resp = await fetch(
-      `${PREFIX}/regulatory/samd-dossier?format=${format}`,
-      { headers },
-    );
+    const resp = await fetch(`${PREFIX}/regulatory/samd-dossier?format=${format}`, { headers });
 
     if (resp.status === 401 && tokenStore.refresh) {
       const refreshed = await tryRefresh();

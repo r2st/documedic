@@ -34,7 +34,11 @@ describe('DashboardLayout', () => {
 
   it('holds the shell behind a loading state until the session resolves', () => {
     authState = { account: null, loading: true };
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     expect(screen.getByText('Loading Aether Clinician…')).toBeInTheDocument();
     expect(screen.queryByText('child')).not.toBeInTheDocument();
@@ -42,40 +46,72 @@ describe('DashboardLayout', () => {
 
   it('does not render children for an unauthenticated visitor', () => {
     authState = { account: null, loading: false };
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
     expect(screen.queryByText('child')).not.toBeInTheDocument();
   });
 
   it('renders the navigation and page content for a signed-in clinician', () => {
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     expect(screen.getByText('child')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Patients' })[0]).toHaveAttribute('href', '/patients');
-    expect(screen.getAllByRole('link', { name: 'Guidelines' })[0]).toHaveAttribute('href', '/guidelines');
+    expect(screen.getAllByRole('link', { name: 'Patients' })[0]).toHaveAttribute(
+      'href',
+      '/patients',
+    );
+    expect(screen.getAllByRole('link', { name: 'Guidelines' })[0]).toHaveAttribute(
+      'href',
+      '/guidelines',
+    );
     expect(screen.getAllByRole('link', { name: 'Metrics' })[0]).toHaveAttribute('href', '/metrics');
   });
 
   it('marks the active section, including nested patient routes', () => {
     pathname = '/patients/pat-1/encounter';
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     expect(screen.getAllByRole('link', { name: 'Patients' })[0].className).toContain('bg-brand-50');
-    expect(screen.getAllByRole('link', { name: 'Metrics' })[0].className).not.toContain('bg-brand-50');
+    expect(screen.getAllByRole('link', { name: 'Metrics' })[0].className).not.toContain(
+      'bg-brand-50',
+    );
   });
 
   it('shows the display name, falling back to the email when unset', () => {
-    const { unmount } = render(<DashboardLayout><p>child</p></DashboardLayout>);
+    const { unmount } = render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
     expect(screen.getByText('Dr. Jane Smith')).toBeInTheDocument();
     unmount();
 
     authState = { account: { ...ACCOUNT, display_name: null }, loading: false };
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
     expect(screen.getByText('jane@clinic.in')).toBeInTheDocument();
   });
 
   it('signs the clinician out from the desktop header', async () => {
     const user = userEvent.setup();
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(logout).toHaveBeenCalled();
@@ -83,7 +119,11 @@ describe('DashboardLayout', () => {
 
   it('opens and closes the mobile menu, exposing its state to assistive tech', async () => {
     const user = userEvent.setup();
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     const toggle = screen.getByRole('button', { name: 'Open menu' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -102,7 +142,11 @@ describe('DashboardLayout', () => {
 
   it('closes the mobile menu when a destination is chosen', async () => {
     const user = userEvent.setup();
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     await user.click(screen.getByRole('button', { name: 'Open menu' }));
     // jsdom cannot perform the real navigation; swallow it so only the menu state is under test.
@@ -121,7 +165,11 @@ describe('DashboardLayout', () => {
 
   it('signs out and dismisses the menu from the mobile panel', async () => {
     const user = userEvent.setup();
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     await user.click(screen.getByRole('button', { name: 'Open menu' }));
     const [, mobileSignOut] = screen.getAllByRole('button', { name: 'Sign out' });
@@ -143,7 +191,11 @@ describe('DashboardLayout identity fallbacks', () => {
   it('falls back to the email in the mobile panel when no display name is set', async () => {
     authState = { account: { ...ACCOUNT, display_name: null }, loading: false };
     const user = userEvent.setup();
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     await user.click(screen.getByRole('button', { name: 'Open menu' }));
 
@@ -155,7 +207,11 @@ describe('DashboardLayout identity fallbacks', () => {
   it('renders a placeholder initial when the account has nothing to derive one from', async () => {
     authState = { account: { ...ACCOUNT, display_name: null, email: '' }, loading: false };
     const user = userEvent.setup();
-    render(<DashboardLayout><p>child</p></DashboardLayout>);
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
 
     expect(screen.getByText('?')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open menu' }));

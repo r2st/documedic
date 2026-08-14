@@ -19,7 +19,13 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Citation, IntakeQuestion, Paginated, PatientSummary, SafetyCheckResponse } from '@/lib/types';
+import type {
+  Citation,
+  IntakeQuestion,
+  Paginated,
+  PatientSummary,
+  SafetyCheckResponse,
+} from '@/lib/types';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -99,7 +105,13 @@ describe('every text input is reachable by its accessible name', () => {
     await waitFor(() => expect(api.listPatients).toHaveBeenCalled());
     await userEvent.click(screen.getByRole('button', { name: /new patient/i }));
 
-    for (const label of [/full name/i, /^sex$/i, /date of birth/i, /^phone$/i, /consent obtained/i]) {
+    for (const label of [
+      /full name/i,
+      /^sex$/i,
+      /date of birth/i,
+      /^phone$/i,
+      /consent obtained/i,
+    ]) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
     }
   });
@@ -126,9 +138,7 @@ describe('every text input is reachable by its accessible name', () => {
   });
 
   it('names each intake answer field after the question it answers', () => {
-    render(
-      <IntakeFlow sessionId="s-1" questions={[question()]} onComplete={vi.fn()} />,
-    );
+    render(<IntakeFlow sessionId="s-1" questions={[question()]} onComplete={vi.fn()} />);
 
     const field = screen.getByLabelText('Any chest pain on exertion?');
     expect(field).toHaveAccessibleDescription(/discriminates cardiac from musculoskeletal/i);
@@ -174,7 +184,9 @@ describe('failures and results are announced', () => {
   });
 
   it('reports a create-patient failure through that region', async () => {
-    vi.mocked(api.createPatient).mockRejectedValue(new ApiError(422, 'validation_error', 'Consent is required'));
+    vi.mocked(api.createPatient).mockRejectedValue(
+      new ApiError(422, 'validation_error', 'Consent is required'),
+    );
     render(<PatientsPage />);
     await waitFor(() => expect(api.listPatients).toHaveBeenCalled());
 
@@ -194,7 +206,12 @@ describe('failures and results are announced', () => {
       is_blocked: true,
       is_hard_block: true,
       offline_capable: true,
-      checked_against: { current_medications: 1, allergies: 1, conditions: 0, egfr_available: false },
+      checked_against: {
+        current_medications: 1,
+        allergies: 1,
+        conditions: 0,
+        egfr_available: false,
+      },
       flags: [
         {
           check_type: 'allergy_conflict',

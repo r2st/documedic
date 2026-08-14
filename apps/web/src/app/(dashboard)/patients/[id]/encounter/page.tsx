@@ -46,8 +46,19 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                   }`}
                 >
                   {isComplete ? (
-                    <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    <svg
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={3}
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M4.5 12.75l6 6 9-13.5"
+                      />
                     </svg>
                   ) : (
                     i + 1
@@ -64,9 +75,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
               </div>
               {i < PHASES.length - 1 && (
                 <div
-                  className={`mx-2 h-px flex-1 ${
-                    isComplete ? 'bg-brand-500' : 'bg-slate-200'
-                  }`}
+                  className={`mx-2 h-px flex-1 ${isComplete ? 'bg-brand-500' : 'bg-slate-200'}`}
                 />
               )}
             </li>
@@ -158,11 +167,7 @@ export default function EncounterPage() {
           why it says so — a clinician who has just watched eight agents deliberate needs to
           know a retry here does not put them through it a second time. */}
       {error && phase === 'complaint' && (
-        <ErrorBanner
-          message={error}
-          onRetry={() => void startReasoning()}
-          retrying={starting}
-        />
+        <ErrorBanner message={error} onRetry={() => void startReasoning()} retrying={starting} />
       )}
       {error && phase === 'reasoning' && sessionId && (
         <ErrorBanner
@@ -192,7 +197,11 @@ export default function EncounterPage() {
             placeholder="e.g. 54-year-old with central chest pain radiating to the left arm for 1 hour"
             className="w-full"
           />
-          <Button className="mt-4 w-full sm:w-auto" onClick={() => void startReasoning()} disabled={complaint.trim().length < 3}>
+          <Button
+            className="mt-4 w-full sm:w-auto"
+            onClick={() => void startReasoning()}
+            disabled={complaint.trim().length < 3}
+          >
             Begin intake
           </Button>
         </Card>
@@ -211,7 +220,10 @@ export default function EncounterPage() {
       {phase === 'reasoning' && sessionId && (
         <ErrorBoundary section="The reasoning theatre">
           <div className="animate-slide-up">
-            <ReasoningTheatre sessionId={sessionId} onComplete={() => void loadResults(sessionId)} />
+            <ReasoningTheatre
+              sessionId={sessionId}
+              onComplete={() => void loadResults(sessionId)}
+            />
             <p className="mt-3 text-center text-xs text-slate-400">
               Evidence and dissent are shown before conclusions to counter automation bias.
             </p>
@@ -226,10 +238,7 @@ export default function EncounterPage() {
           only arrived at by accident, so the fallback says outright that something is missing
           rather than letting a short list pass for a complete one. */}
       {phase === 'results' && sessionId && (
-        <ErrorBoundary
-          section="The reasoning results"
-          onReset={() => void loadResults(sessionId)}
-        >
+        <ErrorBoundary section="The reasoning results" onReset={() => void loadResults(sessionId)}>
           <div className="animate-fade-in space-y-3">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-lg font-semibold text-slate-900">Results</h2>

@@ -80,7 +80,7 @@ describe('request plumbing', () => {
     });
   });
 
-  it('accepts FastAPI\'s `detail` shape as the error message', async () => {
+  it("accepts FastAPI's `detail` shape as the error message", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ detail: 'Not authenticated' }, 403));
     await expect(api.listPatients()).rejects.toMatchObject({ message: 'Not authenticated' });
   });
@@ -168,7 +168,12 @@ describe('endpoint contracts', () => {
   it.each([
     ['getPatient', () => api.getPatient('pat-1'), `${PREFIX}/patients/pat-1`, 'GET'],
     ['getRecord', () => api.getRecord('pat-1'), `${PREFIX}/patients/pat-1/record`, 'GET'],
-    ['listDocuments', () => api.listDocuments('pat-1'), `${PREFIX}/patients/pat-1/documents`, 'GET'],
+    [
+      'listDocuments',
+      () => api.listDocuments('pat-1'),
+      `${PREFIX}/patients/pat-1/documents`,
+      'GET',
+    ],
     [
       'getExtraction',
       () => api.getExtraction('pat-1', 'doc-1'),
@@ -197,12 +202,7 @@ describe('endpoint contracts', () => {
     ['pilotStatus', () => api.pilotStatus(), `${PREFIX}/pilot/status`, 'GET'],
     ['listSessions', () => api.listSessions(), `${PREFIX}/auth/sessions`, 'GET'],
     ['runValidation', () => api.runValidation(), `${PREFIX}/validation/run`, 'POST'],
-    [
-      'runReasoning',
-      () => api.runReasoning('sess-1'),
-      `${PREFIX}/reasoning/sess-1/run`,
-      'POST',
-    ],
+    ['runReasoning', () => api.runReasoning('sess-1'), `${PREFIX}/reasoning/sess-1/run`, 'POST'],
     [
       'revokeSession',
       () => api.revokeSession('sess-9'),
@@ -218,7 +218,12 @@ describe('endpoint contracts', () => {
 
   it('signup posts the credentials and stores the returned session', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
-      jsonResponse({ access_token: 'a1', refresh_token: 'r1', token_type: 'bearer', expires_in: 900 }),
+      jsonResponse({
+        access_token: 'a1',
+        refresh_token: 'r1',
+        token_type: 'bearer',
+        expires_in: 900,
+      }),
     );
     await api.signup('jane@clinic.in', 'longenoughpw', 'Dr. Jane Smith');
 
@@ -313,9 +318,7 @@ describe('endpoint contracts', () => {
   });
 
   it('percent-encodes the minted token so an odd JWT cannot break the URL', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
-      jsonResponse({ token: 'a+b/c=d&e', expires_in: 60 }),
-    );
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ token: 'a+b/c=d&e', expires_in: 60 }));
     const url = await api.reasoningStreamUrl('sess-1');
     expect(url).toBe(`${PREFIX}/reasoning/sess-1/stream?token=a%2Bb%2Fc%3Dd%26e`);
   });
@@ -370,10 +373,13 @@ describe('downloadSamdDossier', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.stubGlobal('fetch', vi.fn());
-    vi.stubGlobal('URL', Object.assign(globalThis.URL, {
-      createObjectURL: vi.fn(() => 'blob:dossier'),
-      revokeObjectURL: vi.fn(),
-    }));
+    vi.stubGlobal(
+      'URL',
+      Object.assign(globalThis.URL, {
+        createObjectURL: vi.fn(() => 'blob:dossier'),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
     click = vi.fn();
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(click);
   });
@@ -402,7 +408,12 @@ describe('downloadSamdDossier', () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
       .mockResolvedValueOnce(
-        jsonResponse({ access_token: 'fresh', refresh_token: 'r2', token_type: 'bearer', expires_in: 900 }),
+        jsonResponse({
+          access_token: 'fresh',
+          refresh_token: 'r2',
+          token_type: 'bearer',
+          expires_in: 900,
+        }),
       )
       .mockResolvedValueOnce(new Response('{}', { status: 200 }));
 

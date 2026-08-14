@@ -63,7 +63,14 @@ export default function PatientsPage() {
             'Cancel'
           ) : (
             <span className="flex items-center gap-1.5 whitespace-nowrap">
-              <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <svg
+                aria-hidden="true"
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
               New patient
@@ -72,7 +79,14 @@ export default function PatientsPage() {
         </Button>
       </div>
 
-      {showForm && <CreatePatientForm onCreated={() => { setShowForm(false); void load(search); }} />}
+      {showForm && (
+        <CreatePatientForm
+          onCreated={() => {
+            setShowForm(false);
+            void load(search);
+          }}
+        />
+      )}
 
       {/* Search bar */}
       <form
@@ -87,8 +101,19 @@ export default function PatientsPage() {
           <label htmlFor="patient-search" className="sr-only">
             Search patients by name or phone
           </label>
-          <svg aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+          <svg
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+            />
           </svg>
           <input
             id="patient-search"
@@ -120,8 +145,19 @@ export default function PatientsPage() {
       ) : patients.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white py-16 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand-50">
-            <svg aria-hidden="true" className="h-7 w-7 text-brand-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" />
+            <svg
+              aria-hidden="true"
+              className="h-7 w-7 text-brand-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z"
+              />
             </svg>
           </div>
           <h3 className="text-base font-semibold text-slate-900">No patients yet</h3>
@@ -159,8 +195,19 @@ function PatientList({ patients }: { patients: PatientSummary[] }) {
                     {p.phone ?? 'no phone'}
                   </p>
                 </div>
-                <svg aria-hidden="true" className="h-5 w-5 flex-shrink-0 text-slate-300 group-hover:text-brand-500 transition-colors" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                <svg
+                  aria-hidden="true"
+                  className="h-5 w-5 flex-shrink-0 text-slate-300 group-hover:text-brand-500 transition-colors"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="m8.25 4.5 7.5 7.5-7.5 7.5"
+                  />
                 </svg>
               </div>
             </Card>
@@ -201,10 +248,20 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
       <h3 id="new-patient-heading" className="mb-4 text-base font-semibold text-slate-900">
         Register new patient
       </h3>
-      <form id="new-patient-form" aria-labelledby="new-patient-heading" onSubmit={submit} className="space-y-4">
+      <form
+        id="new-patient-form"
+        aria-labelledby="new-patient-heading"
+        onSubmit={submit}
+        className="space-y-4"
+      >
         {error && <ErrorBanner message={error} />}
         <div>
-          <label htmlFor="new-patient-full-name" className="mb-1.5 block text-sm font-medium text-slate-700">Full name</label>
+          <label
+            htmlFor="new-patient-full-name"
+            className="mb-1.5 block text-sm font-medium text-slate-700"
+          >
+            Full name
+          </label>
           <input
             id="new-patient-full-name"
             required
@@ -216,7 +273,12 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <label htmlFor="new-patient-sex" className="mb-1.5 block text-sm font-medium text-slate-700">Sex</label>
+            <label
+              htmlFor="new-patient-sex"
+              className="mb-1.5 block text-sm font-medium text-slate-700"
+            >
+              Sex
+            </label>
             <select
               id="new-patient-sex"
               value={sex}
@@ -230,7 +292,12 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             </select>
           </div>
           <div>
-            <label htmlFor="new-patient-dob" className="mb-1.5 block text-sm font-medium text-slate-700">Date of birth</label>
+            <label
+              htmlFor="new-patient-dob"
+              className="mb-1.5 block text-sm font-medium text-slate-700"
+            >
+              Date of birth
+            </label>
             <input
               id="new-patient-dob"
               type="date"
@@ -240,7 +307,12 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             />
           </div>
           <div>
-            <label htmlFor="new-patient-phone" className="mb-1.5 block text-sm font-medium text-slate-700">Phone</label>
+            <label
+              htmlFor="new-patient-phone"
+              className="mb-1.5 block text-sm font-medium text-slate-700"
+            >
+              Phone
+            </label>
             <input
               id="new-patient-phone"
               placeholder="Phone number"
@@ -251,8 +323,15 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
           </div>
         </div>
         <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm cursor-pointer hover:bg-slate-100 transition-colors">
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500" />
-          <span className="text-slate-700">Patient consent obtained for data processing (required — DPDP Act)</span>
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+          />
+          <span className="text-slate-700">
+            Patient consent obtained for data processing (required — DPDP Act)
+          </span>
         </label>
         {/* A disabled control announces only "dimmed"; without this the reason is invisible
             to anyone not seeing the unticked box above it. */}

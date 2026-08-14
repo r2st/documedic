@@ -60,7 +60,9 @@ describe('ConfidenceBadge fallbacks', () => {
 
 describe('SafetyFlagCard fallbacks', () => {
   it('still renders the summary for an unrecognised severity', () => {
-    render(<SafetyFlagCard severity="mystery_level" isHardBlock={false} summary="Unclassified flag" />);
+    render(
+      <SafetyFlagCard severity="mystery_level" isHardBlock={false} summary="Unclassified flag" />,
+    );
     expect(screen.getByText('mystery level')).toBeInTheDocument();
     expect(screen.getByText('Unclassified flag')).toBeInTheDocument();
   });

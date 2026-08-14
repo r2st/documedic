@@ -38,7 +38,9 @@ function SeverityBadge({ severity }: { severity: string }) {
     near_miss: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200',
   };
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[severity] || styles.near_miss}`}>
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[severity] || styles.near_miss}`}
+    >
       {severity.replace(/_/g, ' ')}
     </span>
   );
@@ -52,7 +54,9 @@ function StatusBadge({ status }: { status: string }) {
     closed: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
   };
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] || styles.open}`}>
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] || styles.open}`}
+    >
       {status}
     </span>
   );
@@ -83,9 +87,7 @@ export default function MetricsPage() {
       await api.downloadSamdDossier('markdown');
       setActionSuccess('Dossier download started.');
     } catch (err) {
-      setActionError(
-        requestErrorMessage(err, 'the regulatory dossier download'),
-      );
+      setActionError(requestErrorMessage(err, 'the regulatory dossier download'));
     } finally {
       setDownloading(false);
     }
@@ -102,9 +104,7 @@ export default function MetricsPage() {
       setMetrics(metricsData);
       setReports(reportsData);
     } catch (err) {
-      setLoadError(
-        requestErrorMessage(err, 'loading the metrics'),
-      );
+      setLoadError(requestErrorMessage(err, 'loading the metrics'));
     } finally {
       setInitialLoading(false);
       setRefreshing(false);
@@ -113,9 +113,12 @@ export default function MetricsPage() {
 
   useEffect(() => {
     void refresh();
-    void api.pilotStatus().then(setPilot).catch(() => {
-      /* pilot status is non-critical; ignore */
-    });
+    void api
+      .pilotStatus()
+      .then(setPilot)
+      .catch(() => {
+        /* pilot status is non-critical; ignore */
+      });
   }, []);
 
   async function runValidation() {
@@ -126,21 +129,20 @@ export default function MetricsPage() {
       await refresh();
       setActionSuccess('Validation harness completed successfully.');
     } catch (err) {
-      setActionError(
-        requestErrorMessage(err, 'the validation run'),
-      );
+      setActionError(requestErrorMessage(err, 'the validation run'));
     } finally {
       setRunning(false);
     }
   }
 
-  const pct = (v: number | null | undefined) =>
-    v == null ? '—' : `${(v * 100).toFixed(0)}%`;
+  const pct = (v: number | null | undefined) => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Performance & validation</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+          Performance & validation
+        </h1>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button
             className="w-full sm:w-auto"
@@ -150,7 +152,11 @@ export default function MetricsPage() {
           >
             {downloading ? 'Downloading…' : 'Download CDSCO dossier'}
           </Button>
-          <Button className="w-full sm:w-auto" onClick={() => void runValidation()} disabled={running}>
+          <Button
+            className="w-full sm:w-auto"
+            onClick={() => void runValidation()}
+            disabled={running}
+          >
             {running ? 'Running…' : 'Run validation harness'}
           </Button>
         </div>
@@ -167,8 +173,19 @@ export default function MetricsPage() {
 
       {actionSuccess && (
         <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
-          <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <svg
+            aria-hidden="true"
+            className="mt-0.5 h-4 w-4 flex-shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
           </svg>
           <span>{actionSuccess}</span>
         </div>
@@ -176,8 +193,19 @@ export default function MetricsPage() {
 
       {pilot?.pilot_mode && (
         <div className="flex items-start gap-2 rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-900">
-          <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+          <svg
+            aria-hidden="true"
+            className="mt-0.5 h-4 w-4 flex-shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"
+            />
           </svg>
           <span>Monitored pilot active — {pilot.message}</span>
         </div>
@@ -256,7 +284,10 @@ export default function MetricsPage() {
           <p className="mb-3 text-sm font-semibold text-slate-900">Safety reports</p>
           <ul className="divide-y divide-slate-100 text-sm">
             {reports.map((r) => (
-              <li key={r.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <li
+                key={r.id}
+                className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <SeverityBadge severity={r.severity} />
                   <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
@@ -294,9 +325,7 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
       setSuccess('Safety report filed successfully.');
       onFiled();
     } catch (err) {
-      setError(
-        requestErrorMessage(err, 'filing the safety report'),
-      );
+      setError(requestErrorMessage(err, 'filing the safety report'));
     } finally {
       setSubmitting(false);
     }
@@ -311,15 +340,29 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
         {error && <ErrorBanner message={error} />}
         {success && (
           <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
-            <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              aria-hidden="true"
+              className="mt-0.5 h-4 w-4 flex-shrink-0"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
             <span>{success}</span>
           </div>
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label htmlFor="report-category" className="mb-1.5 block text-sm font-medium text-slate-700">
+            <label
+              htmlFor="report-category"
+              className="mb-1.5 block text-sm font-medium text-slate-700"
+            >
               Category
             </label>
             <select
@@ -336,7 +379,10 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
             </select>
           </div>
           <div>
-            <label htmlFor="report-severity" className="mb-1.5 block text-sm font-medium text-slate-700">
+            <label
+              htmlFor="report-severity"
+              className="mb-1.5 block text-sm font-medium text-slate-700"
+            >
               Severity
             </label>
             <select
@@ -353,7 +399,10 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
           </div>
         </div>
         <div>
-          <label htmlFor="report-description" className="mb-1.5 block text-sm font-medium text-slate-700">
+          <label
+            htmlFor="report-description"
+            className="mb-1.5 block text-sm font-medium text-slate-700"
+          >
             Description
           </label>
           <textarea

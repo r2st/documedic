@@ -47,7 +47,9 @@ describe('LoginPage', () => {
     await user.type(screen.getByLabelText('Password'), 'hunter2hunter2');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    await waitFor(() => expect(api.login).toHaveBeenCalledWith('doc@example.com', 'hunter2hunter2'));
+    await waitFor(() =>
+      expect(api.login).toHaveBeenCalledWith('doc@example.com', 'hunter2hunter2'),
+    );
     expect(refreshAuth).toHaveBeenCalled();
     expect(replace).toHaveBeenCalledWith('/patients');
   });
@@ -84,7 +86,10 @@ describe('LoginPage', () => {
   it('disables the submit button while the request is in flight', async () => {
     let resolveLogin: (v: unknown) => void = () => {};
     vi.mocked(api.login).mockImplementation(
-      () => new Promise((res) => { resolveLogin = res; }) as never,
+      () =>
+        new Promise((res) => {
+          resolveLogin = res;
+        }) as never,
     );
     const user = userEvent.setup();
     render(<LoginPage />);

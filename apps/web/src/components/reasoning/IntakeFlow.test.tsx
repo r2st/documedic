@@ -31,7 +31,11 @@ describe('IntakeFlow', () => {
 
   it('renders each pending question', () => {
     render(
-      <IntakeFlow sessionId="s1" questions={[question(), question({ id: 'q2', question_text: 'Any fever?' })]} onComplete={vi.fn()} />,
+      <IntakeFlow
+        sessionId="s1"
+        questions={[question(), question({ id: 'q2', question_text: 'Any fever?' })]}
+        onComplete={vi.fn()}
+      />,
     );
     expect(screen.getByText('How long has the pain lasted?')).toBeInTheDocument();
     expect(screen.getByText('Any fever?')).toBeInTheDocument();
@@ -110,15 +114,17 @@ describe('IntakeFlow question rendering', () => {
         onComplete={vi.fn()}
       />,
     );
-    expect(
-      screen.getByText('Duration separates acute from chronic causes.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Duration separates acute from chronic causes.')).toBeInTheDocument();
   });
 
   it('renders the question alone when the agent gave no rationale', () => {
     // `questions` seeds component state, so the two cases need separate mounts.
     const { container } = render(
-      <IntakeFlow sessionId="s1" questions={[question({ rationale: null })]} onComplete={vi.fn()} />,
+      <IntakeFlow
+        sessionId="s1"
+        questions={[question({ rationale: null })]}
+        onComplete={vi.fn()}
+      />,
     );
 
     expect(screen.getByText('How long has the pain lasted?')).toBeInTheDocument();
@@ -132,9 +138,7 @@ describe('IntakeFlow question rendering', () => {
       intake_complete: true,
     });
     const user = userEvent.setup();
-    render(
-      <IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />,
-    );
+    render(<IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />);
 
     await user.type(screen.getByPlaceholderText(/Your answer/), '   ');
     await user.click(screen.getByRole('button', { name: /Submit/i }));

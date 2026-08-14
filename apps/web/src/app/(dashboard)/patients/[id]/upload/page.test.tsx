@@ -48,15 +48,33 @@ function extraction(overrides: Partial<ExtractionResult> = {}): ExtractionResult
         entity_type: 'medication',
         region: null,
         fields: [
-          { name: 'brand_name', value: 'Crocin', confidence: 0.94, confidence_band: 'high', needs_confirmation: false },
-          { name: 'dose', value: '500mg', confidence: 0.55, confidence_band: 'low', needs_confirmation: true },
+          {
+            name: 'brand_name',
+            value: 'Crocin',
+            confidence: 0.94,
+            confidence_band: 'high',
+            needs_confirmation: false,
+          },
+          {
+            name: 'dose',
+            value: '500mg',
+            confidence: 0.55,
+            confidence_band: 'low',
+            needs_confirmation: true,
+          },
         ],
       },
       {
         entity_type: 'lab_result',
         region: null,
         fields: [
-          { name: 'marker_name', value: 'HbA1c', confidence: 0.88, confidence_band: 'high', needs_confirmation: false },
+          {
+            name: 'marker_name',
+            value: 'HbA1c',
+            confidence: 0.88,
+            confidence_band: 'high',
+            needs_confirmation: false,
+          },
         ],
       },
     ],
@@ -82,7 +100,9 @@ describe('UploadPage', () => {
 
   it('explains that nothing enters the record before clinician review', () => {
     render(<UploadPage params={{ id: 'pat-1' }} />);
-    expect(screen.getByText(/you review and confirm before anything enters the record/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/you review and confirm before anything enters the record/),
+    ).toBeInTheDocument();
   });
 
   it('uploads the chosen file and then fetches its extraction', async () => {
@@ -151,9 +171,7 @@ describe('UploadPage', () => {
     await user.click(screen.getAllByRole('checkbox')[1]);
     await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
 
-    await waitFor(() =>
-      expect(api.approveExtraction).toHaveBeenCalledWith('pat-1', 'doc-1', [1]),
-    );
+    await waitFor(() => expect(api.approveExtraction).toHaveBeenCalledWith('pat-1', 'doc-1', [1]));
     expect(push).toHaveBeenCalledWith('/patients/pat-1');
   });
 
@@ -251,7 +269,9 @@ describe('UploadPage approval guards', () => {
     await user.click(screen.getByRole('button', { name: /Confirm & merge/ }));
 
     expect(
-      await screen.findByText(/Could not reach the server, so the approval of these extracted details/),
+      await screen.findByText(
+        /Could not reach the server, so the approval of these extracted details/,
+      ),
     ).toBeInTheDocument();
     expect(push).not.toHaveBeenCalled();
   });

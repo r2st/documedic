@@ -25,7 +25,11 @@ describe('DemoBanner', () => {
 
 describe('OfflineBanner', () => {
   const setOnLine = (value: boolean) =>
-    Object.defineProperty(window.navigator, 'onLine', { value, configurable: true, writable: true });
+    Object.defineProperty(window.navigator, 'onLine', {
+      value,
+      configurable: true,
+      writable: true,
+    });
 
   beforeEach(() => setOnLine(true));
 
@@ -49,7 +53,9 @@ describe('OfflineBanner', () => {
       window.dispatchEvent(new Event('offline'));
     });
     expect(screen.getByText(/Offline Mode/)).toBeInTheDocument();
-    expect(screen.getByText(/patient records and drug-safety checks available/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/patient records and drug-safety checks available/),
+    ).toBeInTheDocument();
   });
 
   it('disappears again once back online', () => {

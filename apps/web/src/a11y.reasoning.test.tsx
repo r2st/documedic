@@ -94,7 +94,9 @@ beforeEach(() => {
   MockEventSource.instances = [];
   vi.stubGlobal('EventSource', MockEventSource);
   vi.mocked(api.reasoningStreamUrl).mockReset().mockResolvedValue('http://api/stream?token=t');
-  vi.mocked(api.recordDecision).mockReset().mockResolvedValue(undefined as never);
+  vi.mocked(api.recordDecision)
+    .mockReset()
+    .mockResolvedValue(undefined as never);
 });
 
 afterEach(() => {
@@ -283,7 +285,9 @@ describe('decorative content stays out of the accessibility tree', () => {
 
     act(() => {
       source.emit('agent_complete', { agent: 'hypothesis_panel' });
-      source.emit('hypotheses', { hypotheses: [{ diagnosis_name: 'CAP', probability_band: 'high' }] });
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'CAP', probability_band: 'high' }],
+      });
       source.emit('cant_miss', { items: [{ diagnosis_name: 'ACS', why: 'risk factors' }] });
       source.emit('devils_advocate', { critique: { summary: 'Consider viral cause.' } });
       source.emit('verifier', { status: 'approved', autonomy_tier: 'flag_for_review' });
@@ -310,7 +314,8 @@ describe('decorative content stays out of the accessibility tree', () => {
   it('hides the evidence tick and cross, which only repeat the heading above them', () => {
     render(<SuggestionCard suggestion={suggestion()} sessionId="s1" />);
 
-    const supporting = screen.getByText('Productive cough and fever for 3 days')
+    const supporting = screen
+      .getByText('Productive cough and fever for 3 days')
       .closest('li') as HTMLElement;
     expect(supporting).toHaveTextContent('Productive cough and fever for 3 days');
     expect(within(supporting).getByText('✓')).toHaveAttribute('aria-hidden', 'true');

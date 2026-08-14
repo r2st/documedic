@@ -36,7 +36,9 @@ function page(items: PatientSummary[]): Paginated<PatientSummary> {
 
 describe('PatientsPage', () => {
   beforeEach(() => {
-    vi.mocked(api.listPatients).mockReset().mockResolvedValue(page([summary()]));
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockResolvedValue(page([summary()]));
     vi.mocked(api.createPatient).mockReset();
   });
 
@@ -166,7 +168,9 @@ describe('PatientsPage', () => {
 
 describe('PatientsPage edge cases', () => {
   beforeEach(() => {
-    vi.mocked(api.listPatients).mockReset().mockResolvedValue(page([summary()]));
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockResolvedValue(page([summary()]));
     vi.mocked(api.createPatient).mockReset();
   });
 
@@ -199,8 +203,12 @@ describe('PatientsPage edge cases', () => {
 
 describe('CreatePatientForm optional demographics', () => {
   beforeEach(() => {
-    vi.mocked(api.listPatients).mockReset().mockResolvedValue(page([summary()]));
-    vi.mocked(api.createPatient).mockReset().mockResolvedValue({} as Patient);
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockResolvedValue(page([summary()]));
+    vi.mocked(api.createPatient)
+      .mockReset()
+      .mockResolvedValue({} as Patient);
   });
 
   it('sends the date of birth and phone number when they are supplied', async () => {
@@ -238,7 +246,9 @@ describe('PatientsPage when the roster cannot be loaded', () => {
     // patient to get started." A clinician whose panel had failed to load was told in as many
     // words that their panel was empty, and the obvious next action was to re-register
     // someone who was already in the system.
-    vi.mocked(api.listPatients).mockReset().mockRejectedValue(new ApiError(503, 'unavailable', 'The service is briefly unavailable.'));
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockRejectedValue(new ApiError(503, 'unavailable', 'The service is briefly unavailable.'));
 
     render(<PatientsPage />);
 

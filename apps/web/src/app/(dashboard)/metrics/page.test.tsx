@@ -393,9 +393,10 @@ describe('MetricsPage recovery', () => {
     vi.mocked(api.performanceMetrics).mockResolvedValue(metrics());
     render(<MetricsPage />);
 
-    expect(
-      screen.getByRole('status', { name: 'Loading performance metrics' }),
-    ).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('status', { name: 'Loading performance metrics' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
 
     await screen.findByText('42');
   });
