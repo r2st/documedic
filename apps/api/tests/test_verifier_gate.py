@@ -599,3 +599,47 @@ async def test_the_emitted_verdict_list_matches_the_state_it_leaves_behind():
     emitted = _event(events, "verifier")["verdicts"]
     assert [v["target"] for v in emitted] == [v.target for v in state.verifier_verdicts]
     assert [v["status"] for v in emitted] == [v.status for v in state.verifier_verdicts]
+
+
+# ------------------------------------------------------------- the verifier's own LLM client
+
+
+class _RecordingLLM(_CannedLLM):
+    """A canned client that also counts the calls it received."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(payload)
+        self.calls = 0
+
+    def complete_json(self, system: str, user: str, *, retries: int = 2) -> dict[str, Any]:
+        self.calls += 1
+        return super().complete_json(system, user, retries=retries)
+
+
+async def test_the_gate_asks_its_own_client_not_the_one_the_agents_answered_with():
+    """``ReasoningContext`` carries a separate ``verifier_llm`` so the gate can be pointed at a
+    different model from the agents it is checking — an independent reviewer rather than the same
+    model grading its own work (Critical Safety Rule #1).
+
+    Both clients are constructed from the same settings today, so collapsing the two changes
+    nothing observable, and every other test in the suite passes one client as both ``llm`` and
+    ``verifier_llm`` — which is exactly why nothing noticed. Dropping ``verifier=True`` from the
+    node's ``call_llm`` call left the whole suite green. The seam is the mechanism that makes
+    verifier independence configurable at all, so it is pinned here rather than left implicit.
+    """
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, data))
+
+    agents_llm = _RecordingLLM({"status": "agree", "autonomy_tier": "informational"})
+    gate_llm = _RecordingLLM({"status": "major_disagreement", "autonomy_tier": "flag_for_review"})
+    state = _state(hypothesis_set=[_hypothesis("Tension headache")])
+
+    await verifier.run(state, ReasoningContext(llm=agents_llm, verifier_llm=gate_llm, emit=emit))
+
+    assert gate_llm.calls == 1, "the gate did not consult its own client"
+    assert agents_llm.calls == 0, "the gate re-used the client the agents reasoned with"
+    # And it is the gate's answer that took effect, not the agents' client's.
+    assert state.verifier_status == "major_disagreement"
+    assert state.autonomy_tier == "flag_for_review"
