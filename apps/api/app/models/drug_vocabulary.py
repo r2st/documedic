@@ -23,6 +23,13 @@ class DrugVocabulary(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     strength: Mapped[str | None] = mapped_column(String(100), nullable=True)
     form: Mapped[str | None] = mapped_column(String(100), nullable=True)
     manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Known potential for drug-induced liver injury, as a curated tier — 'established' for the
+    # drugs with a well-documented DILI signal, 'dose_dependent' for the ones whose injury is
+    # predictable from exposure. NULL means "not curated here", never "safe for the liver":
+    # absence of evidence in a fifty-drug seed file is not evidence of absence, and
+    # ``check_hepatotoxic_burden`` is written so that a NULL contributes nothing rather than
+    # counting as a clean drug.
+    hepatotoxicity: Mapped[str | None] = mapped_column(String(30), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )

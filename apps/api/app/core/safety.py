@@ -54,6 +54,7 @@ CheckType = Literal[
     "unevaluated_medication",
     "unevaluated_allergy",
     "hepatic_severity",
+    "hepatotoxic_burden",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -133,6 +134,10 @@ class DrugRef:
     reference_id: str
     generic_name: str
     drug_class: str | None = None
+    # Curated liver-injury tier, or None for "not curated" — which is emphatically not "safe for
+    # the liver". See ``check_hepatotoxic_burden``, which is written so a None contributes
+    # nothing rather than counting as a clean drug.
+    hepatotoxicity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1143,6 +1148,103 @@ def check_unevaluated_allergies(ctx: SafetyContext) -> list[SafetyFlag]:
     ]
 
 
+# Curated liver-injury tiers, worst first. 'dose_dependent' is intrinsic toxicity — the injury
+# is predictable from exposure, which is why paracetamol and methotrexate are here and why the
+# ceiling matters more than the idiosyncrasy. 'established' is a well-documented idiosyncratic
+# signal in the published DILI registries.
+_HEPATOTOXICITY_TIERS: tuple[str, ...] = ("dose_dependent", "established")
+
+
+def _is_hepatotoxic(drug: DrugRef) -> bool:
+    return (drug.hepatotoxicity or "") in _HEPATOTOXICITY_TIERS
+
+
+def check_hepatotoxic_burden(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Flag adding a hepatotoxic drug to a liver that is already carrying some.
+
+    Two things fall between the checks that exist. The curated ``hepatic_threshold`` rules are
+    per-drug and are written against a measured panel, so they say nothing about a drug with a
+    documented liver-injury signal and no threshold rule — amoxicillin-clavulanate is the
+    commonest cause of drug-induced liver injury in the published registries and this vocabulary
+    held no hepatic rule for it at all. And the interaction table is pairwise on curated pairs, so
+    three separately unremarkable hepatotoxic drugs on one chart produce three empty checks; the
+    burden is a property of the *set*, which is the same reason ``check_duplicate_therapy`` had to
+    exist alongside the interaction rules.
+
+    Fires only when the proposed drug is itself curated as hepatotoxic — a chart full of
+    hepatotoxic drugs is not a reason to flag an unrelated antihypertensive — and then only when
+    the chart adds something: another hepatotoxic drug already active, or a liver the panel shows
+    to be impaired.
+
+    An uncurated drug (``hepatotoxicity is None``) contributes nothing and is never counted as
+    clean. Fifty seeded drugs is not a pharmacopoeia, and a check that read "no other hepatotoxic
+    drugs on this chart" off an incomplete table would be asserting something the table cannot
+    support. Silence here means the question was not answered, which is why the summary says so.
+
+    Never a hard block. Co-prescribing hepatotoxic drugs is routine and often correct — a
+    diabetic on a statin who needs a course of co-amoxiclav is not a prescribing error — and the
+    decision needs the clinician, not a refusal.
+    """
+    if not _is_hepatotoxic(proposed):
+        return []
+
+    concurrent = sorted(
+        {
+            med.generic_name
+            for med in ctx.current_meds
+            if _is_hepatotoxic(med) and med.reference_id != proposed.reference_id
+        }
+    )
+    severity_view = hepatic_severity(ctx)
+    child_pugh = severity_view.child_pugh
+    impaired = child_pugh is not None and child_pugh.min_class != "A"
+
+    if not concurrent and not impaired:
+        return []
+
+    reasons: list[str] = []
+    if concurrent:
+        listed = ", ".join(concurrent)
+        reasons.append(
+            f"the chart already carries {len(concurrent)} other medication(s) with a documented "
+            f"liver-injury signal ({listed})"
+        )
+    if impaired and child_pugh is not None:
+        span = (
+            f"Child-Pugh {child_pugh.child_pugh_class}"
+            if child_pugh.child_pugh_class
+            else f"Child-Pugh {child_pugh.min_class} to {child_pugh.max_class}"
+        )
+        reasons.append(f"this chart's liver panel scores {span}")
+
+    # Conservative wins, per Critical Safety Rule #2: an impaired liver outranks a count of
+    # co-prescriptions, and both together do not exceed the more serious of the two.
+    is_critical = impaired and (child_pugh is not None and child_pugh.child_pugh_class == "C")
+    return [
+        SafetyFlag(
+            check_type="hepatotoxic_burden",
+            severity="critical" if is_critical else "warning",
+            is_hard_block=False,
+            summary=(
+                f"{proposed.generic_name} has a documented liver-injury signal "
+                f"({proposed.hepatotoxicity.replace('_', ' ') if proposed.hepatotoxicity else ''}"
+                f") and {' and '.join(reasons)}. Guidelines support checking liver function "
+                "before and during the course, and considering an alternative where one exists. "
+                "Note that this is scored only against the drugs this vocabulary curates: "
+                "medications it does not carry a liver-injury tier for were not counted either "
+                "way."
+            ),
+            details={
+                "proposed_drug": proposed.generic_name,
+                "proposed_hepatotoxicity": proposed.hepatotoxicity,
+                "concurrent_hepatotoxic_drugs": concurrent,
+                "hepatic_impairment": impaired,
+                **(child_pugh.as_details() if child_pugh is not None else {}),
+            },
+        )
+    ]
+
+
 def hepatic_severity(ctx: SafetyContext) -> HepaticSeverity:
     """The Child-Pugh window and MELD this chart's liver panel supports. Never raises."""
     return assess_hepatic_severity(
@@ -1243,6 +1345,7 @@ def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFl
     flags.extend(check_interactions(proposed, ctx))
     flags.extend(check_contraindications(proposed, ctx))
     flags.extend(check_duplicate_therapy(proposed, ctx))
+    flags.extend(check_hepatotoxic_burden(proposed, ctx))
     flags.extend(check_guideline_adherence(proposed, ctx))
     return flags
 

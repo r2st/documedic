@@ -12,7 +12,11 @@
         "atc_code": {"type": ["string", "null"]},
         "drug_class": {"type": ["string", "null"]},
         "strength": {"type": ["string", "null"]},
-        "form": {"type": ["string", "null"]}
+        "form": {"type": ["string", "null"]},
+        "hepatotoxicity": {
+          "description": "Curated potential for drug-induced liver injury, applied by app.core.safety.check_hepatotoxic_burden. 'dose_dependent' is intrinsic toxicity (predictable from exposure); 'established' is a well-documented idiosyncratic signal in the published DILI registries. ABSENT means 'not curated here', NOT 'safe for the liver' — the check counts an absent tier as contributing nothing rather than as a clean drug, and says so in its output.",
+          "enum": ["dose_dependent", "established", null]
+        }
       }
     },
     "interaction_entry": {

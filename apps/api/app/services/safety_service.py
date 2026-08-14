@@ -207,6 +207,7 @@ class SafetyService:
                         reference_id=vocab.reference_id,
                         generic_name=vocab.generic_name,
                         drug_class=vocab.drug_class,
+                        hepatotoxicity=vocab.hepatotoxicity,
                     )
                 )
                 continue
@@ -219,6 +220,7 @@ class SafetyService:
                         reference_id=resolved.reference_id,
                         generic_name=resolved.generic_name,
                         drug_class=resolved.drug_class,
+                        hepatotoxicity=resolved.hepatotoxicity,
                     )
                 )
             elif med.generic_name and med.generic_name.strip():
@@ -530,6 +532,7 @@ class SafetyService:
             reference_id=vocab.reference_id,
             generic_name=vocab.generic_name,
             drug_class=vocab.drug_class,
+            hepatotoxicity=vocab.hepatotoxicity,
         )
         # Appended, not folded into ``evaluate_drug_safety``: it is a statement about the chart
         # rather than about the proposed drug, so it must not be repeated once per drug by the
@@ -721,6 +724,7 @@ class SafetyService:
                 reference_id=row.reference_id,
                 generic_name=row.generic_name,
                 drug_class=row.drug_class,
+                hepatotoxicity=row.hepatotoxicity,
             )
             flags.extend(evaluate_drug_safety(proposed, ctx))
         return flags
@@ -757,6 +761,7 @@ class SafetyService:
                 reference_id=vocab.reference_id,
                 generic_name=vocab.generic_name,
                 drug_class=vocab.drug_class,
+                hepatotoxicity=vocab.hepatotoxicity,
             )
             flags = evaluate_drug_safety(proposed, sub_ctx)
             if flags:

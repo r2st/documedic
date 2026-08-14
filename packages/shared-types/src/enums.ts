@@ -21,7 +21,8 @@ export type SafetyCheckType =
   | 'guideline_deviation'
   | 'unevaluated_medication'
   | 'unevaluated_allergy'
-  | 'hepatic_severity';
+  | 'hepatic_severity'
+  | 'hepatotoxic_burden';
 
 export type ReasoningStatus =
   | 'created'

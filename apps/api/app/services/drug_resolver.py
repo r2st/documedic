@@ -58,6 +58,10 @@ class ResolvedDrug:
     drug_class: str | None
     match_type: str  # exact_brand | exact_generic | exact_reference | fuzzy
     score: float
+    # Carried through so a medication linked only by name still reaches the safety engine with
+    # its curated liver-injury tier. Without it the hepatotoxic burden of a chart would depend
+    # on which of its rows happened to have a vocabulary id.
+    hepatotoxicity: str | None = None
 
 
 # Exact-match tiers in precedence order: a reference id is the canonical key, and a brand name
@@ -384,4 +388,5 @@ class DrugResolver:
             drug_class=row.drug_class,
             match_type=match_type,
             score=score,
+            hepatotoxicity=row.hepatotoxicity,
         )
