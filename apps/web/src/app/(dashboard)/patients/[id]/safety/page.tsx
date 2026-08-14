@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
+import { orderFlagsForDisplay } from '@/lib/safety';
 import type { SafetyCheckResponse } from '@/lib/types';
 import { Button, Card, ErrorBanner, LoadingBlock, Skeleton } from '@aether/ui';
 import { SafetyFlagCard } from '@/components/ui';
@@ -206,15 +207,22 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
                 No interactions, contraindications, or allergy conflicts detected.
               </div>
             ) : (
-              <div className="space-y-2">
-                {result.flags.map((f, i) => (
-                  <SafetyFlagCard
-                    key={i}
-                    severity={f.severity}
-                    isHardBlock={f.is_hard_block}
-                    summary={f.summary}
-                  />
-                ))}
+              /* Ordered most-severe first rather than in the order the API grouped them by
+                 check. A non-overridable contraindication returned after three interaction
+                 warnings would otherwise render below them, and the one flag that stops the
+                 prescription is the one the clinician has to scroll for. */
+              <div role="list" aria-label={`${result.flags.length} safety finding(s)`}>
+                <div className="space-y-2">
+                  {orderFlagsForDisplay(result.flags).map((f, i) => (
+                    <SafetyFlagCard
+                      key={`${f.check_type}-${i}`}
+                      severity={f.severity}
+                      isHardBlock={f.is_hard_block}
+                      summary={f.summary}
+                      checkType={f.check_type}
+                    />
+                  ))}
+                </div>
               </div>
             )}
 

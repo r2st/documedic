@@ -7,6 +7,8 @@
 // domain rather than a design system, and the shared library should not have to know what a
 // hard block is in order to render a card.
 
+import { checkTypeLabel } from '@/lib/safety';
+
 const CONFIDENCE_STYLES: Record<string, string> = {
   high: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
   medium: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
@@ -35,20 +37,46 @@ const SEVERITY_STYLES: Record<string, string> = {
   info: 'border-brand-500 bg-brand-50 text-brand-900',
 };
 
+/**
+ * One deterministic safety finding.
+ *
+ * `checkType` is optional so the component keeps working for a caller that has no type to hand,
+ * but every caller that has one should pass it: the severity badge alone renders a Child-Pugh
+ * assessment, a duplicate-therapy note and a guideline deviation as three identical amber boxes,
+ * and "which check said this" is most of what tells a clinician whether the sentence is about
+ * the proposed drug or about the chart underneath it.
+ */
 export function SafetyFlagCard({
   severity,
   isHardBlock,
   summary,
+  checkType,
 }: {
   severity: string;
   isHardBlock: boolean;
   summary: string;
+  checkType?: string;
 }) {
   return (
-    <div className={`rounded-lg border-l-4 p-4 text-sm ${SEVERITY_STYLES[severity] ?? ''}`}>
-      <span className="mr-2 text-xs font-bold uppercase tracking-wider">
-        {isHardBlock ? 'HARD BLOCK' : severity.replace(/_/g, ' ')}
-      </span>
+    // `listitem` because the caller renders these in a `role="list"`: the count is worth
+    // announcing, and a screen reader reaching "3 of 7" has the same sense of how much is on
+    // this screen that a sighted clinician gets from the length of the column.
+    <div
+      role="listitem"
+      className={`rounded-lg border-l-4 p-4 text-sm ${SEVERITY_STYLES[severity] ?? ''}`}
+    >
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-xs font-bold uppercase tracking-wider">
+          {isHardBlock ? 'HARD BLOCK' : severity.replace(/_/g, ' ')}
+        </span>
+        {checkType ? (
+          // Not colour-coded. The severity carries the colour, and giving the label its own
+          // would compete with it for the same glance.
+          <span className="rounded bg-white/60 px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset ring-black/10">
+            {checkTypeLabel(checkType)}
+          </span>
+        ) : null}
+      </div>
       {summary}
     </div>
   );

@@ -440,4 +440,118 @@ describe('SafetyPage loading state', () => {
     render(<SafetyPage params={{ id: 'pat-1' }} />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
+
+  it('puts the hard block first even though the API returned it last', async () => {
+    // evaluate_drug_safety runs allergies, then interactions, then contraindications, then the
+    // chart-level notes — so the one flag that stops the prescription arrives underneath the
+    // ones that do not. Rendering that order verbatim makes it the flag a clinician scrolls
+    // for.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        is_blocked: true,
+        is_hard_block: true,
+        flags: [
+          {
+            check_type: 'drug_interaction',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: 'Interaction warning that does not stop the prescription.',
+            details: {},
+          },
+          {
+            check_type: 'hepatic_severity',
+            severity: 'info',
+            is_hard_block: false,
+            summary: 'Child-Pugh class A on this chart.',
+            details: {},
+          },
+          {
+            check_type: 'contraindication',
+            severity: 'hard_block',
+            is_hard_block: true,
+            summary: 'Absolute contraindication in this condition.',
+            details: {},
+          },
+        ],
+      }),
+    );
+    await runCheck();
+
+    await screen.findByText('Absolute contraindication in this condition.');
+    const rendered = screen.getAllByRole('listitem').map((el) => el.textContent ?? '');
+    expect(rendered[0]).toContain('Absolute contraindication in this condition.');
+    expect(rendered[1]).toContain('Interaction warning that does not stop the prescription.');
+    expect(rendered[2]).toContain('Child-Pugh class A on this chart.');
+  });
+
+  it("names the liver assessment so it is not an anonymous box among the drug's own flags", async () => {
+    // The Child-Pugh window is a statement about the chart, not about the proposed drug. Until
+    // the check type was rendered it was indistinguishable from a drug-interaction warning.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        flags: [
+          {
+            check_type: 'hepatic_severity',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: 'Child-Pugh class C — 10 to 12 points on this chart.',
+            details: { child_pugh_class: 'C' },
+          },
+        ],
+      }),
+    );
+    await runCheck();
+
+    expect(await screen.findByText('Liver function')).toBeInTheDocument();
+    expect(
+      screen.getByText('Child-Pugh class C — 10 to 12 points on this chart.'),
+    ).toBeInTheDocument();
+  });
+
+  it('says a condition could not be checked rather than showing it as a finding', async () => {
+    // A problem list the tokeniser cannot read was compared to no contraindication rule at all.
+    // The label has to say that, not name it as though something was found.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        flags: [
+          {
+            check_type: 'unevaluated_condition',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: '1 condition could not be read as text and carries no ICD-10 code.',
+            details: { evaluated: false },
+          },
+        ],
+      }),
+    );
+    await runCheck();
+
+    expect(await screen.findByText('Not checked — condition')).toBeInTheDocument();
+  });
+
+  it('announces the number of findings on the list', async () => {
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        flags: [
+          {
+            check_type: 'drug_interaction',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: 'One',
+            details: {},
+          },
+          {
+            check_type: 'renal_dose',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: 'Two',
+            details: {},
+          },
+        ],
+      }),
+    );
+    await runCheck();
+
+    expect(await screen.findByRole('list', { name: '2 safety finding(s)' })).toBeInTheDocument();
+  });
 });

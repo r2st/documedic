@@ -22,6 +22,34 @@ describe('SafetyFlagCard', () => {
     expect(screen.queryByText('HARD BLOCK')).not.toBeInTheDocument();
     expect(screen.getByText('warning')).toBeInTheDocument();
   });
+
+  it('names the check alongside the severity so a chart-level finding is legible as one', () => {
+    // Without the label this is an amber box reading "warning" and nothing else — the same
+    // rendering a duplicate-therapy note or a guideline deviation gets.
+    render(
+      <SafetyFlagCard
+        severity="warning"
+        isHardBlock={false}
+        checkType="hepatic_severity"
+        summary="Child-Pugh class C on this chart's labs."
+      />,
+    );
+    expect(screen.getByText('Liver function')).toBeInTheDocument();
+    expect(screen.getByText('warning')).toBeInTheDocument();
+  });
+
+  it('is a listitem so a screen reader can announce how many findings there are', () => {
+    render(
+      <SafetyFlagCard severity="warning" isHardBlock={false} summary="A" checkType="renal_dose" />,
+    );
+    expect(screen.getByRole('listitem')).toBeInTheDocument();
+  });
+
+  it('renders without a check type for a caller that has none', () => {
+    render(<SafetyFlagCard severity="warning" isHardBlock={false} summary="No type supplied" />);
+    expect(screen.getByText('No type supplied')).toBeInTheDocument();
+    expect(screen.queryByText('Safety check')).not.toBeInTheDocument();
+  });
 });
 
 describe('ConfidenceBadge fallbacks', () => {
