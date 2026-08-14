@@ -206,6 +206,51 @@ async def test_drug_safety_still_answers_with_every_provider_down(auth_client, o
     assert any(f["check_type"] == "renal_dose" for f in body["flags"])
 
 
+async def test_the_standing_safety_screen_answers_with_every_provider_down(
+    auth_client, openrouter_outage
+):
+    """The other half of the same rule, and the one a clinician actually opens.
+
+    ``POST ../check`` is the pre-prescription question. ``GET ../flags`` is the standing picture
+    of the chart — every current medication re-evaluated against every other, plus the
+    chart-level notes — and it is what the safety screen renders on load. An outage that left
+    ``check`` working and this returning 500 would present as the safety screen being down.
+
+    Asserted on the shape rather than on one finding, because the check list grows: this file
+    named ``renal_dose`` above and could not speak for the two cumulative checks added since.
+    """
+    patient = await create_patient(auth_client)
+    uploaded = await auth_client.post(
+        f"/api/v1/patients/{patient['id']}/documents",
+        files={"file": ("rx.pdf", PRESCRIPTION, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    approved = await auth_client.post(
+        f"/api/v1/patients/{patient['id']}/documents/{uploaded.json()['id']}/approve",
+        json={"corrections": [], "rejected_entity_indexes": []},
+    )
+    assert approved.status_code == 200, approved.text
+
+    resp = await auth_client.get(f"/api/v1/patients/{patient['id']}/drug-safety/flags")
+
+    assert resp.status_code == 200, resp.text
+    flags = resp.json()["flags"]
+    assert flags, "the standing safety picture came back empty during the outage"
+    assert all(f["summary"] for f in flags), "a flag arrived without the text that explains it"
+
+
+async def test_the_lab_critical_value_screen_answers_with_every_provider_down(
+    auth_client, openrouter_outage
+):
+    """The third deterministic surface. Panic values are a table of thresholds and a unit
+    conversion, and they are the findings with the shortest fuse on the whole chart."""
+    patient = await create_patient(auth_client)
+
+    resp = await auth_client.get(f"/api/v1/patients/{patient['id']}/labs/critical-flags")
+
+    assert resp.status_code == 200, resp.text
+
+
 async def test_health_still_reports_the_provider_as_configured_during_an_outage(
     auth_client, openrouter_outage
 ):
