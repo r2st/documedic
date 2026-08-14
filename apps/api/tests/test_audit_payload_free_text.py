@@ -473,7 +473,10 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "auth_logout_all": {"revoked_count"},
     # --- patient. ``changed_fields`` is field *names*; the new values are the PII.
     "patient_created": {"consent_given"},
-    "patient_updated": {"changed_fields"},
+    # consent_given is the one field *value* this payload carries. It is the opposite of PII --
+    # it is the lawful basis for holding everything that is one -- and without it a grant and a
+    # withdrawal were the same entry.
+    "patient_updated": {"changed_fields", "consent_given"},
     "patient_deleted": {"soft_delete"},
     "patient_viewed": set(),
     "patient_record_viewed": set(),

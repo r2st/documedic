@@ -40,7 +40,7 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 # Upload is the one route here that costs an LLM call (multimodal extraction over the scan), so
 # it is the one that is rate limited and the one that can answer 429.
-_UPLOAD_ERRORS = errors(401, 404, 429)
+_UPLOAD_ERRORS = errors(401, 403, 404, 429)
 
 # Anything outside this set is dropped from the ASCII fallback filename. Notably excludes the
 # double quote and the semicolon (which would end/extend the Content-Disposition parameter) and
@@ -218,7 +218,7 @@ async def get_extraction(
 @router.post(
     "/{doc_id}/approve",
     summary="Merge a reviewed extraction into the patient graph",
-    responses=PATIENT_ERRORS | errors(409),
+    responses=PATIENT_ERRORS | errors(403, 409),
 )
 async def approve_extraction(
     patient_id: uuid.UUID,

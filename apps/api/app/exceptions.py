@@ -196,6 +196,29 @@ class ConsentRequiredError(AetherError):
     code = "consent_required"
 
 
+class ConsentWithdrawnError(AetherError):
+    """This patient has withdrawn consent, so new data cannot be added and the reasoning
+    engine cannot be run on their record. The existing chart stays readable. Re-record consent
+    on the patient's details before continuing.
+
+    Withdrawal is a data principal's right under the DPDP Act 2023, and it has to stop
+    processing rather than only be noted: ``consent_given`` could be set back to false and
+    nothing anywhere read it again, so an account could keep ingesting documents and running
+    the reasoning engine over a chart whose consent had been withdrawn -- while
+    ``regulatory_service`` published "Explicit consent captured before clinical data is
+    stored" in the same compliance summary a DPDP or CDSCO reviewer reads.
+
+    Deliberately scoped to *new* processing. Reading the existing record, its audit trail, and
+    the deterministic drug-safety checks over data already lawfully held all stay available:
+    withdrawal is not erasure (that is ``soft_delete``), medical records carry retention
+    obligations of their own, and a consent flag that silently switched off the allergy hard
+    block would be a safety defect wearing a privacy control's clothes.
+    """
+
+    status_code = 403
+    code = "consent_withdrawn"
+
+
 class UnsupportedQueryParameterError(AetherError):
     """A query parameter that is no longer accepted was supplied."""
 

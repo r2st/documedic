@@ -32,7 +32,12 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "No valid access token. `code` is `invalid_token` for a missing, expired, malformed "
         "or wrong-type token, and `invalid_credentials` when sign-in details are rejected."
     ),
-    403: "Authenticated, but this account does not have access to the record (`code: forbidden`).",
+    403: (
+        "Authenticated, but not permitted. `code` is `forbidden` when this account does not "
+        "have access to the record, and `consent_withdrawn` when the patient has withdrawn "
+        "consent — the chart stays readable, but nothing new may be added to it and the "
+        "reasoning engine may not be run over it until consent is re-recorded (DPDP Act)."
+    ),
     404: (
         "No such record, or it belongs to another account — the two are deliberately "
         "indistinguishable so the API does not confirm that a chart exists."

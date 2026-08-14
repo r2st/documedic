@@ -70,6 +70,19 @@ class ReasoningService:
 
         return await PatientService(self.db).get(account_id, patient_id)
 
+    async def _patient_for_processing(
+        self, account_id: uuid.UUID, patient_id: uuid.UUID
+    ) -> Patient:
+        """:meth:`_patient` plus the DPDP lawful-basis check, for opening a session.
+
+        Running the engine is processing personal data, so it needs consent to still be in
+        force; reading a session's questions, answers and suggestions afterwards does not.
+        See :class:`~app.exceptions.ConsentWithdrawnError`.
+        """
+        from app.services.patient_service import PatientService
+
+        return await PatientService(self.db).get_for_processing(account_id, patient_id)
+
     async def _session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> ReasoningSession:
         result = await self.db.execute(
             select(ReasoningSession).where(
@@ -178,7 +191,11 @@ class ReasoningService:
     async def start(
         self, account_id: uuid.UUID, patient_id: uuid.UUID, complaint: str
     ) -> tuple[ReasoningSession, list[IntakeQuestion]]:
-        await self._patient(account_id, patient_id)
+        # Consent is checked here, at the one door into the engine, rather than on each
+        # subsequent step: a session that was lawfully opened stays answerable and runnable, so
+        # a withdrawal recorded mid-consultation does not strand the clinician half way through
+        # an intake with no way to finish or to read the result. The next session is refused.
+        await self._patient_for_processing(account_id, patient_id)
         online = is_available()
         session = ReasoningSession(
             patient_id=patient_id,

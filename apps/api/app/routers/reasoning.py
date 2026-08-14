@@ -41,6 +41,10 @@ router = APIRouter(tags=["reasoning"])
 _SESSION_ERRORS = errors(401, 404)
 # The routes that spend an LLM call also advertise the 429 their rate limit can return.
 _METERED_SESSION_ERRORS = errors(401, 404, 429)
+# Opening a session is the one route here that checks consent, so it is the only one that can
+# 403 — the later steps of a session that was lawfully opened stay available. See
+# ``ReasoningService.start``.
+_START_SESSION_ERRORS = errors(401, 403, 404, 429)
 
 
 def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) -> IntakeStateOut:
@@ -56,7 +60,7 @@ def _intake_state(session: ReasoningSession, pending: Sequence[IntakeQuestion]) 
     response_model=IntakeStateOut,
     status_code=201,
     summary="Open a reasoning session on a presenting complaint",
-    responses=_METERED_SESSION_ERRORS,
+    responses=_START_SESSION_ERRORS,
     dependencies=[Depends(rate_limit("reasoning_intake"))],
 )
 async def start_reasoning(

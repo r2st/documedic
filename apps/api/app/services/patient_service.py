@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import ConsentRequiredError, PatientNotFoundError
+from app.exceptions import ConsentRequiredError, ConsentWithdrawnError, PatientNotFoundError
 from app.models.patient import Patient
 from app.schemas.patient import PatientCreate, PatientUpdate
 from app.services.audit_service import AuditService
@@ -60,6 +60,27 @@ class PatientService:
         patient = result.scalar_one_or_none()
         if patient is None:
             raise PatientNotFoundError()
+        return patient
+
+    async def get_for_processing(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
+        """Fetch a patient for an operation that *processes new personal data*.
+
+        :meth:`get` plus the lawful-basis check. Consent was required to create the chart and
+        then never read again, so setting ``consent_given`` back to false recorded a withdrawal
+        that changed nothing: documents still ingested, the reasoning engine still ran. Under
+        the DPDP Act 2023 a data principal may withdraw at any time and processing has to
+        stop, and ``regulatory_service`` asserts exactly that control in the compliance summary
+        it publishes.
+
+        Used by the three entry points that add to the record or run the engine over it —
+        document upload, extraction approval, and opening a reasoning session. Everything else
+        keeps calling :meth:`get`: withdrawal is not erasure, and see
+        :class:`~app.exceptions.ConsentWithdrawnError` for why the safety checks in particular
+        must not be behind this gate.
+        """
+        patient = await self.get(account_id, patient_id)
+        if not patient.consent_given:
+            raise ConsentWithdrawnError(detail=f"patient {patient_id} has consent_given=False")
         return patient
 
     async def get_for_display(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
@@ -143,7 +164,20 @@ class PatientService:
             patient_id=patient.id,
             entity_type="patient",
             entity_id=patient.id,
-            payload={"changed_fields": sorted(changed.keys())},
+            # The payload carries changed field *names*, never their values -- audit_logs is
+            # unencrypted, so a new full_name must not land here. `consent_given` is the one
+            # exception, and it is the opposite of PII: it is the lawful basis for holding
+            # everything else. Without it the trail said only that consent had been "changed",
+            # so a grant and a withdrawal were the same entry, and the one record that proves
+            # when processing became unlawful could not be read back from it.
+            payload={
+                "changed_fields": sorted(changed.keys()),
+                # The new consent state when this edit changed it, else None. Kept a dict
+                # literal so the payload-contract sweep in test_audit_payload_free_text can
+                # still read the keys statically -- this is the call site that writes whatever
+                # fields a user edited, so it is the last one that should become opaque to it.
+                "consent_given": changed.get("consent_given"),
+            },
         )
         await self.db.commit()
         await self.db.refresh(patient)

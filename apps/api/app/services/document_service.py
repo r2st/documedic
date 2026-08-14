@@ -104,6 +104,20 @@ class DocumentService:
 
         return await PatientService(self.db).get(account_id, patient_id)
 
+    async def _get_patient_for_processing(
+        self, account_id: uuid.UUID, patient_id: uuid.UUID
+    ) -> Patient:
+        """:meth:`_get_patient` plus the DPDP lawful-basis check.
+
+        For ``upload`` and ``approve``, which put new personal data into the record. Listing
+        and downloading what is already there stay on :meth:`_get_patient` — see
+        :class:`~app.exceptions.ConsentWithdrawnError` on why withdrawal stops new processing
+        rather than closing the chart.
+        """
+        from app.services.patient_service import PatientService
+
+        return await PatientService(self.db).get_for_processing(account_id, patient_id)
+
     async def upload(
         self,
         *,
@@ -112,7 +126,9 @@ class DocumentService:
         file_name: str,
         data: bytes,
     ) -> Document:
-        await self._get_patient(account_id, patient_id)  # ownership + existence check
+        # Ownership + existence, and the consent still being in force: this is the front door
+        # for new personal data entering the record.
+        await self._get_patient_for_processing(account_id, patient_id)
 
         # The client controls this string; it is persisted and echoed into the audit payload,
         # so cap it rather than storing an arbitrarily long name.
@@ -399,7 +415,9 @@ class DocumentService:
     ) -> dict[str, int]:
         # Locked: the merge below reads the chart to decide what is already in it. See `get`.
         document = await self.get(account_id, patient_id, doc_id, for_update=True)
-        patient = await self._get_patient(account_id, patient_id)
+        # Approval is what merges the extracted entities into the chart, so it is new
+        # processing even though the file arrived earlier.
+        patient = await self._get_patient_for_processing(account_id, patient_id)
         meta = dict(document.extraction_metadata or {})
         raw_entities = meta.get("entities", [])
 
