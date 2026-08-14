@@ -122,6 +122,13 @@ describe('checkTypeLabel', () => {
   it('names the chart-level checks so they are not anonymous amber boxes', () => {
     expect(checkTypeLabel('hepatic_severity')).toBe('Liver function');
     expect(checkTypeLabel('hepatotoxic_burden')).toBe('Hepatotoxic burden');
+    expect(checkTypeLabel('bleeding_burden')).toBe('Bleeding risk');
+  });
+
+  it('labels the cumulative bleeding finding as its own thing, not as an interaction', () => {
+    // It sits on the same card as four "Drug interaction" rows and says something none of them
+    // say — that the four are one problem. Sharing their label would lose exactly that.
+    expect(checkTypeLabel('bleeding_burden')).not.toBe(checkTypeLabel('drug_interaction'));
   });
 
   it('words the unevaluated checks as a check that did not run, not as a finding', () => {

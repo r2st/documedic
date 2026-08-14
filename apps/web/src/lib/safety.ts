@@ -80,6 +80,7 @@ function severityRank(severity: string): number {
  */
 const CHECK_TYPE_LABELS: Record<string, string> = {
   allergy_conflict: 'Allergy conflict',
+  bleeding_burden: 'Bleeding risk',
   contraindication: 'Contraindication',
   drug_interaction: 'Drug interaction',
   duplicate_therapy: 'Duplicate therapy',

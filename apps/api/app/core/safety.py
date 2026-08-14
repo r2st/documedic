@@ -25,6 +25,12 @@ second drug in the same therapeutic class the patient is already on (e.g. two AC
 None of these are covered by the interaction-rule table (which only fires on specific curated
 drug pairs), so they are a distinct, always-on offline check.
 
+Cumulative-burden detection (check_hepatotoxic_burden, check_bleeding_burden) is the same
+argument applied to risk that accrues across a whole medication list rather than within a pair.
+A table of pairs cannot say "each of these pairs is acceptable and the four together are not",
+which is precisely the shape of the two commonest dangerous polypharmacy patterns: stacked
+hepatotoxic drugs, and stacked antithrombotics.
+
 Allergy cross-reactivity (check_allergies) additionally consults a curated map of clinically
 recognised cross-reactive drug-class families (e.g. penicillins <-> cephalosporins) so a
 documented allergy to one class also flags a structurally related class, not only an exact
@@ -62,6 +68,7 @@ CheckType = Literal[
     "unevaluated_allergy",
     "hepatic_severity",
     "hepatotoxic_burden",
+    "bleeding_burden",
     "unevaluated_condition",
 ]
 
@@ -1544,6 +1551,159 @@ def check_hepatotoxic_burden(proposed: DrugRef, ctx: SafetyContext) -> list[Safe
     ]
 
 
+# --- Cumulative bleeding risk --------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _BleedingMechanism:
+    """How a drug class raises bleeding risk, and whether it does so on its own."""
+
+    label: str
+    # True for a class that does not itself impair haemostasis but makes another agent's bleed
+    # more likely or more severe — a corticosteroid does not thin the blood, and a corticosteroid
+    # on top of an NSAID multiplies the risk of an upper-GI bleed. A set consisting only of
+    # potentiators is not a bleeding-risk set, which is what ``potentiator_only`` is read for.
+    potentiator_only: bool = False
+
+
+_ANTICOAGULATION = "anticoagulation"
+
+# Bleeding mechanism by drug CLASS, lower-cased.
+#
+# Keyed on class rather than on a curated per-drug column, deliberately. Bleeding risk here is a
+# property of the mechanism the class names — every antiplatelet inhibits platelets — so a
+# per-row column would be a curation surface with nothing to check it against, which is exactly
+# how the interaction table came to cover one strength of aspirin and not the other. A class is
+# already curated once per row and is already what ``check_duplicate_therapy`` and the
+# cross-reactivity table are written against.
+#
+# Classes with no standalone row in this vocabulary (DOACs, heparins, SSRIs) are listed anyway:
+# they are the drugs a real formulary adds next, and an absent key fails silent.
+_BLEEDING_MECHANISM_CLASSES: dict[str, _BleedingMechanism] = {
+    "vitamin k antagonist": _BleedingMechanism(_ANTICOAGULATION),
+    "anticoagulant": _BleedingMechanism(_ANTICOAGULATION),
+    "direct oral anticoagulant": _BleedingMechanism(_ANTICOAGULATION),
+    "heparin": _BleedingMechanism(_ANTICOAGULATION),
+    "low molecular weight heparin": _BleedingMechanism(_ANTICOAGULATION),
+    "antiplatelet": _BleedingMechanism("platelet inhibition"),
+    "salicylate": _BleedingMechanism("platelet inhibition"),
+    "nsaid": _BleedingMechanism("platelet inhibition with GI mucosal injury"),
+    "ssri": _BleedingMechanism("platelet inhibition"),
+    "snri": _BleedingMechanism("platelet inhibition"),
+    "corticosteroid": _BleedingMechanism("GI mucosal injury", potentiator_only=True),
+}
+
+
+def _bleeding_agents(drug: DrugRef) -> dict[str, _BleedingMechanism]:
+    """``{generic name: mechanism}`` for every identity of this product that can bleed a patient.
+
+    Ingredient-by-ingredient, because the combination is where this is least visible. An
+    aspirin+clopidogrel fixed-dose tablet — a very widely prescribed product in this market — has
+    a product class naming neither molecule, so a check written against the product alone reads
+    one tablet where the patient is taking two antiplatelets.
+    """
+    agents: dict[str, _BleedingMechanism] = {}
+    for ing in _ingredients(drug):
+        mechanism = _BLEEDING_MECHANISM_CLASSES.get(_norm(ing.drug.drug_class))
+        if mechanism is not None:
+            agents.setdefault(ing.drug.generic_name, mechanism)
+    return agents
+
+
+def check_bleeding_burden(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Flag the *set* of bleeding-risk drugs on a chart, which no pairwise rule expresses.
+
+    ``check_interactions`` grades one curated pair at a time, and that is the wrong shape for the
+    commonest dangerous polypharmacy there is. A patient on warfarin, aspirin, clopidogrel and
+    diclofenac has six pairs; the curated table carries three of them, each graded "major", and
+    the screen shows three findings of the same weight a single warfarin+aspirin chart would
+    show. Nothing anywhere says the patient is on four agents that each independently impair
+    haemostasis — which is the clinical picture, and is worse than any pair in it.
+
+    The gaps are not an oversight in the table so much as a consequence of its shape. Some pairs
+    are deliberately absent: dual antiplatelet therapy is prescribed on purpose after a stent, and
+    curating aspirin+clopidogrel as an interaction would fire an amber card on correct treatment.
+    It is the *third* and fourth agent that changes the picture, and a pairwise table has no way
+    to say "this pair is fine, and these four together are not".
+
+    So this is the same argument ``check_duplicate_therapy`` and ``check_hepatotoxic_burden``
+    already make: the burden is a property of the set, and a table of pairs cannot carry it.
+
+    Fires only when the proposed drug itself raises bleeding risk — a chart full of
+    anticoagulants is not a reason to flag a levothyroxine — and only when the chart adds at
+    least one further such drug. A drug whose class this table does not carry contributes
+    nothing and is never counted as safe, for the same reason a ``None`` hepatotoxicity is not
+    counted as clean: fifty seeded drugs are not a formulary.
+
+    Never a hard block. Triple therapy after a stent in a patient with atrial fibrillation is a
+    real, guideline-supported prescription; refusing it would be wrong, and the decision needs
+    the clinician.
+    """
+    proposed_agents = _bleeding_agents(proposed)
+    if not proposed_agents:
+        return []
+
+    concurrent: dict[str, _BleedingMechanism] = {}
+    for med in ctx.current_meds:
+        if med.reference_id and med.reference_id == proposed.reference_id:
+            continue
+        for name, mechanism in _bleeding_agents(med).items():
+            # A molecule already counted on the proposed product is the same molecule, not a
+            # second agent — re-ordering aspirin for a patient on aspirin is a duplicate, which
+            # ``check_duplicate_therapy`` reports, and doubling it here would turn one drug into
+            # a two-agent bleeding set.
+            if name not in proposed_agents:
+                concurrent.setdefault(name, mechanism)
+    if not concurrent:
+        return []
+
+    combined = {**proposed_agents, **concurrent}
+    # Agents that impair haemostasis in their own right. A chart carrying only potentiators —
+    # prednisolone beside another steroid — is not a bleeding-risk set at all.
+    haemostatic = sorted(name for name, m in combined.items() if not m.potentiator_only)
+    if not haemostatic:
+        return []
+
+    mechanisms = sorted({m.label for m in combined.values()})
+    anticoagulated = any(m.label == _ANTICOAGULATION for m in combined.values())
+    # Conservative per Critical Safety Rule #2, and graded on the two things the bleeding
+    # literature actually separates: how many agents, and whether one of them is an
+    # anticoagulant. An anticoagulant plus any second haemostatic agent is the combination that
+    # fills medical wards; three such agents is triple therapy however it was arrived at.
+    is_critical = len(haemostatic) >= 3 or (anticoagulated and len(haemostatic) >= 2)
+
+    proposed_label = ", ".join(sorted({m.label for m in proposed_agents.values()}))
+    listed = ", ".join(sorted(concurrent))
+    return [
+        SafetyFlag(
+            check_type="bleeding_burden",
+            severity="critical" if is_critical else "warning",
+            is_hard_block=False,
+            summary=(
+                f"{proposed.generic_name} raises bleeding risk ({proposed_label}), and this "
+                f"chart carries {len(concurrent)} other medication(s) that also do ({listed}) — "
+                f"{len(haemostatic)} agents impairing haemostasis across "
+                f"{len(mechanisms)} mechanism(s) ({', '.join(mechanisms)}). Interaction rules "
+                "grade one pair at a time, so a set like this is reported as several separate "
+                "findings each carrying the weight of a single pair, and some pairs in it may "
+                "carry no curated rule at all. Guidelines support reviewing whether each agent "
+                "is still indicated, and considering gastroprotection where the combination is "
+                "intended. Scored only against the drugs whose class this vocabulary curates: "
+                "medications it carries no bleeding-risk class for were not counted either way."
+            ),
+            details={
+                "proposed_drug": proposed.generic_name,
+                "proposed_bleeding_mechanisms": sorted({m.label for m in proposed_agents.values()}),
+                "concurrent_bleeding_drugs": sorted(concurrent),
+                "bleeding_mechanisms": mechanisms,
+                "haemostatic_agents": haemostatic,
+                "haemostatic_agent_count": len(haemostatic),
+                "includes_anticoagulant": anticoagulated,
+            },
+        )
+    ]
+
+
 def check_unevaluated_conditions(ctx: SafetyContext) -> list[SafetyFlag]:
     """Say so when a charted condition could not be compared to any rule, rather than dropping it.
 
@@ -1713,6 +1873,7 @@ def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFl
     flags.extend(check_contraindications(proposed, ctx))
     flags.extend(check_duplicate_therapy(proposed, ctx))
     flags.extend(check_hepatotoxic_burden(proposed, ctx))
+    flags.extend(check_bleeding_burden(proposed, ctx))
     flags.extend(check_guideline_adherence(proposed, ctx))
     return flags
 

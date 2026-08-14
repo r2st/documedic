@@ -71,9 +71,12 @@ def test_major_interaction_is_critical_not_hard_block():
         interaction_rules=[InteractionRule("ASP-75", "DIC-50", "major", "GI bleeding risk")],
     )
     flags = evaluate_drug_safety(DICLOFENAC, ctx)
-    assert len(flags) == 1
-    assert flags[0].severity == "critical"
-    assert not flags[0].is_hard_block
+    # An NSAID on top of an antiplatelet is also a two-agent bleeding set, so the full
+    # evaluation raises ``bleeding_burden`` alongside the pair. This test is about the pair.
+    interactions = [f for f in flags if f.check_type == "drug_interaction"]
+    assert len(interactions) == 1
+    assert interactions[0].severity == "critical"
+    assert not interactions[0].is_hard_block
     assert not has_hard_block(flags)
 
 
@@ -465,9 +468,11 @@ def test_an_interaction_severity_the_engine_does_not_recognise_warns_without_blo
 
     flags = evaluate_drug_safety(DICLOFENAC, ctx)
 
-    assert len(flags) == 1
-    assert flags[0].severity == "warning"
-    assert flags[0].is_hard_block is False
+    # The NSAID-on-antiplatelet bleeding set is raised too; this is about the pair's grading.
+    interactions = [f for f in flags if f.check_type == "drug_interaction"]
+    assert len(interactions) == 1
+    assert interactions[0].severity == "warning"
+    assert interactions[0].is_hard_block is False
 
 
 def test_no_duplicate_therapy_finding_is_ever_a_hard_block():

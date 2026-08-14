@@ -110,3 +110,56 @@ async def test_the_proposed_drug_check_leaves_the_attribution_null(db) -> None:
 
     assert responses
     assert all(r.drug_reference_id is None for r in responses)
+
+
+async def test_the_five_drug_chart_carries_one_set_level_finding_per_bleeding_drug(db) -> None:
+    """The gap the pairwise view leaves, seen through the endpoint that renders it.
+
+    ``_POLYPHARMACY`` is warfarin, aspirin, diclofenac and ibuprofen — four agents that each
+    impair haemostasis, on the chart shape this file already exists for. Every pairwise finding
+    on that screen carries the weight of one pair, so the screen never states the thing a
+    clinician most needs to read off it: that these four are one bleeding problem, not four
+    independent warnings that happen to be adjacent.
+    """
+    account, patient = await _chart(db)
+    if await _vocab(db, "Clopidogrel") is None:
+        pytest.skip("seed corpus lacks Clopidogrel")
+    await _add_current_med(db, patient, "Clopidogrel")
+
+    results = await SafetyService(db).active_flags(account_id=account.id, patient_id=patient.id)
+    responses = [_flag_to_response(f, None, vocab) for vocab, flags in results for f in flags]
+
+    burden = [r for r in responses if r.check_type == "bleeding_burden"]
+    # One per bleeding-risk drug: this is a per-drug view, and the attribution above is what
+    # makes that legible rather than duplicated.
+    assert {r.drug_name for r in burden} == {
+        "Warfarin",
+        "Aspirin",
+        "Diclofenac",
+        "Ibuprofen",
+        "Clopidogrel",
+    }
+    # Five agents on one chart is the most conservative grade this check has.
+    assert all(r.severity == "critical" for r in burden), [
+        (r.drug_name, r.severity) for r in burden
+    ]
+    assert all(r.is_hard_block is False for r in burden)
+
+
+async def test_the_set_level_finding_outranks_the_pairwise_ones_it_summarises(db) -> None:
+    """It is graded critical while the "major" pairs it summarises are graded critical too — so
+    what has to hold is that it is never *quieter* than the pairs, or the one finding that
+    describes the whole chart would sort below the four that describe parts of it."""
+    account, patient = await _chart(db)
+
+    results = await SafetyService(db).active_flags(account_id=account.id, patient_id=patient.id)
+    responses = [_flag_to_response(f, None, vocab) for vocab, flags in results for f in flags]
+
+    order = ["hard_block", "critical", "warning", "info"]
+    interactions = [r for r in responses if r.check_type == "drug_interaction"]
+    burden = [r for r in responses if r.check_type == "bleeding_burden"]
+    assert interactions and burden
+
+    worst_pair = min(order.index(r.severity) for r in interactions)
+    worst_set = min(order.index(r.severity) for r in burden)
+    assert worst_set <= worst_pair
