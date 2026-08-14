@@ -9,13 +9,19 @@ running; the ClinicalSuggestion records they emit are immutable.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import settings
 from app.db.types import GUID, JSONBType
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
+
+# The one status that means "a pipeline run holds this session". Defined here rather than in
+# the service because the lease rule that interprets it lives on the model now, and two spellings
+# of the same string is how the reader and the claim would drift apart.
+RUNNING = "reasoning"
 
 _STATUSES = (
     "created",
@@ -90,3 +96,33 @@ class ReasoningSession(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Bas
     run_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def run_in_progress(self) -> bool:
+        """Whether a pipeline run holds this session *right now*.
+
+        Not the same question as ``status == "reasoning"``, and the difference is the whole
+        reason this exists. A run that was killed rather than finished leaves that status behind
+        with nothing to clear it — the ordinary way it happens is a Reasoning Theatre tab
+        closing, which cancels the worker with a ``CancelledError`` no failure handler sees. The
+        session then reads as running forever while :meth:`ReasoningService.assert_runnable`
+        will happily start a new run on it.
+
+        A client cannot be expected to hold both halves of that. Gating a Run button on the
+        status — the obvious thing to do — strands the clinician for the whole lease on a case
+        whose run already died, which is the failure the lease was added to prevent, moved from
+        the server to the browser. So the live answer is computed here, from the same rule the
+        claim uses, and serialized alongside the recorded status rather than replacing it: the
+        status is still what the record says happened, and this is whether it is happening.
+
+        A NULL ``run_claimed_at`` under a ``reasoning`` status is a session from before the
+        column existed, or one whose claim predates it. Nothing can argue the claim is live, so
+        the forgiving reading is the only safe one.
+        """
+        if self.status != RUNNING or self.run_claimed_at is None:
+            return False
+        # SQLite drops tzinfo on round-trip; a naive timestamp is UTC.
+        claimed = self.run_claimed_at
+        if claimed.tzinfo is None:
+            claimed = claimed.replace(tzinfo=UTC)
+        return claimed + timedelta(minutes=settings.reasoning_run_lease_minutes) > datetime.now(UTC)

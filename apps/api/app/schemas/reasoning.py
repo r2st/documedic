@@ -55,6 +55,13 @@ class ReasoningSessionOut(BaseModel):
     patient_id: uuid.UUID
     presenting_complaint: str
     status: ReasoningStatus
+    # Whether the panel is running *now*, which ``status`` cannot answer on its own. A run
+    # killed rather than finished — a Reasoning Theatre tab closing is the ordinary way — leaves
+    # ``status`` reading ``reasoning`` with nothing to clear it, while the server will start a
+    # new run on that session quite happily. Gate a Run control on this, not on the status, or a
+    # clinician is locked out of a case whose run already died. See
+    # ``ReasoningSession.run_in_progress``.
+    run_in_progress: bool
     autonomy_tier: AutonomyTier | None
     intake_complete: bool
     info_gain_score: float | None

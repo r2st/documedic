@@ -155,6 +155,14 @@ export interface ReasoningSession {
   patient_id: string;
   presenting_complaint: string;
   status: ReasoningStatus;
+  /**
+   * Whether the panel is running right now. `status` cannot answer that on its own: a run
+   * killed rather than finished — closing this tab mid-stream is the ordinary way — leaves
+   * `status` reading `'reasoning'` with nothing to clear it, while the server will start a new
+   * run on that session quite happily. Gate a Run control on this rather than on the status, or
+   * a clinician is locked out of a case whose run already died.
+   */
+  run_in_progress: boolean;
   autonomy_tier: AutonomyTier | null;
   intake_complete: boolean;
   info_gain_score: number | null;

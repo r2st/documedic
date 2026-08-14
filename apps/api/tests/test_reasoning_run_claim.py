@@ -363,6 +363,72 @@ async def test_an_ordinary_first_run_is_not_flagged_as_a_takeover(auth_client, d
     assert entry.payload["previous_status"] != RUNNING
 
 
+# --- What a client is told --------------------------------------------------------------------
+
+
+async def test_the_session_read_says_a_run_is_in_progress_while_one_holds_it(auth_client, db):
+    session_id = await _session_id(auth_client)
+    await _plant_claim(db, session_id, age=timedelta(seconds=5))
+
+    body = (await auth_client.get(f"/api/v1/reasoning/{session_id}")).json()
+
+    assert body["status"] == RUNNING
+    assert body["run_in_progress"] is True
+
+
+async def test_an_abandoned_run_is_reported_as_not_in_progress(auth_client, db):
+    """The half a bare ``status`` cannot tell a client, and the one that locks clinicians out.
+
+    A Run control gated on ``status == 'reasoning'`` — the obvious way to build it — would stay
+    disabled for the whole lease on a case whose run died when a tab closed. That is the failure
+    the lease exists to prevent, moved from the server into the browser. The status still
+    reports what the record says; this reports whether it is still true.
+    """
+    session_id = await _session_id(auth_client)
+    await _plant_claim(
+        db, session_id, age=timedelta(minutes=settings.reasoning_run_lease_minutes + 1)
+    )
+
+    body = (await auth_client.get(f"/api/v1/reasoning/{session_id}")).json()
+
+    assert body["status"] == RUNNING, "the recorded status should be left as it was"
+    assert body["run_in_progress"] is False
+
+
+async def test_what_the_read_reports_agrees_with_what_a_run_would_do(auth_client, db):
+    """One rule, not two. A client told a run is in progress by one rule while the claim
+    permits or refuses by another is worse than either rule being wrong on its own."""
+    session_id = await _session_id(auth_client)
+
+    for age in (
+        timedelta(seconds=5),
+        timedelta(minutes=settings.reasoning_run_lease_minutes + 1),
+    ):
+        await _plant_claim(db, session_id, age=age)
+        reported = (await auth_client.get(f"/api/v1/reasoning/{session_id}")).json()[
+            "run_in_progress"
+        ]
+        refused = (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 409
+        assert reported is refused, f"read and claim disagree at claim age {age}"
+
+
+async def test_a_session_that_never_ran_is_not_in_progress(auth_client):
+    session_id = await _session_id(auth_client)
+
+    body = (await auth_client.get(f"/api/v1/reasoning/{session_id}")).json()
+
+    assert body["run_in_progress"] is False
+
+
+async def test_a_finished_run_is_not_reported_as_in_progress(auth_client):
+    session_id = await _session_id(auth_client)
+
+    assert (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 200
+
+    body = (await auth_client.get(f"/api/v1/reasoning/{session_id}")).json()
+    assert body["run_in_progress"] is False
+
+
 # --- The claim primitive ----------------------------------------------------------------------
 
 

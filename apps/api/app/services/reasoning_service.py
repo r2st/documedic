@@ -12,7 +12,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
@@ -28,7 +28,7 @@ from app.exceptions import NotFoundError, ReasoningRunInProgressError, Validatio
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.patient import Patient
-from app.models.reasoning_session import ReasoningSession
+from app.models.reasoning_session import RUNNING, ReasoningSession
 from app.services.audit_service import AuditDraft, AuditService
 from app.services.guideline_service import GuidelineService
 from app.services.record_service import REASONING_SNAPSHOT_LIMIT, RecordService
@@ -36,16 +36,9 @@ from app.services.safety_service import SafetyFlag, SafetyService
 
 logger = logging.getLogger(__name__)
 
-# The one status that means "a pipeline run holds this session".
-RUNNING = "reasoning"
-
-
-def _aware(dt: datetime) -> datetime:
-    """SQLite drops tzinfo on round-trip; treat a naive timestamp as UTC.
-
-    Same helper, same reason, as ``app.services.auth_service._aware``.
-    """
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+# Re-exported: the claim reads and writes this status, and it is defined next to the lease rule
+# that interprets it. Importers of this module keep their existing spelling.
+__all__ = ["RUNNING", "ReasoningService"]
 
 
 class ReasoningSessionNotFoundError(NotFoundError):
@@ -402,24 +395,12 @@ class ReasoningService:
     def _claim_is_live(self, session: ReasoningSession) -> bool:
         """Whether a run currently holds this session.
 
-        ``reasoning`` alone is not enough to answer. A run that was killed rather than finished
-        leaves the status behind with nothing to clear it — and that is the ordinary case, not a
-        rare one: the Reasoning Theatre streams over SSE, and a browser tab closing cancels the
-        worker task with a ``CancelledError`` that the failure handler (which catches
-        ``Exception``) never sees. So a claim is live only while its lease holds. Past that it is
-        abandoned, and refusing to run because of it would make the case permanently unrunnable
-        by a clinician who did nothing wrong.
-
-        A NULL ``run_claimed_at`` under a ``reasoning`` status is a session from before the
-        column existed, or one whose claim predates it. Treated as abandoned, which is the
-        forgiving reading and the only safe one — there is no timestamp to argue otherwise.
+        The rule itself is :attr:`ReasoningSession.run_in_progress`, and it is deliberately in
+        one place: the same answer is serialized to clients, and a client told a run is in
+        progress by one rule while the claim refuses or permits by another is worse than either
+        rule being wrong. This wrapper exists so the refusal below reads as what it is.
         """
-        if session.status != RUNNING:
-            return False
-        if session.run_claimed_at is None:
-            return False
-        lease = timedelta(minutes=settings.reasoning_run_lease_minutes)
-        return _aware(session.run_claimed_at) + lease > datetime.now(UTC)
+        return session.run_in_progress
 
     def assert_runnable(self, session: ReasoningSession) -> None:
         """Refuse early if a run already holds this session. Advisory, not the guarantee.

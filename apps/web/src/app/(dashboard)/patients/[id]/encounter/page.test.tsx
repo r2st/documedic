@@ -75,6 +75,7 @@ function intakeState(overrides: Partial<IntakeState> = {}): IntakeState {
       patient_id: 'pat-1',
       presenting_complaint: 'chest pain',
       status: 'intake',
+      run_in_progress: false,
       autonomy_tier: null,
       intake_complete: false,
       info_gain_score: null,
