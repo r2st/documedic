@@ -8,8 +8,19 @@ export type ExtractionConfidence = 'high' | 'medium' | 'low';
 
 export type SafetySeverity = 'info' | 'warning' | 'critical' | 'hard_block';
 
+// Mirrors app.core.safety.CheckType. The last two are not conflicts the engine found but
+// statements that part of the chart could not be evaluated at all — an unreadable medication
+// line, an allergen the vocabulary cannot identify — which must never render as a clean check.
 export type SafetyCheckType =
-  'drug_interaction' | 'contraindication' | 'allergy_conflict' | 'renal_dose' | 'hepatic_dose';
+  | 'drug_interaction'
+  | 'contraindication'
+  | 'allergy_conflict'
+  | 'renal_dose'
+  | 'hepatic_dose'
+  | 'duplicate_therapy'
+  | 'guideline_deviation'
+  | 'unevaluated_medication'
+  | 'unevaluated_allergy';
 
 export type ReasoningStatus =
   | 'created'

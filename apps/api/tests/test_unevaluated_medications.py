@@ -238,7 +238,7 @@ async def test_the_flag_is_raised_once_per_chart_not_once_per_named_drug(db) -> 
     screened = await service.screen_text(patient.id, "Consider Metformin or Glimepiride.")
 
     assert [f for f in screened if f.check_type == "unevaluated_medication"] == []
-    assert len(await service.unevaluated_medication_flags(patient.id)) == 1
+    assert len(await service.chart_completeness_flags(patient.id)) == 1
 
 
 # --- through the API ---------------------------------------------------------------------

@@ -22,6 +22,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     SafetyFlag,
+    check_unevaluated_allergies,
     check_unevaluated_medications,
     evaluate_drug_safety,
     has_hard_block,
@@ -121,10 +122,12 @@ class SafetyService:
             allergy_rows = await self._active_allergy_rows(patient_id)
             vocab_by_id = await self._vocabulary_by_id(med_rows, allergy_rows)
             current_meds, unresolved = await self._current_meds(med_rows, vocab_by_id)
+            allergies, unidentified_allergies = await self._allergies(allergy_rows, vocab_by_id)
             self._facts[patient_id] = SafetyContext(
                 current_meds=current_meds,
                 unresolved_current_meds=unresolved,
-                allergies=await self._allergies(allergy_rows, vocab_by_id),
+                allergies=allergies,
+                unresolved_allergies=unidentified_allergies,
                 conditions=await self._conditions(patient_id),
                 egfr=await self._latest_egfr(patient_id),
             )
@@ -145,7 +148,12 @@ class SafetyService:
             select(Allergy).where(
                 Allergy.patient_id == patient_id,
                 Allergy.is_deleted.is_(False),
-                Allergy.status == "active",
+                # "unknown" alongside "active": the four permitted statuses are active,
+                # resolved, refuted and unknown, and only the middle two are the chart saying
+                # this allergy is not a live concern. An allergy nobody has been able to
+                # confirm is the one a hard block exists for, and reading it as absent is the
+                # same fail-open shape as an allergen the vocabulary cannot identify.
+                Allergy.status.in_(("active", "unknown")),
             )
         )
         return list(result.scalars().all())
@@ -214,13 +222,22 @@ class SafetyService:
 
     async def _allergies(
         self, allergy_rows: list[Allergy], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
-    ) -> list[PatientAllergy]:
+    ) -> tuple[list[PatientAllergy], list[str]]:
+        """The chart's allergies as evaluable ones, and the drug allergens that are not.
+
+        The second half is the allergy counterpart of ``_current_meds``' unresolved list, and it
+        matters more. An allergen with no reference id and no drug class reduces
+        ``check_allergies`` to comparing the raw charted text against the proposed drug's INN,
+        so a documented allergy to an unseeded brand contributes nothing at all — see
+        ``check_unevaluated_allergies``.
+        """
         await self.resolver.prefetch(
             a.allergen_name
             for a in allergy_rows
             if a.drug_vocabulary_id is None and a.allergen_type == "drug"
         )
         out: list[PatientAllergy] = []
+        unidentified: list[str] = []
         for a in allergy_rows:
             ref_id, drug_class = None, None
             vocab = vocab_by_id.get(a.drug_vocabulary_id) if a.drug_vocabulary_id else None
@@ -230,6 +247,8 @@ class SafetyService:
                 resolved = await self.resolver.resolve(a.allergen_name)
                 if resolved:
                     ref_id, drug_class = resolved.reference_id, resolved.drug_class
+                elif a.allergen_name and a.allergen_name.strip():
+                    unidentified.append(a.allergen_name.strip())
             out.append(
                 PatientAllergy(
                     allergen_name=a.allergen_name,
@@ -238,7 +257,7 @@ class SafetyService:
                     allergy_id=str(a.id),
                 )
             )
-        return out
+        return out, unidentified
 
     async def _conditions(self, patient_id: uuid.UUID) -> list[PatientCondition]:
         result = await self.db.execute(
@@ -440,18 +459,25 @@ class SafetyService:
         # Appended, not folded into ``evaluate_drug_safety``: it is a statement about the chart
         # rather than about the proposed drug, so it must not be repeated once per drug by the
         # callers that evaluate several against one context (``screen_text``, ``active_flags``).
-        flags = evaluate_drug_safety(proposed, ctx) + check_unevaluated_medications(ctx)
+        flags = (
+            evaluate_drug_safety(proposed, ctx)
+            + check_unevaluated_medications(ctx)
+            + check_unevaluated_allergies(ctx)
+        )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
         return vocab, ctx, flags, check_ids
 
-    async def unevaluated_medication_flags(self, patient_id: uuid.UUID) -> list[SafetyFlag]:
-        """The chart-level "this much of the record could not be read" flag, or nothing.
+    async def chart_completeness_flags(self, patient_id: uuid.UUID) -> list[SafetyFlag]:
+        """The chart-level "this much of the record could not be read" flags, or nothing.
 
-        Exposed for ``GET ../flags``, whose response is one flat list for the whole chart and
-        so wants this once rather than once per drug. Served from the same memoised patient
-        facts the surrounding call already built, so it costs no additional query.
+        Statements about the chart rather than about any one proposed drug — an unreadable
+        medication line, an allergen the vocabulary cannot identify — so ``GET ../flags`` wants
+        them once for the whole chart rather than repeated under every drug. Served from the
+        same memoised patient facts the surrounding call already built, so they cost no
+        additional query.
         """
-        return check_unevaluated_medications(await self._patient_facts(patient_id))
+        facts = await self._patient_facts(patient_id)
+        return check_unevaluated_medications(facts) + check_unevaluated_allergies(facts)
 
     async def _persist(
         self,

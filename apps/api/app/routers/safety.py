@@ -93,6 +93,11 @@ async def check_medication(
             # matched to the vocabulary. Without this the count reads as the whole medication
             # list and quietly shrinks by whatever the resolver could not read.
             "unresolved_medications": len(ctx.unresolved_current_meds),
+            # Likewise for `allergies`, which counts every documented allergy including the
+            # ones carrying no reference id and no drug class. Those were cross-checked against
+            # nothing but an exact generic-name match, so the headline count overstates how
+            # much of Critical Safety Rule #3 actually ran.
+            "unresolved_allergies": len(ctx.unresolved_allergies),
         },
         flags=[_flag_to_response(f, cid) for f, cid in zip(flags, check_ids, strict=True)],
     )
@@ -124,12 +129,10 @@ async def active_flags(
     flags: list[SafetyFlagResponse] = []
     for _vocab, flag_list in results:
         flags.extend(_flag_to_response(f) for f in flag_list)
-    # Once for the chart, not once per drug: a medication the resolver could not read is
-    # missing from every drug's evaluation here, so an empty list above is not the same as a
-    # clean one. Served from the facts the call above already loaded.
-    flags.extend(
-        _flag_to_response(f) for f in await service.unevaluated_medication_flags(patient_id)
-    )
+    # Once for the chart, not once per drug: a medication or an allergen the resolver could
+    # not read is missing from every drug's evaluation here, so an empty list above is not
+    # the same as a clean one. Served from the facts the call above already loaded.
+    flags.extend(_flag_to_response(f) for f in await service.chart_completeness_flags(patient_id))
     # After the check, immediately before the commit: the append lock is transaction-scoped
     # on PostgreSQL, so auditing first would hold it across the whole re-evaluation.
     await AuditService(db).record(

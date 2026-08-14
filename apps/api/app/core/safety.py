@@ -50,6 +50,7 @@ CheckType = Literal[
     "duplicate_therapy",
     "guideline_deviation",
     "unevaluated_medication",
+    "unevaluated_allergy",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -182,6 +183,9 @@ class SafetyContext:
     # are absent from ``current_meds`` and from every rule evaluated against it. See
     # ``check_unevaluated_medications``.
     unresolved_current_meds: list[str] = field(default_factory=list)
+    # Names of documented *drug* allergies the vocabulary could not identify, so the entry
+    # carries no reference id and no drug class. See ``check_unevaluated_allergies``.
+    unresolved_allergies: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -913,6 +917,61 @@ def check_unevaluated_medications(ctx: SafetyContext) -> list[SafetyFlag]:
             ),
             details={
                 "unresolved_medications": names,
+                "evaluated": False,
+            },
+        )
+    ]
+
+
+def check_unevaluated_allergies(ctx: SafetyContext) -> list[SafetyFlag]:
+    """Say so when a documented allergy could not be identified, instead of ignoring it.
+
+    ``check_allergies`` fires on three things: the allergy's resolved reference id, its resolved
+    drug class, and its raw name compared to the proposed drug's generic name. A documented drug
+    allergy the vocabulary cannot identify — an Indian brand the seed data has not been given, a
+    combination product, an OCR'd scrawl off a referral letter — has neither of the first two, so
+    all that is left is the third, and the third only fires when the chart happens to have
+    written the INN.
+
+    Which means a chart carrying "allergic to Calpol 650" and a proposal of paracetamol produces
+    exactly the same empty flag list as a chart carrying no allergies at all. That is Critical
+    Safety Rule #3, the one rule in this file that admits no override without documented
+    reasoning, failing open on the sole ground that nobody has seeded the brand — and it is
+    precisely the case CLAUDE.md pitfall #4 names ("a patient's allergy to Crocin must match
+    against Paracetamol").
+
+    Nothing here can close that gap by being cleverer: matching an unknown name to a drug is a
+    guess, and a guess that manufactures a hard block is its own harm. What can be closed is the
+    silence. This is the same judgement ``check_unevaluated_medications`` makes for the other
+    half of the chart, applied to the higher-stakes half.
+
+    A warning rather than a hard block, for that function's reason: blocking every prescription
+    on every chart with one unrecognised allergen would teach clinicians to click through the
+    real blocks. What the clinician needs is to be told which allergy was not cross-checked.
+    """
+    if not ctx.unresolved_allergies:
+        return []
+    names = sorted({name.strip() for name in ctx.unresolved_allergies if name.strip()})
+    if not names:
+        return []
+    listed = ", ".join(f"“{name}”" for name in names)
+    plural = len(names) != 1
+    return [
+        SafetyFlag(
+            check_type="unevaluated_allergy",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"{len(names)} documented allerg{'ies' if plural else 'y'} on this chart "
+                f"could not be matched to a known drug ({listed}), so "
+                f"{'they were' if plural else 'it was'} cross-checked only against an exact "
+                "generic-name match — no brand, ingredient or drug-class check was performed "
+                f"against {'them' if plural else 'it'}. This is not the same as “no allergy "
+                "conflict”. Confirm what the allergen is, or ask for it to be added to the drug "
+                "vocabulary."
+            ),
+            details={
+                "unresolved_allergies": names,
                 "evaluated": False,
             },
         )
