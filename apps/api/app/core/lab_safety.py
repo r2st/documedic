@@ -11,6 +11,11 @@ Panic values are the more severe tier nested inside critical (panic implies crit
 glucose and creatinine get unit-aware conversion (mg/dL <-> mmol/L / µmol/L) because Indian labs
 occasionally report either; everything else assumes the near-universal unit noted in
 ``CriticalRange.unit`` and is skipped (never guessed) when the supplied unit looks incompatible.
+
+A row carrying *no* unit is the harder case, and it is ordinary: the unit lives in a column
+header that columnar extraction does not always carry down to the row, or in a footnote OCR
+dropped. Such a row is read in the canonical unit only when no other unit this marker is
+reported in could produce the same number — see ``_UNITLESS_BANDS``.
 """
 
 from __future__ import annotations
@@ -133,6 +138,72 @@ _UNIT_SYNONYMS: dict[str, frozenset[str]] = {
     "hemoglobin": frozenset({"gm/dl", "gms/dl", "gm%", "g%"}),
 }
 
+
+@dataclass(frozen=True)
+class _UnitlessBands:
+    """The spans a real human result for one marker occupies, as a number on a page.
+
+    ``canonical`` is that span in ``CriticalRange.unit``; ``others`` are the spans it occupies
+    in each *other* unit the same marker is printed in around here — as printed in that unit,
+    not converted. Both are deliberately generous: they are here to separate two unit scales
+    from each other, not to decide whether a value is normal.
+    """
+
+    canonical: tuple[float, float]
+    others: tuple[tuple[float, float], ...] = ()
+
+
+# A bare number is read in the canonical unit only when it lands inside that unit's span and
+# outside every other unit's. Anything else is two readings of one number, and the two disagree
+# about the patient: 5.5 is a normal glucose in mmol/L and a value incompatible with
+# consciousness in mg/dL; 88 is a normal creatinine in µmol/L and a dialysis-dependent one in
+# mg/dL; 8000 is a normal white count per cumm and a leukemic one in 10^3/µL.
+#
+# Assuming the canonical unit — which is what this did — turns each of those into a confident
+# panic flag on a patient whose labs are entirely normal, and in the creatinine case into a
+# fabricated eGFR of 0.4 written into the chart (``creatinine_to_mg_dl`` feeds the CKD-EPI
+# derivation) with the metformin hard block hanging off it. That is the alert-fatigue failure
+# this module's own docstring warns about, manufactured by the module itself.
+#
+# So an ambiguous bare number is skipped, and — unlike before — reported as skipped, via
+# ``unreadable_lab``. Note what is deliberately NOT done: a number outside the canonical span
+# but inside exactly one other (a bare 88 creatinine) is not silently converted either. Which
+# unit a report meant is the report's to say; inferring it would put a number in the chart that
+# no document supports, which is the failure in the other direction.
+_UNITLESS_BANDS: dict[str, _UnitlessBands] = {
+    # mEq/L is numerically identical to mmol/L for a monovalent ion, so there is no second
+    # scale for the electrolytes and any real value can be read as printed.
+    "potassium": _UnitlessBands(canonical=(0.5, 15.0)),
+    "sodium": _UnitlessBands(canonical=(60.0, 220.0)),
+    # mg/dL vs mmol/L (x18).
+    "glucose": _UnitlessBands(canonical=(20.0, 2000.0), others=((1.0, 85.0),)),
+    # mg/dL vs µmol/L (x88.4).
+    "creatinine": _UnitlessBands(canonical=(0.1, 25.0), others=((20.0, 3000.0),)),
+    # g/dL vs g/L (x10) — "Hb 120" is an ordinary way to print a normal haemoglobin.
+    "hemoglobin": _UnitlessBands(canonical=(1.0, 30.0), others=((30.0, 250.0),)),
+    # 10^3/µL vs the raw per-cumm count Indian CBC reports print more often.
+    "platelets": _UnitlessBands(canonical=(1.0, 3000.0), others=((1000.0, 3_000_000.0),)),
+    "wbc": _UnitlessBands(canonical=(0.1, 500.0), others=((100.0, 500_000.0),)),
+    # mg/dL vs mmol/L (x4). No conversion factor is registered for calcium — mEq/L would be
+    # wrong for a divalent ion — but the mmol/L scale still exists on the page, and a bare 2.4
+    # read as mg/dL is a panic-low flag on a normal corrected calcium.
+    "calcium": _UnitlessBands(canonical=(2.0, 20.0), others=((0.5, 5.0),)),
+    # A ratio has no unit to lose.
+    "inr": _UnitlessBands(canonical=(0.1, 30.0)),
+}
+
+
+def _canonical_when_unitless(canonical: str, value: float) -> float | None:
+    """``value`` read in the marker's canonical unit, or None if it could be another one."""
+    bands = _UNITLESS_BANDS.get(canonical)
+    if bands is None:
+        return value
+    low, high = bands.canonical
+    if not low <= value <= high:
+        return None
+    return None if any(lo <= value <= hi for lo, hi in bands.others) else value
+
+
 _NORM_RE = re.compile(r"[^a-z0-9+ ]")
 
 
@@ -163,7 +234,11 @@ def _to_canonical_value(canonical: str, value: float, unit: str | None) -> float
     is unrecognised (in which case the caller must skip rather than guess)."""
     norm_unit = _normalize_unit(unit)
     expected = _normalize_unit(_RANGES[canonical].unit)
-    if not norm_unit or norm_unit == expected:
+    if not norm_unit:
+        # No unit on the row at all. See ``_UNITLESS_BANDS`` for why this is not simply the
+        # canonical unit.
+        return _canonical_when_unitless(canonical, value)
+    if norm_unit == expected:
         return value
     # A synonym is the same unit spelled differently, so it carries no arithmetic. Checked
     # before the bail-out below, which otherwise treats "the unit written another way" the same
@@ -264,3 +339,67 @@ def evaluate_lab_results(labs: list[tuple[str, float | None, str | None]]) -> li
         if flag is not None:
             flags.append(flag)
     return flags
+
+
+@dataclass(frozen=True)
+class UnreadableLab:
+    """A curated marker whose value could not be placed on a scale, so it was not evaluated."""
+
+    marker_name: str
+    canonical_marker: str
+    value: float
+    unit: str | None
+    reason: Literal["unit_missing", "unit_unrecognised"]
+    summary: str
+
+
+def unreadable_lab(
+    marker_name: str, value: float | None, unit: str | None = None
+) -> UnreadableLab | None:
+    """Say when a marker this module curates thresholds for was skipped, and why.
+
+    ``evaluate_critical_value`` answers None both for "evaluated, within range" and for "could
+    not be evaluated at all", and a screen built only from its flags renders the second as the
+    first — a potassium in a unit this module cannot read, or a bare number that could be
+    either of two scales, comes back looking exactly like a normal potassium.
+
+    That is the shape of answer this codebase refuses everywhere it has been found: an
+    unresolvable proposed drug is a 422 rather than an unchecked pass, a renal rule with no
+    eGFR reports itself unevaluated, and an unreadable medication line is named rather than
+    dropped. This is the same statement for a lab row, and it matters most for exactly the
+    values the guard exists to catch — a glucose of 30 printed without a unit is a panic low in
+    mg/dL and an emergency in the other direction in mmol/L, and the honest answer is that the
+    document does not say which.
+
+    Only for markers with curated thresholds: a row this module has no opinion about was never
+    going to be evaluated, and reporting every one of those would bury the rows that were.
+    """
+    if value is None:
+        return None
+    canonical = _normalize_marker(marker_name)
+    if canonical is None or _to_canonical_value(canonical, value, unit) is not None:
+        return None
+
+    expected = _RANGES[canonical].unit
+    if not _normalize_unit(unit):
+        reason: Literal["unit_missing", "unit_unrecognised"] = "unit_missing"
+        why = (
+            f"the result carries no unit and {value} is a value this marker takes in more than "
+            f"one of the units it is reported in, so which one was meant cannot be read off the "
+            f"document"
+        )
+    else:
+        reason = "unit_unrecognised"
+        why = f"the unit “{unit}” is not one this check can convert to {expected}"
+    return UnreadableLab(
+        marker_name=marker_name,
+        canonical_marker=canonical,
+        value=value,
+        unit=unit,
+        reason=reason,
+        summary=(
+            f"{marker_name} = {value}{f' {unit}' if unit else ''} was not checked against "
+            f"critical-value thresholds: {why}. This is not the same as a normal result — "
+            f"confirm the unit on the source report."
+        ),
+    )

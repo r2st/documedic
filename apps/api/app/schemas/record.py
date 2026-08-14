@@ -142,6 +142,21 @@ class CriticalLabFlagItem(BaseModel):
     details: dict
 
 
+class UnreadableLabItem(BaseModel):
+    """A curated marker the critical-value screen declined to evaluate, and why."""
+
+    lab_result_id: uuid.UUID
+    marker_name: str
+    value: float
+    unit: str | None
+    reason: str
+    summary: str
+
+
 class CriticalLabFlagsResponse(BaseModel):
     patient_id: uuid.UUID
     flags: list[CriticalLabFlagItem]
+    # Rows with curated thresholds that could not be placed on a scale — an unconvertible unit,
+    # or no unit at all on a value that two of this marker's units could both produce. An empty
+    # ``flags`` alone reads as "nothing critical"; these are the rows for which nobody looked.
+    unreadable: list[UnreadableLabItem] = []

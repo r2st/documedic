@@ -374,7 +374,16 @@ async def test_every_derived_marker_row_fits_its_columns(db):
         entities=[
             {
                 "entity_type": "lab_result",
-                "fields": {"marker_name": f"Serum Creatinine {i}", "value_numeric": value},
+                # The unit is stated because these values are deliberately outside the span a
+                # real serum creatinine occupies, and a *bare* number outside that span is now
+                # declined rather than assumed to be mg/dL (see ``_UNITLESS_BANDS``). Naming
+                # the unit is the document saying which scale it meant, which is what keeps
+                # this a test of column fitting under extreme arithmetic.
+                "fields": {
+                    "marker_name": f"Serum Creatinine {i}",
+                    "value_numeric": value,
+                    "unit": "mg/dL",
+                },
             }
             for i, value in enumerate(["0.000001", "0.4", "1.2", "9.9", "600"])
         ],

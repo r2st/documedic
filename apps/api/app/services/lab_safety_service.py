@@ -9,15 +9,35 @@ stays available even when AI reasoning is degraded/offline (Critical Safety Rule
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.lab_safety import CriticalLabFlag, evaluate_critical_value
+from app.core.lab_safety import (
+    CriticalLabFlag,
+    UnreadableLab,
+    evaluate_critical_value,
+    unreadable_lab,
+)
 from app.models.lab_result import LabResult
 from app.models.patient import Patient
 from app.services.audit_service import AuditService
+
+
+@dataclass(frozen=True)
+class LabScreen:
+    """What a critical-value screen found, and what it could not look at.
+
+    The second half is not bookkeeping. ``evaluate_critical_value`` returns nothing both for a
+    result inside the reference band and for one it could not place on a scale at all, so a
+    screen reported as its flag list alone renders "this row was skipped" identically to "this
+    row is fine" — see ``app.core.lab_safety.unreadable_lab``.
+    """
+
+    flags: list[tuple[LabResult, CriticalLabFlag]]
+    unreadable: list[tuple[LabResult, UnreadableLab]]
 
 
 class LabSafetyService:
@@ -44,6 +64,13 @@ class LabSafetyService:
     async def check_patient_labs(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID, audit: bool = True
     ) -> list[tuple[LabResult, CriticalLabFlag]]:
+        """The critical/panic findings from :meth:`screen_labs`, without the skipped rows."""
+        screen = await self.screen_labs(account_id=account_id, patient_id=patient_id, audit=audit)
+        return screen.flags
+
+    async def screen_labs(
+        self, *, account_id: uuid.UUID, patient_id: uuid.UUID, audit: bool = True
+    ) -> LabScreen:
         """Evaluate the most recent value per marker for a patient against critical thresholds.
 
         Does not commit — callers own the transaction boundary (consistent with AuditService).
@@ -105,12 +132,18 @@ class LabSafetyService:
         )
 
         flagged: list[tuple[LabResult, CriticalLabFlag]] = []
+        unreadable: list[tuple[LabResult, UnreadableLab]] = []
         for lab in result.scalars().all():
             if lab.value_numeric is None:
                 continue
-            flag = evaluate_critical_value(lab.marker_name, float(lab.value_numeric), lab.unit)
+            value = float(lab.value_numeric)
+            flag = evaluate_critical_value(lab.marker_name, value, lab.unit)
             if flag is not None:
                 flagged.append((lab, flag))
+                continue
+            skipped = unreadable_lab(lab.marker_name, value, lab.unit)
+            if skipped is not None:
+                unreadable.append((lab, skipped))
 
         if audit and flagged:
             await self.audit.record(
@@ -136,4 +169,27 @@ class LabSafetyService:
                     ]
                 },
             )
-        return flagged
+        if audit and unreadable:
+            # A separate entry rather than a field on the one above, because it answers a
+            # different question — not "what did the screen catch" but "what did it decline to
+            # read" — and it is recorded even on a chart with no critical values at all, which
+            # is precisely the chart where the omission would otherwise be invisible.
+            await self.audit.record(
+                action="critical_lab_value_not_evaluated",
+                account_id=account_id,
+                patient_id=patient_id,
+                entity_type="lab_result",
+                payload={
+                    "unreadable": [
+                        {
+                            "lab_result_id": str(lab.id),
+                            "marker_name": lab.marker_name,
+                            "value": note.value,
+                            "unit": note.unit,
+                            "reason": note.reason,
+                        }
+                        for lab, note in unreadable
+                    ]
+                },
+            )
+        return LabScreen(flags=flagged, unreadable=unreadable)

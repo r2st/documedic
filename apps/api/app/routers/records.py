@@ -11,7 +11,12 @@ from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
 from app.openapi import PATIENT_ERRORS
-from app.schemas.record import CriticalLabFlagItem, CriticalLabFlagsResponse, LongitudinalRecord
+from app.schemas.record import (
+    CriticalLabFlagItem,
+    CriticalLabFlagsResponse,
+    LongitudinalRecord,
+    UnreadableLabItem,
+)
 from app.services.audit_service import AuditService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
@@ -90,9 +95,7 @@ async def critical_lab_flags(
     Re-runs on every call (no caching) so it reflects the current record, and re-audits any
     finding — Critical Safety Rule #8 (must work without an LLM).
     """
-    flagged = await LabSafetyService(db).check_patient_labs(
-        account_id=account.id, patient_id=patient_id
-    )
+    screen = await LabSafetyService(db).screen_labs(account_id=account.id, patient_id=patient_id)
     await db.commit()
     return CriticalLabFlagsResponse(
         patient_id=patient_id,
@@ -106,6 +109,17 @@ async def critical_lab_flags(
                 summary=flag.summary,
                 details=flag.details,
             )
-            for lab, flag in flagged
+            for lab, flag in screen.flags
+        ],
+        unreadable=[
+            UnreadableLabItem(
+                lab_result_id=lab.id,
+                marker_name=note.marker_name,
+                value=note.value,
+                unit=note.unit,
+                reason=note.reason,
+                summary=note.summary,
+            )
+            for lab, note in screen.unreadable
         ],
     )

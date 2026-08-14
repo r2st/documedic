@@ -29,6 +29,7 @@ AUDIT_ACTIONS = (
     "auth_session_revoked",
     "auth_session_idle_expired",
     "critical_lab_value_detected",
+    "critical_lab_value_not_evaluated",
     "patient_created",
     "patient_updated",
     "patient_deleted",

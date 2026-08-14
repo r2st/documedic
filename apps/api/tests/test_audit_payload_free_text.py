@@ -497,6 +497,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # --- clinical. ``flags`` here is structured measurements plus the lab row ids they came
     # from, so a reviewer can get back to the result; no free text is interpolated into it.
     "critical_lab_value_detected": {"flags"},
+    # ``unreadable`` is the same shape for the rows the screen declined to evaluate: the lab
+    # row id, the marker name as the lab printed it, the number, the unit string (or null) and
+    # a fixed reason code. All of it is already on the lab_results row this points at, and none
+    # of it is clinician free text.
+    "critical_lab_value_not_evaluated": {"unreadable"},
     "drug_safety_check": {"drug", "reference_id", "flag_count", "hard_block"},
     "drug_safety_flags_viewed": {"drugs_evaluated", "flag_count"},
     "drug_safety_hard_block_overridden": {
