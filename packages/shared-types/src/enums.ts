@@ -22,7 +22,8 @@ export type SafetyCheckType =
   | 'unevaluated_medication'
   | 'unevaluated_allergy'
   | 'hepatic_severity'
-  | 'hepatotoxic_burden';
+  | 'hepatotoxic_burden'
+  | 'unevaluated_condition';
 
 export type ReasoningStatus =
   | 'created'

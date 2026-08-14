@@ -55,6 +55,7 @@ CheckType = Literal[
     "unevaluated_allergy",
     "hepatic_severity",
     "hepatotoxic_burden",
+    "unevaluated_condition",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -445,6 +446,20 @@ _CONDITION_UNCERTAIN = (
     "past ",
     "previous",
     "resolved",
+    # The ways a chart says a condition has ended, beyond the generic "resolved". Pregnancy is
+    # where this bites: "Pregnancy — delivered" or "Ectopic pregnancy, terminated" left on a
+    # problem list would otherwise hard-block ramipril on a postpartum woman forever, and
+    # postpartum hypertension is exactly when an ACE inhibitor is correctly prescribed. Hedged
+    # rather than absent, so the rule is still named — a chart is not always right about what
+    # has ended.
+    "terminated",
+    "aborted",
+    "miscarried",
+    "delivered",
+    "s/p ",
+    "status post",
+    # Deliberately NOT here: "postpartum". "Postpartum haemorrhage" is active bleeding and an
+    # emergency, and hedging it would downgrade warfarin's block to an advisory line.
 )
 
 # British spellings folded to the American forms the curated rules use. Applied per token rather
@@ -485,12 +500,27 @@ _CONDITION_ALIASES: dict[str, str] = {
     "gastric ulcer": "peptic ulcer",
     "duodenal ulcer": "peptic ulcer",
     "gastroduodenal ulcer": "peptic ulcer",
+    # Peptic disease that is not stated to be an ulcer. Deliberately rewritten to a *subset* of
+    # the rule's tokens rather than to the rule itself: "acid peptic disease" is the Indian
+    # umbrella term and covers gastritis and reflux as well as ulceration, so it is the chart
+    # being less specific than the rule — which _match_condition already knows how to answer,
+    # with a warning naming the rule instead of a block asserting a diagnosis the chart does not
+    # make. Before this it matched nothing at all and the NSAID rule was silent.
+    #
+    # "APD" is also automated peritoneal dialysis in a nephrology note, and this cannot tell the
+    # two apart. Kept because the collision is cheap in exactly one direction: the rewrite lands
+    # on the less-specific branch, so the worst a dialysis patient gets is one advisory line
+    # naming a rule that does not apply to them — never a block, and never a diagnosis asserted.
+    "acid peptic disease": "peptic",
+    "apd": "peptic",
     # Pregnancy — the seeded ACE-inhibitor, statin, warfarin and methotrexate blocks.
     "pregnant": "pregnancy",
     "gravid": "pregnancy",
     "primigravida": "pregnancy",
+    "primi": "pregnancy",
     "multigravida": "pregnancy",
     "intrauterine pregnancy": "pregnancy",
+    "antenatal": "pregnancy",
     # Chronic kidney disease — metformin's dose-adjustment rule.
     "ckd": "chronic kidney",
     "crf": "chronic kidney",
@@ -505,7 +535,31 @@ _CONDITION_ALIASES: dict[str, str] = {
     "gastrointestinal bleed": "active bleeding",
     "gastrointestinal bleeding": "active bleeding",
     "malena": "active bleeding",
+    "malaena": "active bleeding",
     "melena": "active bleeding",
+    # Bleeding named by where it came out rather than by the word "bleeding". Each of these IS
+    # active bleeding by definition — haematemesis is vomited blood — so the block stands rather
+    # than softening to a warning. "gi bleed" above only covers a chart that spells "GI" as its
+    # own word; "UGI bleed" is one token and matched nothing.
+    "hematemesis": "active bleeding",
+    "hematochezia": "active bleeding",
+    # A haemorrhage named by its site rather than by the word "active": postpartum,
+    # intracranial, subarachnoid, variceal. Every one of those was silent, because the existing
+    # entry is "active hemorrhage" and that key is not a subset of "postpartum hemorrhage".
+    #
+    # This is the one entry here with a real false positive in it — a diabetic carrying "retinal
+    # haemorrhage" on the problem list now hard-blocks warfarin. Kept, on this file's own stated
+    # asymmetry: the safe direction to be wrong is the one a clinician clears with a documented
+    # override, and the unsafe one is the direction that says nothing at all about an
+    # intracranial bleed.
+    "hemorrhage": "active bleeding",
+    "ugi bleed": "active bleeding",
+    "ugi bleeding": "active bleeding",
+    "pr bleed": "active bleeding",
+    "pr bleeding": "active bleeding",
+    "per rectal bleeding": "active bleeding",
+    # "Bleeding P/R", which the punctuation stripper turns into three tokens.
+    "bleeding p r": "active bleeding",
     # G6PD deficiency — ciprofloxacin's relative rule.
     "g6pd": "g6pd deficiency",
     "glucose 6 phosphate dehydrogenase deficiency": "g6pd deficiency",
@@ -578,6 +632,27 @@ def _condition_concept(name: str | None) -> frozenset[str]:
         if key and key <= tokens:
             tokens = (tokens - key) | value
     return tokens
+
+
+def _condition_is_unreadable(condition: PatientCondition) -> bool:
+    """True when nothing about this condition row can be compared to a contraindication rule.
+
+    Matching happens on two axes and this asks whether *both* are empty. ``_condition_words``
+    keeps only ``[a-z0-9]``, so a condition written in Devanagari, Bengali or any other non-Latin
+    script tokenises to the empty tuple — as does an OCR blob ("‡‡‡"), a bare "???" and a row
+    that is only punctuation. An empty token set satisfies none of the three comparisons in
+    ``_match_condition``: it is not equal to a rule's tokens, it is not a superset, and the
+    ``tokens and`` guard on the subset branch stops it being read as "less specific than
+    everything". So the row falls through ``continue`` and every contraindication rule on the
+    chart quietly has nothing to say about it.
+
+    An ICD-10 code rescues the row completely — ``_icd10_matches`` never looks at the name — so a
+    condition carrying a usable code is evaluated whatever script its label is in, and is not
+    reported here.
+    """
+    if _condition_concept(condition.condition_name):
+        return False
+    return len(_NON_ALPHANUMERIC.sub("", (condition.icd10_code or "").lower())) < 3
 
 
 def _icd10_matches(a: str | None, b: str | None) -> bool:
@@ -1240,6 +1315,74 @@ def check_hepatotoxic_burden(proposed: DrugRef, ctx: SafetyContext) -> list[Safe
                 "concurrent_hepatotoxic_drugs": concurrent,
                 "hepatic_impairment": impaired,
                 **(child_pugh.as_details() if child_pugh is not None else {}),
+            },
+        )
+    ]
+
+
+def check_unevaluated_conditions(ctx: SafetyContext) -> list[SafetyFlag]:
+    """Say so when a charted condition could not be compared to any rule, rather than dropping it.
+
+    The third row of the same table as ``check_unevaluated_medications`` and
+    ``check_unevaluated_allergies``, and the one nobody had noticed. Condition matching is
+    deliberately built out of deterministic text rewrites over ``[a-z0-9]`` tokens, which is what
+    makes it defensible — no scoring, no similarity threshold, nothing that can match two
+    different conditions to each other merely by resembling one another. The cost is that a
+    condition name carrying no Latin alphanumerics at all tokenises to nothing, and a token set of
+    nothing matches nothing. The row is skipped by every contraindication rule on the chart, and
+    the response comes back with no flags.
+
+    Which is the shape of answer this file has now been corrected for five times: a comparison
+    that could not be attempted, reported as a comparison that passed. The concrete case is this
+    product's own market — a problem list written in Devanagari, or lifted by OCR off a
+    handwritten referral into "‡‡‡" — where the drug is proposed against a chart that says
+    "गर्भावस्था" and the pregnancy hard block on ramipril never runs.
+
+    Nothing here can close that by being cleverer. Translating a condition name is a guess, and a
+    guess that manufactures a hard block is its own harm; the module's refusal to fuzzy-match
+    condition names is the same judgement. What can be closed is the silence.
+
+    A row carrying a usable ICD-10 code is not reported, because the code path matches without
+    ever reading the name — that is the answer to a non-Latin chart, and it is worth the flag
+    saying so.
+
+    A warning rather than a hard block, for the same reason as its two siblings: blocking every
+    prescription on every chart with one unreadable problem-list line teaches clinicians to click
+    through the real blocks.
+    """
+    unreadable = sorted(
+        {
+            (condition.condition_name or "").strip()
+            for condition in ctx.conditions
+            if _condition_is_unreadable(condition)
+        }
+    )
+    listed_names = [name for name in unreadable if name]
+    # A row whose name is blank *and* unreadable is still a row nothing was checked against, so
+    # it is counted; it just cannot be quoted back.
+    count = len(unreadable)
+    if not count:
+        return []
+
+    plural = count != 1
+    quoted = ", ".join(f"“{name}”" for name in listed_names)
+    return [
+        SafetyFlag(
+            check_type="unevaluated_condition",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"{count} condition{'s' if plural else ''} on this chart could not be read as "
+                f"text{f' ({quoted})' if quoted else ''} and carr{'y' if plural else 'ies'} no "
+                "ICD-10 code, so no contraindication rule was evaluated against "
+                f"{'them' if plural else 'it'} — this is not the same as “no contraindication”. "
+                "A condition recorded in a non-Latin script or lifted unreadably by OCR is "
+                "checked as soon as it carries an ICD-10 code, or is re-entered in English."
+            ),
+            details={
+                "unevaluated_conditions": listed_names,
+                "unevaluated_condition_count": count,
+                "evaluated": False,
             },
         )
     ]
