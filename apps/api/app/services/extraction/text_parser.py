@@ -14,12 +14,21 @@ Supported line grammars (case-insensitive section headers):
     - <condition name>
   ALLERGIES:
     - <allergen> [- reaction]
+
+Printed reports also carry a masthead of labelled administrative lines — the collection date,
+the patient's age, the lab's accession number. Those share the ``<label>: <number>`` shape of a
+lab line, so they are recognised and handled before the entity grammars run: the date lines
+become the ``sample_date`` carried by every lab on the report, and the rest are dropped rather
+than ingested as markers. See ``_metadata_date`` and ``_NON_MARKER_LABELS``.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
+
+from app.core.dates import parse_clinical_date
 
 _SECTION_ALIASES = {
     "medication": "medications",
@@ -91,6 +100,229 @@ _LAB_COLUMNAR_RE = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>%|[A-Za-z][A-Za-z/µμ\^0-9\.]*)?\s*"
     r"\(\s*(?P<low>\d+(?:\.\d+)?)\s*[-–]\s*(?P<high>\d+(?:\.\d+)?)\s*\)\s*$"
 )
+
+
+# --- Labelled masthead lines ------------------------------------------------------------
+#
+# Everything below exists because a printed lab report is not only lab lines. Above the
+# results sits a block of labelled administrative fields, and several of them are a word
+# followed by a colon followed by a number -- which is exactly the lab grammar. "Sample Date:
+# 12/03/2026" parsed as a marker named "Sample Date" with a value of 12, "Age: 54 years" as a
+# marker named "Age" with a value of 54. Both were then offered to the clinician for approval
+# alongside the real results, and one hurried approval put them in the longitudinal record.
+#
+# The date lines are worse than noise, because the report's own date is the single piece of
+# information the record most needs from it and had no other source: nothing in the extraction
+# layer emitted ``sample_date``, so every lab ingested through a document landed undated and
+# "the patient's most recent potassium" -- the question the panic-value screen exists to answer
+# -- fell back to ingestion order. A chart where an old report is filed after a new one then
+# screens the stale value as current. Reading the date off the report and attaching it to the
+# report's labs closes that, and turns the line that was corrupting the record into the field
+# that fixes it.
+
+# Label -> (rank, confidence). Rank orders the *kinds* of date a report prints: when a report
+# carries several, the one closest to when the blood was actually drawn wins, because that is
+# what ``sample_date`` means and what the longitudinal ordering is asking about. A report date
+# can trail collection by days on a send-out panel. Confidence tracks the same thing, and is
+# what decides whether the clinician is asked to confirm the field before it is merged.
+_COLLECTED, _RECEIVED, _REPORTED, _BARE = 0, 1, 2, 3
+_DATE_LABELS: dict[str, tuple[int, float]] = {
+    "sample collected on": (_COLLECTED, 0.9),
+    "sample collected": (_COLLECTED, 0.9),
+    "sample collection date": (_COLLECTED, 0.9),
+    "specimen collected on": (_COLLECTED, 0.9),
+    "date of collection": (_COLLECTED, 0.9),
+    "collection date": (_COLLECTED, 0.9),
+    "collected on": (_COLLECTED, 0.9),
+    "collected": (_COLLECTED, 0.9),
+    "sample date": (_COLLECTED, 0.9),
+    "specimen date": (_COLLECTED, 0.9),
+    "drawn on": (_COLLECTED, 0.9),
+    "received on": (_RECEIVED, 0.75),
+    "date of receipt": (_RECEIVED, 0.75),
+    "registered on": (_RECEIVED, 0.75),
+    "registration date": (_RECEIVED, 0.75),
+    "date of registration": (_RECEIVED, 0.75),
+    "report date": (_REPORTED, 0.6),
+    "reported on": (_REPORTED, 0.6),
+    "date of report": (_REPORTED, 0.6),
+    "reporting date": (_REPORTED, 0.6),
+    "date": (_BARE, 0.55),
+    "dated": (_BARE, 0.55),
+}
+
+# Labels that are never a clinical marker or a drug. Matched on the whole normalised label, so
+# "Date of Birth" does not reach the "date" entry above and "Sodium" reaches none of them.
+_NON_MARKER_LABELS = frozenset(
+    {
+        "name",
+        "patient name",
+        "patient",
+        "patients name",
+        "pt name",
+        "age",
+        "sex",
+        "gender",
+        "age sex",
+        "sex age",
+        "age gender",
+        "dob",
+        "date of birth",
+        "birth date",
+        "uhid",
+        "mrn",
+        "patient id",
+        "hospital no",
+        "ip no",
+        "op no",
+        "opd no",
+        "ipd no",
+        "reg no",
+        "registration no",
+        "visit id",
+        "episode id",
+        "encounter id",
+        "lab no",
+        "lab id",
+        "sid",
+        "sid no",
+        "accession no",
+        "accession number",
+        "barcode",
+        "sample id",
+        "sample no",
+        "specimen no",
+        "order id",
+        "order no",
+        "bill no",
+        "invoice no",
+        "receipt no",
+        "amount",
+        "ref by",
+        "referred by",
+        "referring doctor",
+        "ref doctor",
+        "referrer",
+        "doctor",
+        "consultant",
+        "physician",
+        "pathologist",
+        "verified by",
+        "approved by",
+        "mobile",
+        "phone",
+        "contact",
+        "contact no",
+        "email",
+        "address",
+        "pin",
+        "pincode",
+        "page",
+        "printed on",
+        "printed",
+        "print date",
+        "generated on",
+        "department",
+        "centre",
+        "center",
+        "branch",
+        "client",
+        "client code",
+        "sample type",
+        "specimen type",
+        "specimen",
+        "method",
+        "instrument",
+        "status",
+        "report status",
+    }
+)
+
+# The value half of a date line must *look* like a date before it is parsed. dateutil is happy
+# to read "12" as the 12th of the current month, which would invent a sample date out of a
+# line this module failed to understand -- the exact failure mode being fixed here.
+_DATE_VALUE_RE = re.compile(
+    r"\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}"  # 12/03/2026, 2026-03-12, 12.03.26
+    r"|\d{1,2}[-\s][A-Za-z]{3,9}[-\s]\d{2,4}"  # 12-Mar-2026, 12 March 2026
+    r"|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}"  # March 12, 2026
+)
+_TIME_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?")
+
+_LABELLED_RE = re.compile(r"^(?P<label>[^:=]{1,60})[:=]\s*(?P<value>.*)$")
+
+# How many leading words of a colon-less line may form a label. "Sample Collected on" is three.
+_MAX_LABEL_WORDS = 4
+
+
+def _normalise_label(raw: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace: "Ref. By" -> "ref by"."""
+    return " ".join(re.sub(r"[^a-z]+", " ", raw.lower()).split())
+
+
+def _label_candidates(line: str) -> list[tuple[str, str]]:
+    """Every (normalised label, remainder) split this line could plausibly be.
+
+    A colon or equals sign is definitive, so it yields the single true split. Without one --
+    the whitespace-column layout that ``_LAB_COLUMNAR_RE`` exists for prints "Sample Collected
+    on    12/03/2026" the same way it prints "HbA1c    8.4 % (4.0 - 5.6)" -- the leading words
+    are offered as candidate labels and the caller decides whether any is one it knows.
+    """
+    m = _LABELLED_RE.match(line)
+    if m:
+        return [(_normalise_label(m.group("label")), m.group("value").strip())]
+    words = line.split()
+    return [
+        (_normalise_label(" ".join(words[:n])), " ".join(words[n:]))
+        for n in range(1, min(_MAX_LABEL_WORDS, len(words)) + 1)
+    ]
+
+
+def _parse_date_value(value: str) -> datetime | None:
+    """Read a date (and optional time-of-day) out of the value half of a labelled line.
+
+    Only the date-shaped span is handed to the date reader, never the whole remainder: a lab's
+    footer prints "Sample Date: -" and dateutil is willing to read almost anything, including a
+    bare number as a day of the current month. That would invent a sample date out of a line
+    this module failed to understand, which is the failure being fixed rather than a fix for it.
+    """
+    found = _DATE_VALUE_RE.search(value)
+    if not found:
+        return None
+    text = found.group(0)
+    tail = _TIME_RE.match(value[found.end() :].strip())
+    if tail:
+        text = f"{text} {tail.group(0)}"
+    return parse_clinical_date(text)
+
+
+def _metadata_date(line: str) -> tuple[int, float, datetime] | None:
+    """(rank, confidence, value) if this line is a report date line, else ``None``."""
+    for label, remainder in _label_candidates(line):
+        ranked = _DATE_LABELS.get(label)
+        if ranked is None:
+            continue
+        parsed = _parse_date_value(remainder)
+        if parsed is not None:
+            return ranked[0], ranked[1], parsed
+    return None
+
+
+def _is_non_marker_line(line: str) -> bool:
+    """True for a masthead line whose label can never name a marker, drug, or diagnosis.
+
+    A colon makes the label unambiguous. Without one the leading words are only a guess, and
+    guessing wrong here *deletes* clinical data -- "Status epilepticus" under DIAGNOSIS begins
+    with a denylisted label. So the colon-less form additionally requires a numeric value,
+    which is what the administrative lines this drops all have ("Age 54", "Lab No 4471") and
+    what a diagnosis, allergen, or drug name never begins with.
+    """
+    explicit = _LABELLED_RE.match(line)
+    if explicit:
+        return _normalise_label(explicit.group("label")) in _NON_MARKER_LABELS
+    return any(
+        label in _NON_MARKER_LABELS and remainder[:1].isdigit()
+        for label, remainder in _label_candidates(line)
+    )
 
 
 @dataclass
@@ -198,9 +430,16 @@ _PARSERS = {
 
 
 def parse_text(text: str) -> list[ParsedEntity]:
-    """Parse free text into typed entities by walking section headers."""
+    """Parse free text into typed entities by walking section headers.
+
+    Labelled masthead lines are consumed before the entity grammars see them: administrative
+    ones are dropped, and the best report date found anywhere in the document is attached to
+    every lab result as ``sample_date`` (see ``_apply_sample_date``). The date is applied after
+    the whole document is walked because the masthead can sit either side of the results block.
+    """
     entities: list[ParsedEntity] = []
     section: str | None = None
+    best_date: tuple[int, float, datetime] | None = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -208,6 +447,14 @@ def parse_text(text: str) -> list[ParsedEntity]:
         detected = _detect_section(line)
         if detected:
             section = detected
+            continue
+        dated = _metadata_date(line)
+        if dated is not None:
+            # Lower rank wins; ties keep the first seen, which is the topmost on the page.
+            if best_date is None or dated[0] < best_date[0]:
+                best_date = dated
+            continue
+        if _is_non_marker_line(line):
             continue
         if section is None:
             # Heuristic: try lab then medication on un-sectioned lines.
@@ -221,4 +468,24 @@ def parse_text(text: str) -> list[ParsedEntity]:
         ent = parser(line)
         if ent:
             entities.append(ent)
+    if best_date is not None:
+        _apply_sample_date(entities, best_date[2], best_date[1])
     return entities
+
+
+def _apply_sample_date(entities: list[ParsedEntity], value: datetime, confidence: float) -> None:
+    """Stamp the report's date onto every lab result that did not carry one of its own.
+
+    Emitted as an ordinary field rather than plumbed through a separate channel, so it inherits
+    everything the other fields already get: it is shown to the clinician for confirmation with
+    its own confidence band, it is correctable through the same ``corrections`` payload, and
+    ``GraphService._merge_lab`` already reads ``fields["sample_date"]``. A report date carries
+    lower confidence than a collection date precisely so the clinician is asked about it.
+    """
+    iso = value.isoformat()
+    for entity in entities:
+        if entity.entity_type != "lab_result":
+            continue
+        if any(f.name == "sample_date" for f in entity.fields):
+            continue
+        entity.fields.append(ParsedField("sample_date", iso, confidence))

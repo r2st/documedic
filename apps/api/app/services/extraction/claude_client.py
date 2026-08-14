@@ -37,12 +37,14 @@ primary-care CDSS. Extract structured data from the supplied medical document \
 Return ONLY a JSON object with this shape:
 {
   "document_type": "prescription|lab_report|discharge_summary|other",
+  "document_date": "YYYY-MM-DD",
   "entities": [
     {"entity_type": "medication", "fields": {"brand_name_raw": str, "dose": str,
       "dose_unit": str, "frequency": str, "route": str, "event_type": "continue|start|stop"},
      "confidence": {"brand_name_raw": 0-1, "dose": 0-1, ...}},
     {"entity_type": "lab_result", "fields": {"marker_name": str, "value_numeric": number,
-      "unit": str, "reference_range_low": number, "reference_range_high": number},
+      "unit": str, "reference_range_low": number, "reference_range_high": number,
+      "sample_date": "YYYY-MM-DD"},
      "confidence": {...}},
     {"entity_type": "condition", "fields": {"condition_name": str, "status": str}, "confidence": {...}},
     {"entity_type": "allergy", "fields": {"allergen_name": str, "reaction_description": str},
@@ -50,7 +52,15 @@ Return ONLY a JSON object with this shape:
   ]
 }
 Per-field confidence in [0,1] reflects extraction certainty. Never invent data; if a field \
-is illegible, omit it. Preserve original Indian brand names verbatim in brand_name_raw."""
+is illegible, omit it. Preserve original Indian brand names verbatim in brand_name_raw.
+
+Dates: "document_date" is the date the sample was collected or the prescription written, as \
+printed on the document — prefer a collection/sample date over a report or printing date. Set \
+"sample_date" on a lab_result only when that individual result is dated differently from the \
+rest of the document; otherwise omit it and it inherits "document_date". Never guess a date \
+that is not printed on the document: omit the field instead. Do NOT emit the document's \
+administrative header lines (collection date, patient age, accession or bill number, referring \
+doctor) as lab_result entities — they are not clinical markers."""
 
 _MEDIA_TYPES = {
     "image/jpeg": "image/jpeg",
@@ -84,13 +94,47 @@ def _to_entities(payload: dict) -> tuple[list[ParsedEntity], str | None]:
         fields_map = raw.get("fields", {})
         conf_map = raw.get("confidence", {})
         fields = [
-            ParsedField(name=k, value=v, confidence=float(conf_map.get(k, 0.7)))
+            ParsedField(name=k, value=v, confidence=_confidence(conf_map.get(k)))
             for k, v in fields_map.items()
             if v is not None
         ]
         if fields:
             entities.append(ParsedEntity(entity_type=etype, fields=fields))
+    _inherit_document_date(entities, payload.get("document_date"))
     return entities, payload.get("document_type")
+
+
+def _confidence(raw: object) -> float:
+    """A per-field confidence from the model, defaulting when it is missing or unusable.
+
+    The model is asked for a number in [0,1] per field and mostly obliges, but "high" and null
+    both turn up, and ``float()`` on either raised straight out of extraction — losing a whole
+    document's worth of correctly-read values over one malformed score. Out-of-range numbers
+    are clamped rather than dropped: the band they land in is what the value means.
+    """
+    try:
+        return min(1.0, max(0.0, float(raw)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.7
+
+
+def _inherit_document_date(entities: list[ParsedEntity], document_date: object) -> None:
+    """Stamp the document's date onto lab results the model did not date individually.
+
+    A lab report prints one collection date in its header and no date at all next to each
+    marker, so asking the model to repeat it on every result invites it to invent one where a
+    panel spans two draws. It reports the date once; results that need a different one override
+    it. Mirrors ``text_parser._apply_sample_date`` so both extraction paths land the same shape
+    in ``GraphService._merge_lab``.
+    """
+    if not isinstance(document_date, str) or not document_date.strip():
+        return
+    for entity in entities:
+        if entity.entity_type != "lab_result":
+            continue
+        if any(f.name == "sample_date" for f in entity.fields):
+            continue
+        entity.fields.append(ParsedField("sample_date", document_date.strip(), 0.8))
 
 
 _MODEL_BY_PROVIDER = {

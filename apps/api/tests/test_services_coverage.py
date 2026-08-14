@@ -612,10 +612,13 @@ def test_date_and_datetime_parsers_pass_already_typed_values_through_unchanged()
     assert _parse_datetime(None) is None
 
 
-def test_datetime_is_a_valid_date_input_and_is_returned_as_is():
-    """``datetime`` subclasses ``date``, so the date parser accepts it without conversion."""
-    dt = datetime(2026, 8, 10, 9, 0, tzinfo=UTC)
-    assert _parse_date(dt) is dt
+def test_a_datetime_handed_to_the_date_parser_is_narrowed_to_its_date():
+    """``datetime`` subclasses ``date``, so it used to pass straight through — into
+    ``MedicationEvent.event_date``, a ``Date`` column, carrying a time-of-day the column cannot
+    hold. It also cannot be range-checked in that shape: comparing a ``datetime`` against a
+    ``date`` bound is a ``TypeError``, so the plausibility guard would have raised on exactly
+    the input this branch exists for."""
+    assert _parse_date(datetime(2026, 8, 10, 9, 0, tzinfo=UTC)) == date(2026, 8, 10)
 
 
 # --------------------------------------------------------------- validation guard reuse

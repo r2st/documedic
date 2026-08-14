@@ -20,6 +20,7 @@ from app.core.clinical import (
     egfr_reference_abnormal,
     is_creatinine_marker,
 )
+from app.core.dates import is_plausible_clinical_date, parse_clinical_date
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
@@ -361,27 +362,30 @@ class GraphService:
 
 
 def _parse_date(value: object) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, date):
-        return value
-    try:
-        from dateutil import parser as dtparser
-
-        return dtparser.parse(str(value), dayfirst=True).date()
-    except (ValueError, OverflowError, TypeError):
-        return None
-
-
-def _parse_datetime(value: object) -> datetime | None:
+    """A clinical date for a ``Date`` column, or ``None``. See ``app.core.dates``."""
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
-    try:
-        from dateutil import parser as dtparser
-
-        dt = dtparser.parse(str(value), dayfirst=True)
-        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
-    except (ValueError, OverflowError, TypeError):
+        # datetime subclasses date, so this used to pass straight through into
+        # MedicationEvent.event_date carrying a time-of-day the column cannot hold — and it
+        # cannot be range-checked in that shape either (comparing a datetime against a date
+        # bound raises TypeError).
+        as_date: date | None = value.date()
+    elif isinstance(value, date):
+        as_date = value
+    else:
+        parsed = parse_clinical_date(str(value))
+        as_date = parsed.date() if parsed else None
+    if as_date is None or not is_plausible_clinical_date(as_date):
         return None
+    return as_date
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    """A clinical timestamp for a ``DateTime`` column, or ``None``. See ``app.core.dates``."""
+    if value is None:
+        return None
+    parsed = value if isinstance(value, datetime) else parse_clinical_date(str(value))
+    if parsed is None or not is_plausible_clinical_date(parsed.date()):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
