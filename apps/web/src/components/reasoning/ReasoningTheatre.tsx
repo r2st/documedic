@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, ErrorBanner } from '@/components/ui';
 import { useReasoningStream } from '@/hooks/useReasoningStream';
 import type { AgentLane } from '@/hooks/useReasoningStream';
@@ -39,12 +39,32 @@ export function ReasoningTheatre({
   onComplete: () => void;
 }) {
   const { state, start, stop } = useReasoningStream();
+  // Set while a manual reconnect is being made, so the retry button can say it is working.
+  // `state.running` is not enough on its own: it is also true for the whole of a healthy run.
+  const [reconnecting, setReconnecting] = useState(false);
 
   useEffect(() => {
     void start(sessionId, onComplete);
     return () => stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  /**
+   * Reopen the stream after it failed.
+   *
+   * A failed stream used to be a dead end: the banner said what had gone wrong and the only way
+   * on was to leave the encounter and start the whole reasoning run again. `start()` mints a
+   * fresh stream token and resubscribes to the same session, so a run that is still going on
+   * the server is picked back up rather than re-run.
+   */
+  async function reconnect() {
+    setReconnecting(true);
+    try {
+      await start(sessionId, onComplete);
+    } finally {
+      setReconnecting(false);
+    }
+  }
 
   const ev = state.events;
   const cantMiss = (ev.cant_miss?.items as Array<{ diagnosis_name: string; why: string }>) ?? [];
@@ -116,7 +136,15 @@ export function ReasoningTheatre({
             {statusLabel}
           </span>
         </div>
-        {state.error && <ErrorBanner className="mb-3" message={state.error} />}
+        {state.error && (
+          <ErrorBanner
+            className="mb-3"
+            message={state.error}
+            onRetry={() => void reconnect()}
+            retrying={reconnecting}
+            retryLabel="Reconnect"
+          />
+        )}
         <ol className="space-y-2">
           {state.lanes.map((lane) => (
             <li

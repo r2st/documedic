@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClinicalSuggestion } from '@/lib/types';
@@ -8,7 +8,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: { ...actual.api, recordDecision: vi.fn() } };
 });
 
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { SuggestionCard } from './SuggestionCard';
 
 function suggestion(overrides: Partial<ClinicalSuggestion> = {}): ClinicalSuggestion {
@@ -324,5 +324,136 @@ describe('SuggestionCard', () => {
       />,
     );
     expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
+  });
+});
+
+describe('SuggestionCard decision failures', () => {
+  beforeEach(() => {
+    vi.mocked(api.recordDecision).mockReset();
+  });
+
+  it('says so when a hard-block override never reaches the audit log', async () => {
+    // The worst silent failure on this screen: the clinician documents their reasoning,
+    // presses override, and the card previously gave back nothing at all -- no confirmation
+    // and no error -- with the override missing from the immutable trail.
+    vi.mocked(api.recordDecision).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<SuggestionCard suggestion={suggestion({ is_hard_block: true })} sessionId="sess-1" />);
+
+    await user.type(
+      screen.getByPlaceholderText(/Documented clinical reasoning is required/),
+      'Nephrology approved continued use with monitoring.',
+    );
+    await user.click(screen.getByRole('button', { name: 'Override with documented reason' }));
+
+    const banners = await screen.findAllByRole('alert');
+    const failure = banners.find((b) => /may not have completed/i.test(b.textContent ?? ''));
+    expect(failure).toBeDefined();
+    expect(failure).toHaveTextContent(/this overridden decision may not have completed/i);
+    // And it must not claim the decision was recorded.
+    expect(screen.queryByText(/Recorded decision/)).not.toBeInTheDocument();
+  });
+
+  it('re-sends the same decision and reason when the override is retried', async () => {
+    vi.mocked(api.recordDecision).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<SuggestionCard suggestion={suggestion({ is_hard_block: true })} sessionId="sess-1" />);
+
+    await user.type(
+      screen.getByPlaceholderText(/Documented clinical reasoning is required/),
+      'Nephrology approved continued use with monitoring.',
+    );
+    await user.click(screen.getByRole('button', { name: 'Override with documented reason' }));
+    await screen.findByRole('button', { name: 'Record it again' });
+
+    vi.mocked(api.recordDecision).mockResolvedValue({ id: 'd1', decision: 'overridden' });
+    await user.click(screen.getByRole('button', { name: 'Record it again' }));
+
+    expect(api.recordDecision).toHaveBeenNthCalledWith(
+      2,
+      'sess-1',
+      'sug-1',
+      'overridden',
+      'Nephrology approved continued use with monitoring.',
+    );
+    expect(await screen.findByText(/Recorded decision: overridden/)).toBeInTheDocument();
+  });
+
+  it('surfaces the API message when the server rejects the decision', async () => {
+    vi.mocked(api.recordDecision).mockRejectedValue(
+      new ApiError(409, 'already_decided', 'A decision is already recorded for this suggestion.'),
+    );
+    const user = userEvent.setup();
+    render(<SuggestionCard suggestion={suggestion({ is_hard_block: true })} sessionId="sess-1" />);
+
+    await user.click(screen.getByRole('button', { name: 'Acknowledge (do not override)' }));
+
+    const banners = await screen.findAllByRole('alert');
+    expect(
+      banners.some((b) =>
+        /A decision is already recorded for this suggestion\./.test(b.textContent ?? ''),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the evidence visible when a flag-for-review acknowledgement fails to record', async () => {
+    // Critical Safety Rule #6 -- the clinician engaged, so hiding the evidence behind a
+    // network failure would be the worse of the two errors. The unaudited engagement is what
+    // has to be said out loud.
+    vi.mocked(api.recordDecision).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ autonomy_tier: 'flag_for_review' })}
+        sessionId="sess-1"
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Review evidence & assessment' }));
+
+    expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /this acknowledged decision may not have completed/i,
+    );
+  });
+
+  it('clears the previous failure while the retry is in flight', async () => {
+    vi.mocked(api.recordDecision).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<SuggestionCard suggestion={suggestion({ is_hard_block: true })} sessionId="sess-1" />);
+
+    await user.click(screen.getByRole('button', { name: 'Acknowledge (do not override)' }));
+    await screen.findByRole('button', { name: 'Record it again' });
+
+    vi.mocked(api.recordDecision).mockResolvedValue({ id: 'd1', decision: 'acknowledged' });
+    await user.click(screen.getByRole('button', { name: 'Record it again' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Record it again' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Recorded decision: acknowledged/)).toBeInTheDocument();
+  });
+
+  it('disables both hard-block controls while a decision is being written', async () => {
+    // Double-submitting an override would append a second record to an append-only trail.
+    let release: (() => void) | undefined;
+    vi.mocked(api.recordDecision).mockReturnValue(
+      new Promise((resolve) => {
+        release = () => resolve({ id: 'd1', decision: 'acknowledged' });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<SuggestionCard suggestion={suggestion({ is_hard_block: true })} sessionId="sess-1" />);
+
+    await user.click(screen.getByRole('button', { name: 'Acknowledge (do not override)' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Acknowledge (do not override)' })).toBeDisabled(),
+    );
+    expect(screen.getByRole('button', { name: 'Override with documented reason' })).toBeDisabled();
+
+    release?.();
+    expect(await screen.findByText(/Recorded decision: acknowledged/)).toBeInTheDocument();
+    expect(api.recordDecision).toHaveBeenCalledOnce();
   });
 });

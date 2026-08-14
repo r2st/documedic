@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { requestErrorMessage } from '@/lib/errors';
 import type { IntakeQuestion } from '@/lib/types';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, ErrorBanner } from '@/components/ui';
 
 const TYPE_STYLE: Record<string, string> = {
   red_flag: 'bg-red-50 text-red-700 ring-1 ring-red-200',
@@ -29,8 +30,13 @@ export function IntakeFlow({
   const [questions, setQuestions] = useState<IntakeQuestion[]>(initial);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function submit() {
+    // Cleared before the retry: a failed submit says the answers "may not have completed", and
+    // leaving that banner up while the retry is in flight describes the previous attempt as
+    // though it were the current one.
+    setError(null);
     setSubmitting(true);
     try {
       const payload = questions
@@ -43,6 +49,15 @@ export function IntakeFlow({
         setQuestions(state.pending_questions);
         setAnswers({});
       }
+    } catch (err) {
+      // Without this the rejection was unhandled: the button went back from "Submitting…" to
+      // "Submit answers" and nothing else on the screen changed. The clinician had just typed
+      // the history the whole differential turns on, and the only signal that none of it
+      // reached the triage agent was a button that stopped spinning.
+      //
+      // The typed answers are deliberately left in place — `setAnswers({})` only runs on the
+      // success path — so the retry re-sends them rather than asking for them a second time.
+      setError(requestErrorMessage(err, 'these intake answers'));
     } finally {
       setSubmitting(false);
     }
@@ -113,6 +128,18 @@ export function IntakeFlow({
           </div>
         ))}
       </div>
+      {/* Retryable: the answers are still in the fields, so this re-sends the same batch
+          rather than making the clinician retype an interview. */}
+      {error && (
+        <ErrorBanner
+          className="mt-5"
+          message={error}
+          onRetry={() => void submit()}
+          retrying={submitting}
+          retryLabel="Send answers again"
+        />
+      )}
+
       <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
         <Button
           className="w-full sm:w-auto"

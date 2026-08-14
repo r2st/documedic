@@ -18,8 +18,17 @@ type Listener = (event: { data: string }) => void;
  */
 class MockEventSource {
   static instances: MockEventSource[] = [];
+  // The real readyState constants. The hook reads `readyState` inside `onerror` to tell a drop
+  // the browser is already retrying (CONNECTING) from one it has given up on (CLOSED) — two
+  // failures that arrive on the same single handler and need opposite answers.
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+
   listeners: Record<string, Listener[]> = {};
   closed = false;
+  // Mid-stream default: a dropped connection the browser is reconnecting on its own.
+  readyState: number = MockEventSource.CONNECTING;
   onerror: (() => void) | null = null;
 
   constructor(public url: string) {
@@ -32,6 +41,7 @@ class MockEventSource {
 
   close() {
     this.closed = true;
+    this.readyState = MockEventSource.CLOSED;
   }
 
   emit(name: string, data: unknown) {
@@ -245,6 +255,68 @@ describe('useReasoningStream', () => {
     const settled = result.current.state;
     act(() => es.onerror?.());
     expect(result.current.state).toBe(settled);
+  });
+
+  it('stays quiet on a drop the browser is already retrying', async () => {
+    // readyState CONNECTING means the browser will reconnect and replay from Last-Event-ID.
+    // Raising an error here would put a red banner on a run that is about to carry on.
+    const { result } = renderHook(() => useReasoningStream());
+    const es = await openStream(result.current.start);
+
+    es.readyState = MockEventSource.CONNECTING;
+    act(() => es.onerror?.());
+
+    expect(result.current.state.error).toBeNull();
+  });
+
+  it('reports a stream the browser has given up on instead of showing "Connecting…" forever', async () => {
+    // readyState CLOSED is a stream the server refused — an expired stream token, an unknown
+    // session, a proxy that will not hold the connection. The browser does not retry, so
+    // without an error the theatre sits at "Connecting…" for as long as anyone will wait.
+    const { result } = renderHook(() => useReasoningStream());
+    const es = await openStream(result.current.start);
+
+    es.readyState = MockEventSource.CLOSED;
+    act(() => es.onerror?.());
+
+    expect(result.current.state.error).toBe('The reasoning stream closed before the run finished.');
+    expect(result.current.state.running).toBe(false);
+    expect(result.current.state.done).toBe(false);
+  });
+
+  it('does not raise an error when the stream closes after a completed run', async () => {
+    const { result } = renderHook(() => useReasoningStream());
+    const es = await openStream(result.current.start);
+
+    // `done` calls stop(), which closes the socket — the close itself can fire onerror.
+    act(() => es.emit('done', {}));
+    act(() => es.onerror?.());
+
+    expect(result.current.state.error).toBeNull();
+    expect(result.current.state.done).toBe(true);
+  });
+
+  it('reopens with a freshly minted token when the stream is restarted', async () => {
+    // What the theatre's Reconnect button does: resubscribe to the same session rather than
+    // put the clinician through the eight-agent run a second time.
+    const { result } = renderHook(() => useReasoningStream());
+    const first = await openStream(result.current.start);
+
+    first.readyState = MockEventSource.CLOSED;
+    act(() => first.onerror?.());
+    expect(result.current.state.error).not.toBeNull();
+
+    vi.mocked(api.reasoningStreamUrl).mockResolvedValue(
+      'http://api/api/v1/reasoning/s1/stream?token=fresh-token',
+    );
+    const second = await openStream(result.current.start);
+
+    expect(api.reasoningStreamUrl).toHaveBeenCalledTimes(2);
+    expect(second.url).toContain('token=fresh-token');
+    expect(first.closed).toBe(true);
+    // The restart clears the failed attempt rather than leaving its banner over a live run.
+    expect(result.current.state.error).toBeNull();
+    expect(result.current.state.running).toBe(true);
   });
 
   it('keeps the latest payload per event type and an ordered log', async () => {

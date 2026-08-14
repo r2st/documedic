@@ -114,8 +114,26 @@ export function useReasoningStream() {
         es.addEventListener(name, (e) => handle(name, (e as MessageEvent).data));
       }
       es.onerror = () => {
-        // Browser will retry; if it never opened, surface a soft error.
-        setState((s) => (s.done ? s : { ...s, running: false }));
+        // Two different failures arrive on this one handler, and they need opposite answers.
+        //
+        // A transient drop mid-stream leaves the EventSource in CONNECTING: the browser is
+        // already retrying and will replay from `Last-Event-ID`, so raising an error here
+        // would put a red banner on a run that is about to carry on by itself.
+        //
+        // A stream that the server refused — an expired stream token, a 404 session, a proxy
+        // that will not hold the connection — leaves it CLOSED, and the browser does not
+        // retry. That case used to only clear `running`, which left the pill reading
+        // "Connecting…" for as long as the clinician was willing to wait, with the eight
+        // agents either never started or finished long ago. Say so, and let them restart.
+        setState((s) => {
+          if (s.done) return s;
+          if (es.readyState !== EventSource.CLOSED) return { ...s, running: false };
+          return {
+            ...s,
+            running: false,
+            error: 'The reasoning stream closed before the run finished.',
+          };
+        });
       };
     },
     [stop],

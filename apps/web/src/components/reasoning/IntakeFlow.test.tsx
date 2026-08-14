@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IntakeQuestion } from '@/lib/types';
@@ -8,7 +8,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: { ...actual.api, submitIntakeAnswers: vi.fn() } };
 });
 
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { IntakeFlow } from './IntakeFlow';
 
 function question(overrides: Partial<IntakeQuestion> = {}): IntakeQuestion {
@@ -144,6 +144,99 @@ describe('IntakeFlow question rendering', () => {
     await user.click(screen.getByRole('button', { name: /Submit/i }));
 
     expect(api.submitIntakeAnswers).toHaveBeenCalledWith('s1', []);
+  });
+});
+
+describe('IntakeFlow submit failures', () => {
+  beforeEach(() => {
+    vi.mocked(api.submitIntakeAnswers).mockReset();
+  });
+
+  it('surfaces the API message instead of failing silently', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockRejectedValue(
+      new ApiError(409, 'session_closed', 'This reasoning session has already been closed.'),
+    );
+    const onComplete = vi.fn();
+    const user = userEvent.setup();
+    render(<IntakeFlow sessionId="s1" questions={[question()]} onComplete={onComplete} />);
+
+    await user.type(screen.getByPlaceholderText(/Your answer/), '3 days');
+    await user.click(screen.getByRole('button', { name: 'Submit answers' }));
+
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent('This reasoning session has already been closed.');
+    // A failed submit must not advance the encounter past intake.
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('tells the clinician the answers may not have landed when the server is unreachable', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />);
+
+    await user.type(screen.getByPlaceholderText(/Your answer/), '3 days');
+    await user.click(screen.getByRole('button', { name: 'Submit answers' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /these intake answers may not have completed/i,
+    );
+  });
+
+  it('keeps the typed answers so the retry re-sends them rather than asking again', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />);
+
+    await user.type(screen.getByPlaceholderText(/Your answer/), '3 days');
+    await user.click(screen.getByRole('button', { name: 'Submit answers' }));
+    await screen.findByRole('alert');
+
+    // The interview the clinician typed is still on screen, not cleared by the failure.
+    expect(screen.getByPlaceholderText(/Your answer/)).toHaveValue('3 days');
+
+    vi.mocked(api.submitIntakeAnswers).mockResolvedValue({
+      session: {} as never,
+      pending_questions: [],
+      intake_complete: true,
+    });
+    await user.click(screen.getByRole('button', { name: 'Send answers again' }));
+
+    expect(api.submitIntakeAnswers).toHaveBeenNthCalledWith(2, 's1', [
+      { question_id: 'q1', answer_text: '3 days' },
+    ]);
+  });
+
+  it('clears the previous failure while the retry is in flight', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />);
+
+    await user.type(screen.getByPlaceholderText(/Your answer/), '3 days');
+    await user.click(screen.getByRole('button', { name: 'Submit answers' }));
+    await screen.findByRole('alert');
+
+    // The retry succeeds; the banner describing the previous attempt must not linger.
+    vi.mocked(api.submitIntakeAnswers).mockResolvedValue({
+      session: {} as never,
+      pending_questions: [question({ id: 'q2', question_text: 'Any fever?' })],
+      intake_complete: false,
+    });
+    await user.click(screen.getByRole('button', { name: 'Send answers again' }));
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByText('Any fever?')).toBeInTheDocument();
+  });
+
+  it('re-enables the submit button after a failure so the run is not stuck', async () => {
+    vi.mocked(api.submitIntakeAnswers).mockRejectedValue(new TypeError('Failed to fetch'));
+    const user = userEvent.setup();
+    render(<IntakeFlow sessionId="s1" questions={[question()]} onComplete={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Submit answers' }));
+    await screen.findByRole('alert');
+
+    expect(screen.getByRole('button', { name: 'Submit answers' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Skip — proceed to reasoning' })).toBeEnabled();
   });
 });
 

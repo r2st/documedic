@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import type { AutonomyTier, ClinicalSuggestion } from '@/lib/types';
 import { api } from '@/lib/api';
-import { Button } from '@/components/ui';
+import { requestErrorMessage } from '@/lib/errors';
+import { Button, ErrorBanner } from '@/components/ui';
 import { AutonomyBadge, CantMissBadge, ProbabilityBandBadge } from './badges';
 
 interface EvidenceItem {
@@ -141,15 +142,55 @@ export function SuggestionCard({
   const [acknowledged, setAcknowledged] = useState(s.autonomy_tier !== 'flag_for_review');
   const [overrideReason, setOverrideReason] = useState('');
   const [decided, setDecided] = useState<string | null>(null);
+  // The decision that failed to reach the audit log, kept so the banner can offer to send that
+  // same decision again rather than making the clinician find the right button a second time.
+  const [failed, setFailed] = useState<{
+    decision: string;
+    reason?: string;
+    message: string;
+  } | null>(null);
+  const [recording, setRecording] = useState(false);
 
   const evFor = (s.evidence.evidence_for as EvidenceItem[]) ?? [];
   const evAgainst = (s.evidence.evidence_against as EvidenceItem[]) ?? [];
   const hasDevil = s.devils_advocate && Object.keys(s.devils_advocate).length > 0;
 
+  /**
+   * Write a clinician decision to the immutable audit trail.
+   *
+   * This had no error handling at all: `api.recordDecision` rejecting left an unhandled
+   * rejection, `setDecided` never ran, and the card simply stayed as it was. On a hard block
+   * that is the worst possible failure mode — the clinician types their reasoning, presses
+   * "Override with documented reason", and the card gives back nothing: no confirmation, no
+   * error. Nothing distinguishes "the override is recorded" from "the override never left the
+   * browser", and the audit trail is the whole point of the control.
+   */
   async function record(decision: string, reason?: string) {
-    await api.recordDecision(sessionId, s.id, decision, reason);
-    setDecided(decision);
+    setFailed(null);
+    setRecording(true);
+    try {
+      await api.recordDecision(sessionId, s.id, decision, reason);
+      setDecided(decision);
+    } catch (err) {
+      setFailed({
+        decision,
+        reason,
+        message: requestErrorMessage(err, `this ${decision.replace(/_/g, ' ')} decision`),
+      });
+    } finally {
+      setRecording(false);
+    }
   }
+
+  const decisionError = failed && (
+    <ErrorBanner
+      className="mt-3"
+      message={failed.message}
+      onRetry={() => void record(failed.decision, failed.reason)}
+      retrying={recording}
+      retryLabel="Record it again"
+    />
+  );
 
   if (s.is_hard_block) {
     const reasonId = `override-reason-${s.id}`;
@@ -208,16 +249,19 @@ export function SuggestionCard({
               <Button
                 className="w-full sm:w-auto"
                 variant="danger"
-                disabled={!overrideReason.trim()}
+                disabled={!overrideReason.trim() || recording}
+                aria-busy={recording}
                 aria-describedby={overrideHintId}
-                onClick={() => record('overridden', overrideReason)}
+                onClick={() => void record('overridden', overrideReason)}
               >
                 Override with documented reason
               </Button>
               <Button
                 className="w-full sm:w-auto"
                 variant="secondary"
-                onClick={() => record('acknowledged')}
+                disabled={recording}
+                aria-busy={recording}
+                onClick={() => void record('acknowledged')}
               >
                 Acknowledge (do not override)
               </Button>
@@ -229,6 +273,7 @@ export function SuggestionCard({
                 ? 'A reason is recorded; the override can be submitted.'
                 : 'Enter a reason above to enable the override.'}
             </p>
+            {decisionError}
           </div>
         )}
       </div>
@@ -343,6 +388,12 @@ export function SuggestionCard({
               Recorded decision: {decided}
             </p>
           )}
+
+          {/* The evidence stays revealed even when the acknowledgement fails to record: the
+              clinician did engage, and hiding a flagged output behind a network failure would
+              be the worse of the two errors. What must not happen silently is the audit log
+              missing that engagement, so the failure says so and offers to send it again. */}
+          {decisionError}
         </>
       )}
     </div>

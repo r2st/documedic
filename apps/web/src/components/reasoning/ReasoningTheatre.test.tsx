@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -300,5 +301,58 @@ describe('ReasoningTheatre caveat rendering', () => {
 
     expect(screen.getByText('Limited history')).toBeInTheDocument();
     expect(screen.queryByText(/null/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ReasoningTheatre reconnect', () => {
+  it('offers a reconnect when the token could not be minted, and reopens on it', async () => {
+    // A failed stream used to be a dead end: the banner said what went wrong and the only way
+    // on was to leave the encounter and start the whole eight-agent run again.
+    vi.mocked(api.reasoningStreamUrl).mockRejectedValueOnce(new Error('401'));
+    const user = userEvent.setup();
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+
+    await screen.findByText('Could not open the reasoning stream');
+    expect(MockEventSource.instances).toHaveLength(0);
+
+    vi.mocked(api.reasoningStreamUrl).mockResolvedValue(
+      'http://api/api/v1/reasoning/s1/stream?token=fresh-token',
+    );
+    await user.click(screen.getByRole('button', { name: 'Reconnect' }));
+
+    const source = await latestSource();
+    expect(source.url).toContain('token=fresh-token');
+    await waitFor(() =>
+      expect(screen.queryByText('Could not open the reasoning stream')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('reconnects to the same session rather than re-running the agents', async () => {
+    const user = userEvent.setup();
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const first = await latestSource();
+
+    act(() => {
+      first.emit('error', { message: 'LLM provider unavailable' });
+    });
+    await screen.findByText('LLM provider unavailable');
+
+    await user.click(screen.getByRole('button', { name: 'Reconnect' }));
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(2));
+    // Same session, and the previous socket is not left open alongside the new one.
+    expect(api.reasoningStreamUrl).toHaveBeenLastCalledWith('s1');
+    expect(first.closed).toBe(true);
+  });
+
+  it('does not offer a reconnect while the run is healthy', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('reasoning_start', { sequence: ['triage'] });
+    });
+
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
   });
 });
