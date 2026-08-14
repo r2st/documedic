@@ -41,6 +41,9 @@ router = APIRouter(tags=["reasoning"])
 _SESSION_ERRORS = errors(401, 404)
 # The routes that spend an LLM call also advertise the 429 their rate limit can return.
 _METERED_SESSION_ERRORS = errors(401, 404, 429)
+# The two routes that start the panel add a 409: one run at a time per session. See
+# ``ReasoningService._claim_for_run``.
+_RUN_ERRORS = errors(401, 404, 409, 429)
 # Opening a session is the one route here that checks consent, so it is the only one that can
 # 403 — the later steps of a session that was lawfully opened stay available. See
 # ``ReasoningService.start``.
@@ -149,7 +152,7 @@ async def submit_answers(
     "/reasoning/{session_id}/run",
     response_model=ReasoningResultOut,
     summary="Run the eight-agent pipeline and return its verified output",
-    responses=_METERED_SESSION_ERRORS,
+    responses=_RUN_ERRORS,
     dependencies=[Depends(rate_limit("reasoning_run"))],
 )
 async def run_reasoning(
@@ -167,6 +170,12 @@ async def run_reasoning(
     Suggestions are `ClinicalSuggestion` records: written to the audit trail before they are
     returned, and never subsequently edited or deleted. A correction is a new record pointing
     at the one it supersedes.
+
+    One run at a time per session. A second request while one is going is a 409
+    (`reasoning_in_progress`) rather than a second panel: each run writes its own full set of
+    immutable suggestions against this session id, and nothing can remove the duplicates
+    afterwards. Wait for the run in progress — `GET ../stream` follows it live — and retry after
+    it finishes if the chart has since changed.
 
     Blocking, and the panel is slow. `GET ../stream` runs the same pipeline over SSE and emits
     each agent's contribution as it lands, which is what the Reasoning Theatre uses.
@@ -255,7 +264,7 @@ async def mint_stream_token(
     "/reasoning/{session_id}/stream",
     summary="Stream the pipeline as it runs (Server-Sent Events)",
     response_class=StreamingResponse,
-    responses=_METERED_SESSION_ERRORS
+    responses=_RUN_ERRORS
     | {
         200: {
             "description": (
@@ -284,6 +293,10 @@ async def stream_reasoning(
     ceiling exists for: a browser's `EventSource` reconnects automatically on every transport
     error, so a tab left open on a failing network re-runs the whole panel on a loop with nobody
     watching.
+
+    Shares the one-run-at-a-time rule with `POST ../run`: opening this while a run already holds
+    the session is a 409 (`reasoning_in_progress`), returned before the stream starts so an
+    `EventSource` stops rather than reconnecting into it.
     """
     account = await _account_from_query_or_header(request, db, session_id)
     # Enforced here rather than as a route dependency: `rate_limit()` resolves the account from
@@ -293,7 +306,10 @@ async def stream_reasoning(
     # dictionary lookup rather than a query.
     enforce_rate_limit("reasoning_run", str(account.id), subject="account")
     service = ReasoningService(db)
-    await service.get_session(account.id, session_id)
+    session = await service.get_session(account.id, session_id)
+    # Before the response starts, because after it there is no status code left to send and an
+    # `EventSource` reconnects through an in-stream error. See `ReasoningService.assert_runnable`.
+    service.assert_runnable(session)
 
     async def event_source() -> AsyncGenerator[str, None]:
         yield ": reasoning theatre stream open\n\n"

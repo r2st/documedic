@@ -182,6 +182,28 @@ class ConcurrentApprovalError(ConflictError):
     code = "concurrent_approval"
 
 
+class ReasoningRunInProgressError(ConflictError):
+    """This case is already being reasoned about. Watch the run that is going, or wait for it to
+    finish and start another — nothing was lost, and the deterministic drug-safety checks are
+    unaffected.
+
+    Raised when the single-run claim in ``ReasoningService.run`` loses its compare-and-swap,
+    which means another request took the session first. Two runs on one session are not two
+    opinions the clinician can compare: each writes its own full set of ClinicalSuggestion rows
+    against the same session_id, those rows are immutable by database trigger and cannot be
+    cleaned up, and the session header (status, autonomy_tier, case_state) is last-write-wins.
+    So the list would show every hypothesis twice while the header described only one of the two
+    runs — including, if the runs disagreed, a header reading ``suggestive`` above a hard-blocked
+    suggestion the other run produced.
+
+    409 rather than quietly joining the run in progress: the caller asked for a run and did not
+    get one. Retrying once the session leaves ``reasoning`` is safe and is the way to get output
+    that reflects a chart that has since changed.
+    """
+
+    code = "reasoning_in_progress"
+
+
 class EmailAlreadyExistsError(ConflictError):
     """An account with this email already exists. Sign in instead, or use another address."""
 

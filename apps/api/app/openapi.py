@@ -47,7 +47,9 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "drug-safety rule blocks the action (overridable only with documented reasoning), "
         "`email_exists` on duplicate signup, `concurrent_approval` when another approval of the "
         "same document merged first and this one was rolled back untouched (safe to retry), "
-        "`conflict` otherwise."
+        "`reasoning_in_progress` when a pipeline run already holds that session (wait for it "
+        "rather than starting a second — two runs write two sets of immutable suggestions "
+        "against one session), `conflict` otherwise."
     ),
     429: (
         "Rate limited. `code` is `rate_limited` when a per-account ceiling on work that costs "

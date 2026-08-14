@@ -9,12 +9,13 @@ produced by ``graph.run_reasoning``, which always routes through the Verifier (R
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import graph
@@ -23,7 +24,7 @@ from app.agents.llm import LLMClient, is_available
 from app.agents.state import CaseState, IntakeQuestionState
 from app.config import settings
 from app.core.logsafe import describe_exception
-from app.exceptions import NotFoundError, ValidationError
+from app.exceptions import NotFoundError, ReasoningRunInProgressError, ValidationError
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.patient import Patient
@@ -32,6 +33,19 @@ from app.services.audit_service import AuditDraft, AuditService
 from app.services.guideline_service import GuidelineService
 from app.services.record_service import REASONING_SNAPSHOT_LIMIT, RecordService
 from app.services.safety_service import SafetyFlag, SafetyService
+
+logger = logging.getLogger(__name__)
+
+# The one status that means "a pipeline run holds this session".
+RUNNING = "reasoning"
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite drops tzinfo on round-trip; treat a naive timestamp as UTC.
+
+    Same helper, same reason, as ``app.services.auth_service._aware``.
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 class ReasoningSessionNotFoundError(NotFoundError):
@@ -384,17 +398,116 @@ class ReasoningService:
             )
         return state
 
+    # --------------------------------------------------------------- the single-run claim
+    def _claim_is_live(self, session: ReasoningSession) -> bool:
+        """Whether a run currently holds this session.
+
+        ``reasoning`` alone is not enough to answer. A run that was killed rather than finished
+        leaves the status behind with nothing to clear it — and that is the ordinary case, not a
+        rare one: the Reasoning Theatre streams over SSE, and a browser tab closing cancels the
+        worker task with a ``CancelledError`` that the failure handler (which catches
+        ``Exception``) never sees. So a claim is live only while its lease holds. Past that it is
+        abandoned, and refusing to run because of it would make the case permanently unrunnable
+        by a clinician who did nothing wrong.
+
+        A NULL ``run_claimed_at`` under a ``reasoning`` status is a session from before the
+        column existed, or one whose claim predates it. Treated as abandoned, which is the
+        forgiving reading and the only safe one — there is no timestamp to argue otherwise.
+        """
+        if session.status != RUNNING:
+            return False
+        if session.run_claimed_at is None:
+            return False
+        lease = timedelta(minutes=settings.reasoning_run_lease_minutes)
+        return _aware(session.run_claimed_at) + lease > datetime.now(UTC)
+
+    def assert_runnable(self, session: ReasoningSession) -> None:
+        """Refuse early if a run already holds this session. Advisory, not the guarantee.
+
+        The guarantee is the compare-and-swap in :meth:`_claim_for_run`; this is a read of the
+        row a caller has already loaded, so it can be wrong in the microseconds between the read
+        and the claim. It exists for the SSE route, which cannot produce a status code once it
+        has started streaming — and the status code is what matters there. A browser's
+        ``EventSource`` treats a non-2xx response as a permanent failure and stops, but treats a
+        200 stream that ends in an error as a transport problem and *reconnects*. Relaying the
+        conflict inside the stream would therefore turn a second tab into the reconnect loop the
+        reasoning rate limit exists to survive.
+        """
+        if self._claim_is_live(session):
+            raise ReasoningRunInProgressError()
+
+    async def _claim_for_run(self, session: ReasoningSession) -> None:
+        """Take exclusive hold of the session for one pipeline run, or refuse.
+
+        Why a claim and not the rate limiter: the limiter counts requests per minute and cannot
+        stop two of them being *in flight*. Two concurrent runs each write a complete set of
+        ClinicalSuggestion rows against the same ``session_id``. Those rows are immutable by
+        database trigger (Rule #7), so the duplicates can never be removed — and the session
+        header they hang under (status, autonomy_tier, case_state) is last-write-wins, so a case
+        could end up reading ``suggestive`` above a hard-blocked suggestion the other run wrote.
+        The clinician then has two overlapping differentials and nothing saying which is current.
+
+        The atomicity is in the WHERE clause. Both the status and the claim timestamp must still
+        be what this transaction read, so a racing claimant re-evaluates against the winner's
+        committed row and matches nothing. ``run_claimed_at`` is written from Python rather than
+        by ``func.now()`` precisely so it always moves: SQLite's clock has second resolution, and
+        two takeovers inside one second would otherwise swap on an unchanged value and both win.
+
+        The commit is not optional. A flush is invisible to the other request's transaction under
+        READ COMMITTED, so an uncommitted claim would let both runs through — the claim has to be
+        durable before the panel starts, which is also what leaves it behind for the lease to
+        clean up if this run is killed.
+        """
+        if self._claim_is_live(session):
+            raise ReasoningRunInProgressError()
+        if session.status == RUNNING:
+            logger.warning(
+                "Reasoning session %s was left claimed by a run that did not finish; the lease "
+                "has expired and it is being taken over.",
+                session.id,
+            )
+
+        claimed_at = datetime.now(UTC)
+        # CursorResult, not Result: only the former carries ``rowcount``, and the win/lose answer
+        # is exactly "did the WHERE clause still match". ``Session.execute`` is typed as the
+        # base, so the narrowing is spelled out rather than left to an ``attr-defined`` ignore.
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(ReasoningSession)
+                .where(
+                    ReasoningSession.id == session.id,
+                    ReasoningSession.status == session.status,
+                    ReasoningSession.run_claimed_at == session.run_claimed_at,
+                )
+                .values(status=RUNNING, run_claimed_at=claimed_at, error_detail=None)
+                # The ORM's default post-update synchronisation re-evaluates this WHERE clause
+                # in Python against the identity map, which compares a tz-aware claim against
+                # the naive datetime SQLite hands back and raises. Nothing here depends on that
+                # sync: the two changed attributes are set on the instance below.
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        await self.db.commit()
+        if result.rowcount == 0:
+            raise ReasoningRunInProgressError()
+        session.status = RUNNING
+        session.run_claimed_at = claimed_at
+
     # --------------------------------------------------------------- pipeline
     async def run(
         self, account_id: uuid.UUID, session_id: uuid.UUID, emit: EventEmitter | None = None
     ) -> tuple[ReasoningSession, list[ClinicalSuggestion]]:
         session = await self._session(account_id, session_id)
+        # Exclusive from here: nothing else may run this session until the claim is released or
+        # its lease expires. Taken before the snapshot is assembled so a losing caller spends one
+        # UPDATE rather than a chart read.
+        await self._claim_for_run(session)
         # When the LLM is unavailable the pipeline still runs deterministically (degraded mode):
         # it marks the case degraded, escalates to flag-for-review, and attaches an explicit
         # caveat rather than silently producing confident output.
         state = await self._rebuild_intake_state(session)
         state.intake_complete = True
-        session.status = "reasoning"
         await self.db.flush()
 
         ctx = await self._build_context(account_id, session.patient_id, emit=emit)

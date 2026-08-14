@@ -72,5 +72,21 @@ class ReasoningSession(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Bas
         JSONBType, nullable=False, default=dict, server_default="{}"
     )
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When a pipeline run last took this session. The single-run claim in
+    # ``ReasoningService.run`` compare-and-swaps on this value, so two requests that reach the
+    # session at the same moment cannot both start the panel — the loser gets a 409 instead of
+    # writing a second, duplicate set of immutable ClinicalSuggestion rows against one session.
+    #
+    # A separate column rather than ``updated_at``: this one is written explicitly with a Python
+    # ``datetime.now(UTC)``, so it always changes by microseconds between two claims. The
+    # ``onupdate=func.now()`` on ``updated_at`` is the database's clock, which on SQLite has
+    # second resolution — two takeovers inside one second would swap on an unchanged value and
+    # both win, which is the race this exists to close.
+    #
+    # Also the lease: a run killed mid-flight (the Reasoning Theatre's ``EventSource``
+    # disconnecting cancels the worker task) leaves the claim standing with nothing to release
+    # it. A claim older than ``settings.reasoning_run_lease_minutes`` is treated as abandoned and
+    # can be taken over, so a dead run cannot make a case permanently unrunnable.
+    run_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

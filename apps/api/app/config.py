@@ -156,6 +156,18 @@ class Settings(BaseSettings):
     # not this one.
     rate_limit_signups_per_hour: int = 10
 
+    # --- Single-run claim (reasoning sessions) ---
+    # How long a claim on a reasoning session stays valid before another request may take it
+    # over. A rate limit counts requests over a minute; it cannot stop two of them being in
+    # flight at once, and two concurrent runs write two full sets of *immutable* suggestions
+    # against one session. So the claim is what makes a run exclusive, and this is its lease.
+    #
+    # Generous on purpose. Expiring early is the harmful direction — it permits exactly the
+    # double run the claim exists to prevent — while expiring late only delays a retry after a
+    # run has already died. Sized well above a full eight-agent panel, whose own ceiling is
+    # llm_request_timeout_seconds per call.
+    reasoning_run_lease_minutes: int = 15
+
     # --- Field-level encryption (patient PII at rest) ---
     # When unset, a key is derived from app_secret_key (dev convenience). Set explicitly in
     # production so rotating app_secret_key doesn't also break decryption of stored PII.

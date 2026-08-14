@@ -48,7 +48,9 @@ from app.db.session import get_db
 from app.main import create_app
 from app.models import Base
 from app.models.audit_log import AuditLog
+from app.models.clinical_suggestion import ClinicalSuggestion
 from app.models.lab_result import LabResult
+from app.services import reasoning_service
 from app.services.audit_service import AuditService
 
 CONCURRENCY = 6
@@ -399,3 +401,101 @@ async def test_simultaneous_approvals_of_one_document_record_one_blood_draw(
     assert list(markers) == ["Creatinine"], (
         f"one blood draw was recorded as {len(markers)} lab results: {sorted(markers)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_two_overlapping_runs_on_one_session_produce_one_set_of_suggestions(
+    clinicians, file_sessionmaker, monkeypatch
+):
+    """Two clinicians pressing Run on the same case at the same moment.
+
+    Unlike a duplicated lab result, a duplicated reasoning run cannot be cleaned up afterwards.
+    Each run writes its own complete set of ``ClinicalSuggestion`` rows against the same
+    ``session_id``, and those rows are immutable by database trigger (Rule #7) — so the second
+    run permanently doubles the differential the clinician is shown. The session header they
+    hang under (status, autonomy_tier, case_state) is last-write-wins on top of that, so if the
+    two runs disagreed the case could read ``suggestive`` above a hard-blocked suggestion the
+    other run produced. Nothing in the record would say which set was current.
+
+    The overlap is forced rather than hoped for. The panel runs deterministically in tests (no
+    LLM), so it is fast enough that two ``gather``-ed requests can simply finish one after the
+    other — and a *sequential* second run is legitimate, returning 200. Holding the first run
+    inside the graph until the second has been answered is what makes this test about the race
+    rather than about scheduling luck.
+    """
+    first, second = clinicians
+    patient_id = await _create_patient(first, "Concurrent Run")
+    start = await first.post(
+        f"/api/v1/patients/{patient_id}/reasoning",
+        json={"presenting_complaint": "Fever and cough for three days"},
+    )
+    assert start.status_code == 201, start.text
+    session_id = start.json()["session"]["id"]
+
+    in_the_graph = asyncio.Event()
+    may_finish = asyncio.Event()
+    real_run_reasoning = reasoning_service.graph.run_reasoning
+
+    async def held_run_reasoning(state, ctx):
+        in_the_graph.set()
+        await may_finish.wait()
+        return await real_run_reasoning(state, ctx)
+
+    monkeypatch.setattr(reasoning_service.graph, "run_reasoning", held_run_reasoning)
+
+    winner = asyncio.create_task(first.post(f"/api/v1/reasoning/{session_id}/run"))
+    await asyncio.wait_for(in_the_graph.wait(), timeout=10)
+
+    loser = await second.post(f"/api/v1/reasoning/{session_id}/run")
+
+    may_finish.set()
+    winner_response = await asyncio.wait_for(winner, timeout=30)
+
+    assert winner_response.status_code == 200, winner_response.text
+    assert loser.status_code == 409, loser.text
+    assert loser.json()["code"] == "reasoning_in_progress"
+
+    async with file_sessionmaker() as db:
+        # Differentials specifically: the panel deduplicates diagnoses by name within a run
+        # (``hypothesis_panel._merge``), so one diagnosis appearing twice under one session can
+        # only mean two runs wrote it. Management options share a generic title and legitimately
+        # repeat inside a single run, so they cannot carry this assertion.
+        rows = (
+            (
+                await db.execute(
+                    select(ClinicalSuggestion.title).where(
+                        ClinicalSuggestion.session_id == uuid.UUID(session_id),
+                        ClinicalSuggestion.output_type == "differential",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert rows, "the winning run wrote no differential at all"
+    assert len(rows) == len(set(rows)), (
+        f"a second run duplicated the differential, and these rows cannot be deleted: "
+        f"{sorted(rows)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_finished_does_not_block_the_next_one(clinicians):
+    """The claim is exclusivity, not a one-shot.
+
+    A chart changes — a new lab lands, the clinician answers a follow-up — and the case is worth
+    reasoning about again. Only *overlapping* runs are refused; a session that has left
+    ``reasoning`` is runnable, and a claim that outlived its run must not be what stops it.
+    """
+    first, _ = clinicians
+    patient_id = await _create_patient(first, "Sequential Run")
+    start = await first.post(
+        f"/api/v1/patients/{patient_id}/reasoning",
+        json={"presenting_complaint": "Chest pain on exertion"},
+    )
+    session_id = start.json()["session"]["id"]
+
+    for attempt in range(2):
+        resp = await first.post(f"/api/v1/reasoning/{session_id}/run")
+        assert resp.status_code == 200, f"run {attempt + 1} was refused: {resp.text}"
