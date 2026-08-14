@@ -89,6 +89,11 @@ async def check_medication(
             "allergies": len(ctx.allergies),
             "conditions": len(ctx.conditions),
             "egfr_available": ctx.egfr is not None,
+            # Same statement for the other measured axis. A hepatic threshold with no liver
+            # panel to apply it to reports itself in `flags`, but only for a drug that has such
+            # a rule — this says what the chart carries regardless, so "renal thresholds were
+            # applied and hepatic ones could not be" is legible without reading the flag list.
+            "hepatic_markers_available": bool(ctx.hepatic),
             # Counted separately from `current_medications`, which holds only what could be
             # matched to the vocabulary. Without this the count reads as the whole medication
             # list and quietly shrinks by whatever the resolver could not read.

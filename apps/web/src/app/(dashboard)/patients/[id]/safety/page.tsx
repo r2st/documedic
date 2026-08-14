@@ -230,11 +230,23 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
               {String(result.checked_against.conditions ?? 0)} condition(s).{' '}
               {result.checked_against.egfr_available
                 ? 'eGFR available.'
-                : 'No eGFR on this chart, so renal thresholds were not applied.'}
+                : 'No eGFR on this chart, so renal thresholds were not applied.'}{' '}
+              {result.checked_against.hepatic_markers_available
+                ? 'Liver panel available.'
+                : 'No liver function tests on this chart, so hepatic thresholds were not applied.'}
               {count(result.checked_against.unresolved_medications) > 0 ? (
                 <span className="mt-1 block font-medium text-amber-700">
                   {count(result.checked_against.unresolved_medications)} further medication(s) on
                   this chart could not be matched to a known drug and were not checked against.
+                </span>
+              ) : null}
+              {/* The allergy counterpart, and the higher-stakes one: an allergen the vocabulary
+                  cannot name is cross-checked against nothing but an exact generic-name match, so
+                  the headline "N allergy(ies)" overstates how much of the hard-block rule ran. */}
+              {count(result.checked_against.unresolved_allergies) > 0 ? (
+                <span className="mt-1 block font-medium text-amber-700">
+                  {count(result.checked_against.unresolved_allergies)} of those allergy(ies) could
+                  not be matched to a known drug, so this drug was not cross-checked against them.
                 </span>
               ) : null}
             </div>

@@ -301,6 +301,64 @@ describe('SafetyPage coverage footnote', () => {
     expect(screen.queryByText(/No eGFR on this chart/)).not.toBeInTheDocument();
   });
 
+  it('says a missing liver panel was missing instead of showing nothing', async () => {
+    // The eGFR footnote's counterpart, for the same reason: a hepatic threshold with no LFTs to
+    // apply it to only reports itself in `flags` for the handful of drugs carrying such a rule.
+    // For every other drug the chart's silence about the liver was silence here too.
+    await runCheck();
+
+    expect(await screen.findByText(/No liver function tests on this chart/)).toBeInTheDocument();
+    expect(screen.queryByText(/Liver panel available/)).not.toBeInTheDocument();
+  });
+
+  it('does not claim a missing liver panel when one was used', async () => {
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        checked_against: {
+          current_medications: 3,
+          allergies: 1,
+          conditions: 2,
+          egfr_available: true,
+          hepatic_markers_available: true,
+        },
+      }),
+    );
+    await runCheck();
+
+    expect(await screen.findByText(/Liver panel available/)).toBeInTheDocument();
+    expect(screen.queryByText(/No liver function tests on this chart/)).not.toBeInTheDocument();
+  });
+
+  it('reports allergies the vocabulary could not name rather than counting them as checked', async () => {
+    // The higher-stakes half of the same gap: `allergies` counts every documented allergy,
+    // including the ones carrying no reference id and no drug class, which were cross-checked
+    // against nothing but an exact generic-name match. The headline count on its own overstates
+    // how much of the one non-overridable rule in the engine actually ran.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        checked_against: {
+          current_medications: 1,
+          allergies: 2,
+          conditions: 0,
+          egfr_available: true,
+          unresolved_allergies: 1,
+        },
+      }),
+    );
+    await runCheck();
+
+    expect(
+      await screen.findByText(/1 of those allergy\(ies\) could not be matched to a known drug/),
+    ).toBeInTheDocument();
+  });
+
+  it('stays quiet when every documented allergy was identified', async () => {
+    await runCheck();
+    await screen.findByText('Ibuprofen');
+
+    expect(screen.queryByText(/of those allergy\(ies\)/)).not.toBeInTheDocument();
+  });
+
   it('reports medications the resolver could not read rather than shrinking the count', async () => {
     // `current_medications` counts only what resolved, so a chart losing a line to the resolver
     // showed a smaller number with nothing saying why. The API reports the gap separately; not

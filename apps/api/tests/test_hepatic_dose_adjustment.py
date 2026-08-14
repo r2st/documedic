@@ -36,6 +36,8 @@ from app.models.patient import Patient
 from app.models.user import Account
 from app.services.safety_service import SafetyService
 
+from .conftest import create_patient
+
 pytestmark = pytest.mark.asyncio
 
 _MTX = DrugRef("MTX-7.5", "Methotrexate", "Antimetabolite (DMARD)")
@@ -373,3 +375,60 @@ async def test_a_statin_on_a_raised_alt_prompts_rather_than_blocks(db) -> None:
     assert len(hepatic) == 1
     assert hepatic[0].is_hard_block is False
     assert hepatic[0].severity == "warning"
+
+
+# --- through the API ----------------------------------------------------------------------
+
+
+async def _api_patient_with_labs(auth_client, db, *rows: tuple[str, str, str]) -> str:
+    patient = await create_patient(auth_client)
+    for marker, value, unit in rows:
+        db.add(
+            LabResult(
+                patient_id=uuid.UUID(patient["id"]),
+                marker_name=marker,
+                value_numeric=Decimal(value),
+                unit=unit,
+                sample_date=date(2026, 3, 1),
+            )
+        )
+    await db.commit()
+    return str(patient["id"])
+
+
+async def _api_check(auth_client, patient_id: str, drug: str) -> dict:
+    response = await auth_client.post(
+        f"/api/v1/patients/{patient_id}/drug-safety/check",
+        json={"drug_reference_id": drug},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_the_response_says_whether_the_chart_carries_a_liver_panel(auth_client, db) -> None:
+    """The renal footnote's counterpart.
+
+    ``egfr_available`` has always been reported because the Safety screen renders the *absence*
+    of a footnote as nothing at all — the failure R43 fixed. A hepatic threshold with nothing to
+    apply it to reports itself in ``flags``, but only for the handful of drugs that carry such a
+    rule; for every other drug the chart's silence about the liver is silent here too. So the
+    tally states it for the chart, the same way it states the eGFR.
+    """
+    without = await _api_patient_with_labs(auth_client, db)
+    body = await _api_check(auth_client, without, "PCM-650")
+    assert body["checked_against"]["hepatic_markers_available"] is False
+
+    with_panel = await _api_patient_with_labs(auth_client, db, ("SGPT", "42", "U/L"))
+    body = await _api_check(auth_client, with_panel, "PCM-650")
+    assert body["checked_against"]["hepatic_markers_available"] is True
+
+
+async def test_an_unreadable_liver_row_reports_no_markers_rather_than_some(auth_client, db) -> None:
+    """A row the normaliser cannot convert leaves the panel empty, and the tally must agree with
+    the panel rather than with the fact that a liver row exists — otherwise the screen tells the
+    clinician hepatic thresholds were applied to a value nothing could read."""
+    patient = await _api_patient_with_labs(auth_client, db, ("Total Bilirubin", "4.2", "furlongs"))
+
+    body = await _api_check(auth_client, patient, "PCM-650")
+
+    assert body["checked_against"]["hepatic_markers_available"] is False
