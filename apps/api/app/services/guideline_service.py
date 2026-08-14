@@ -340,6 +340,19 @@ def _document_key(chunk: RetrievableChunk) -> tuple[str, str]:
     return (chunk.source, chunk.document_title)
 
 
+def _chunk_key(chunk: RetrievableChunk) -> tuple[str, str]:
+    """What identifies one chunk: its source *and* its section id, never the section id alone.
+
+    A ``section_id`` is only unique within its source. That is what the table enforces (unique on
+    ``corpus_version, source, section_id``), what ``guideline_ingest._point_id`` hashes, and what
+    ``_document_key`` assumes one level up. The shipped 15-chunk corpus happens to prefix every id
+    with its source (``ICMR-HTN-DX``), so nothing collides today -- but WHO and NICE sections are
+    numbered generically (``1.2.3``) in the real documents this corpus grows into, and two sources
+    landing on one id is then ordinary rather than exotic.
+    """
+    return (chunk.source, chunk.section_id)
+
+
 # What a matched intent is worth, in the same units as a keyword hit (×1.5) -- so roughly one and
 # a third keyword hits. Calibrated against the shipped corpus as the smallest weight that carries
 # every benchmark case's own management section over the citation threshold; see
@@ -403,7 +416,7 @@ _SCORE_EPSILON = 0.0001
 
 def apply_dense_rerank(
     scored: list[tuple[float, RetrievableChunk]],
-    dense: Mapping[str, float],
+    dense: Mapping[tuple[str, str], float],
     cut: float,
 ) -> list[tuple[float, RetrievableChunk]]:
     """Reorder results by dense similarity *within* the citable and non-citable bands.
@@ -444,7 +457,7 @@ def apply_dense_rerank(
         return scored
     reranked: list[tuple[float, RetrievableChunk]] = []
     for score, chunk in scored:
-        similarity = dense.get(chunk.section_id)
+        similarity = dense.get(_chunk_key(chunk))
         if similarity is None:
             reranked.append((score, chunk))
             continue
@@ -471,7 +484,7 @@ def lexical_score(
     k: int,
     *,
     threshold: float | None = None,
-    dense: Mapping[str, float] | None = None,
+    dense: Mapping[tuple[str, str], float] | None = None,
 ) -> list[dict]:
     """Deterministic lexical retriever: keyword evidence (×1.5) + body token overlap, normalised.
 
@@ -483,9 +496,9 @@ def lexical_score(
     ``threshold`` is the citation threshold the caller will apply to the result -- it is what
     "this document is about the case" means -- and defaults to the one the reasoning engine uses.
 
-    ``dense`` maps section_id to the query's cosine similarity with that chunk, when a dense
-    model is available. It reorders results inside their band and never changes which of them
-    clear ``threshold`` -- see ``apply_dense_rerank``. The name of this function is therefore
+    ``dense`` maps ``(source, section_id)`` to the query's cosine similarity with that chunk, when
+    a dense model is available. It reorders results inside their band and never changes which of
+    them clear ``threshold`` -- see ``apply_dense_rerank``. The name of this function is therefore
     still accurate: what it *retrieves* is lexical, always.
     """
     q_tokens = query_tokens(query)
@@ -519,7 +532,9 @@ def lexical_score(
     return [GuidelineService._to_dict(c, s) for s, c in scored[:k]]
 
 
-async def dense_scores(query: str, chunks: Sequence[RetrievableChunk]) -> dict[str, float] | None:
+async def dense_scores(
+    query: str, chunks: Sequence[RetrievableChunk]
+) -> dict[tuple[str, str], float] | None:
     """Cosine similarity of ``query`` against every chunk that carries an embedding.
 
     None when dense retrieval is unavailable — no model installed, the corpus was ingested
@@ -537,7 +552,7 @@ async def dense_scores(query: str, chunks: Sequence[RetrievableChunk]) -> dict[s
     if vector is None:
         return None
     return {
-        c.section_id: dense_retrieval.cosine(vector, c.embedding)
+        _chunk_key(c): dense_retrieval.cosine(vector, c.embedding)
         for c in chunks
         if c.embedding is not None
     }

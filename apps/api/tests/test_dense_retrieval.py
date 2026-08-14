@@ -1,10 +1,11 @@
 """The dense half of guideline retrieval: the vector helpers, and the bound on what they may do.
 
-Dense retrieval was built and never connected. ``guideline_ingest`` embedded every chunk, wrote
-the vector to ``guideline_chunks.embedding`` and upserted it into Qdrant; ``requirements.txt``
-pinned ``sentence-transformers`` and ``qdrant-client``; three module docstrings said production
-retrieval *was* dense search with lexical as the offline fallback. Nothing in the application
-ever read an embedding. There was no dense code path to test, which is why nothing here failed.
+Dense retrieval was built and never connected, on either side. ``requirements.txt`` pinned
+``sentence-transformers`` and ``qdrant-client``; three module docstrings said production retrieval
+*was* dense search with lexical as the offline fallback. Nothing in the application ever read an
+embedding — and nothing ever wrote one either, since ``guideline_ingest`` embedded only when its
+caller asked for a Qdrant push and no deployment path did. There was no dense code path to test,
+which is why nothing here failed.
 
 Two things are tested. First the vector helpers, which parse data written by an optional ingest
 path and read back through whatever JSON driver the deployment uses -- so they are the boundary
@@ -270,7 +271,7 @@ async def test_a_corpus_with_no_embeddings_never_loads_a_model(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_dense_scores_are_keyed_by_section_id_and_skip_unembedded_chunks(monkeypatch):
+async def test_dense_scores_are_keyed_by_source_and_section_and_skip_unembedded(monkeypatch):
     monkeypatch.setattr(dense_retrieval, "embed_query", lambda _t: (1.0, 0.0))
     chunks = [
         _chunk("A-1", "dengue fever management", ["dengue"], embedding=[1.0, 0.0]),
@@ -281,8 +282,9 @@ async def test_dense_scores_are_keyed_by_section_id_and_skip_unembedded_chunks(m
     scores = await dense_scores("management of dengue", chunks)
 
     assert scores is not None
-    assert math.isclose(scores["A-1"], 1.0) and math.isclose(scores["B-1"], 0.0)
-    assert "C-1" not in scores, "a chunk with no vector cannot have a similarity"
+    assert math.isclose(scores[("icmr", "A-1")], 1.0)
+    assert math.isclose(scores[("icmr", "B-1")], 0.0)
+    assert ("icmr", "C-1") not in scores, "a chunk with no vector cannot have a similarity"
 
 
 @pytest.mark.anyio
@@ -327,7 +329,7 @@ def test_a_sub_threshold_result_cannot_be_promoted_by_any_similarity():
     """The load-bearing half of the invariant, tested at the extreme a model could actually
     reach: a chunk lexical scored just under the line, and a perfect 1.0 similarity."""
     scored = _banded([0.7499])
-    dense = {"S-0": 1.0}
+    dense = {("icmr", "S-0"): 1.0}
 
     ((score, _),) = apply_dense_rerank(scored, dense, THRESHOLD)
 
@@ -339,7 +341,7 @@ def test_a_citable_result_cannot_be_demoted_by_a_zero_similarity():
     embedding model has never heard of it -- otherwise a model regression silently removes
     guideline grounding the offline path guarantees."""
     scored = _banded([0.75])
-    dense = {"S-0": 0.0}
+    dense = {("icmr", "S-0"): 0.0}
 
     ((score, _),) = apply_dense_rerank(scored, dense, THRESHOLD)
 
@@ -381,7 +383,9 @@ def test_the_citable_set_is_identical_under_an_adversarial_similarity_map():
     for query in queries:
         plain = lexical_score(query, corpus, len(corpus))
         citable = {r["section_id"] for r in plain if r["score"] >= THRESHOLD}
-        adversarial = {r["section_id"]: (0.0 if r["score"] >= THRESHOLD else 1.0) for r in plain}
+        adversarial = {
+            (r["source"], r["section_id"]): (0.0 if r["score"] >= THRESHOLD else 1.0) for r in plain
+        }
 
         reranked = lexical_score(query, corpus, len(corpus), dense=adversarial)
 
@@ -395,7 +399,7 @@ def test_dense_similarity_does_reorder_within_the_citable_band():
     citable set is the entire point, because ``guideline_rag`` hands the model its excerpts in
     the order given and the first one is what an option gets grounded in."""
     scored = _banded([0.90, 0.80])
-    dense = {"S-0": 0.0, "S-1": 1.0}
+    dense = {("icmr", "S-0"): 0.0, ("icmr", "S-1"): 1.0}
 
     order = [c.section_id for _, c in apply_dense_rerank(scored, dense, THRESHOLD)]
 
@@ -407,7 +411,7 @@ def test_a_chunk_with_no_similarity_keeps_its_lexical_score_exactly():
     """A corpus part-way through re-ingestion has embeddings on some chunks and not others, and
     the ones without must not be silently pushed down the ranking."""
     scored = _banded([0.90, 0.80])
-    dense = {"S-1": 1.0}
+    dense = {("icmr", "S-1"): 1.0}
 
     result = {c.section_id: s for s, c in apply_dense_rerank(scored, dense, THRESHOLD)}
 
@@ -418,3 +422,64 @@ def test_an_empty_similarity_map_leaves_the_ranking_untouched():
     scored = _banded([0.90, 0.80, 0.20])
 
     assert apply_dense_rerank(scored, {}, THRESHOLD) == scored
+
+
+# --- a section_id is only unique within its source -------------------------------------------
+#
+# The table's unique constraint is (corpus_version, source, section_id) and ``_point_id`` hashes
+# all three, so two sources sharing a section_id is legal and expected -- WHO and NICE number
+# their sections generically ("1.2.3") where ICMR happens to prefix its ids with the source. The
+# similarity map used to key on section_id alone, which silently merged those two chunks: one
+# overwrote the other on the way in, and both then re-ranked on whichever survived.
+
+
+@pytest.mark.anyio
+async def test_two_sources_sharing_a_section_id_get_their_own_similarities(monkeypatch):
+    monkeypatch.setattr(dense_retrieval, "embed_query", lambda _t: (1.0, 0.0))
+    shared = "1.2.3"
+    icmr = _chunk(shared, "dengue fever management", ["dengue"], embedding=[1.0, 0.0])
+    who = RetrievableChunk.of(
+        GuidelineChunk(
+            corpus_version="v1",
+            source="who",
+            document_title="WHO doc",
+            section_id=shared,
+            heading="malaria",
+            content="malaria management",
+            page_range=None,
+            keywords=["malaria"],
+            embedding=[0.0, 1.0],
+        )
+    )
+
+    scores = await dense_scores("management of dengue", [icmr, who])
+
+    assert scores is not None
+    assert math.isclose(scores[("icmr", shared)], 1.0)
+    assert math.isclose(scores[("who", shared)], 0.0)
+
+
+def test_a_shared_section_id_does_not_hand_one_source_the_others_similarity():
+    """The consequence of the merge: the WHO chunk is the one the query actually matches, and
+    keying on the bare id ranked the ICMR chunk with the WHO chunk's score (or the reverse,
+    depending on iteration order) -- an arbitrary result either way."""
+    shared = "1.2.3"
+    icmr = _chunk(shared, "dengue", [])
+    who = RetrievableChunk.of(
+        GuidelineChunk(
+            corpus_version="v1",
+            source="who",
+            document_title="WHO doc",
+            section_id=shared,
+            heading="malaria",
+            content="malaria",
+            page_range=None,
+            keywords=[],
+        )
+    )
+    scored = [(0.90, icmr), (0.80, who)]
+    dense = {("icmr", shared): 0.0, ("who", shared): 1.0}
+
+    reranked = apply_dense_rerank(scored, dense, THRESHOLD)
+
+    assert [c.source for _, c in reranked] == ["who", "icmr"]

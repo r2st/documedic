@@ -407,16 +407,21 @@ def dense(corpus):
         pytest.skip(f"embedding model unavailable: {exc}")
 
     vectors = {
-        c.section_id: dense_retrieval.as_vector(
-            [float(x) for x in model.encode([f"{c.heading or ''} {c.content}"])[0]]
+        # ``embedding_text`` rather than an inline f-string: this has to be the text the ingest
+        # actually stores, or the benchmark reports numbers production never produces.
+        (c.source, c.section_id): dense_retrieval.as_vector(
+            [
+                float(x)
+                for x in model.encode([dense_retrieval.embedding_text(c.heading, c.content)])[0]
+            ]
         )
         for c in corpus
     }
 
-    def similarities(query: str) -> dict[str, float]:
+    def similarities(query: str) -> dict[tuple[str, str], float]:
         q = dense_retrieval.as_vector([float(x) for x in model.encode([query])[0]])
         assert q is not None
-        return {sid: dense_retrieval.cosine(q, v) for sid, v in vectors.items() if v}
+        return {key: dense_retrieval.cosine(q, v) for key, v in vectors.items() if v}
 
     return similarities
 
@@ -429,7 +434,8 @@ def test_dense_similarity_ranks_the_right_document_first_on_every_case(corpus, d
     """
     for label, diagnoses, complaint, condition in CASES:
         sims = dense(_query(diagnoses, complaint))
-        top = max(sims, key=lambda sid: sims[sid])
+        # ``dense`` is keyed by (source, section_id); only the section id names the document.
+        _source, top = max(sims, key=lambda key: sims[key])
 
         assert _document_of(top) == condition, f"{label}: dense ranked {top} first"
 
