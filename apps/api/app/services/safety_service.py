@@ -27,6 +27,7 @@ from app.core.safety import (
     SafetyFlag,
     check_hepatic_severity,
     check_unevaluated_allergies,
+    check_unevaluated_conditions,
     check_unevaluated_medications,
     evaluate_drug_safety,
     has_hard_block,
@@ -534,13 +535,18 @@ class SafetyService:
             drug_class=vocab.drug_class,
             hepatotoxicity=vocab.hepatotoxicity,
         )
-        # Appended, not folded into ``evaluate_drug_safety``: it is a statement about the chart
+        # Appended, not folded into ``evaluate_drug_safety``: each is a statement about the chart
         # rather than about the proposed drug, so it must not be repeated once per drug by the
         # callers that evaluate several against one context (``screen_text``, ``active_flags``).
+        # This call evaluates exactly one, so appending them here shows them once — and this is
+        # the only path the Safety screen calls, so a chart-level flag left out of it is a flag
+        # no clinician sees.
         flags = (
             evaluate_drug_safety(proposed, ctx)
             + check_unevaluated_medications(ctx)
             + check_unevaluated_allergies(ctx)
+            + check_unevaluated_conditions(ctx)
+            + check_hepatic_severity(ctx)
         )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
         return vocab, ctx, flags, check_ids
@@ -563,6 +569,7 @@ class SafetyService:
         return (
             check_unevaluated_medications(facts)
             + check_unevaluated_allergies(facts)
+            + check_unevaluated_conditions(facts)
             + check_hepatic_severity(facts)
         )
 

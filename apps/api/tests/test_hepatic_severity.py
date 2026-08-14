@@ -28,6 +28,7 @@ from app.core.hepatic import (
 )
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import HepaticPanel, SafetyContext, check_hepatic_severity
+from app.models.condition import Condition
 from app.models.lab_result import LabResult
 from app.models.patient import Patient
 from app.models.user import Account
@@ -445,6 +446,77 @@ async def test_the_flags_endpoint_reports_the_severity_once_for_the_chart(db) ->
     assert len(severity) == 1
     assert severity[0].details["child_pugh_class"] == "C"
     assert account is not None
+
+
+async def test_the_drug_check_reports_the_severity_too_because_nothing_else_reaches_a_clinician(
+    db,
+) -> None:
+    """The Child-Pugh assessment was computed, persisted and served — on an endpoint with no
+    caller. ``chart_completeness_flags`` is reached only from ``GET ../flags``, and the Safety
+    screen calls ``POST ../check`` and nothing else; so a decompensated liver was established
+    from this chart's own labs and shown to nobody.
+
+    Which makes it the same defect as the four before it in a new place — a check that ran,
+    reported into a void. It is appended in ``check_medication`` rather than folded into
+    ``evaluate_drug_safety`` because it is a statement about the chart: the callers that
+    evaluate many drugs against one context must not repeat it per drug, and this one evaluates
+    exactly one.
+    """
+    account, patient = await _patient(db)
+    await _lab(db, patient, "Total Bilirubin", "8.0", "mg/dL")
+    await _lab(db, patient, "Serum Albumin", "2.1", "g/dL")
+    await _lab(db, patient, "INR", "3.4", "")
+
+    _vocab, _ctx, flags, check_ids = await SafetyService(db).check_medication(
+        account_id=account.id,
+        patient_id=patient.id,
+        drug_reference_id="MTX-7.5",
+        drug_name=None,
+    )
+
+    severity = [f for f in flags if f.check_type == "hepatic_severity"]
+    assert len(severity) == 1
+    assert severity[0].details["child_pugh_class"] == "C"
+    # Persisted like every other flag this path returns, so the record of what was shown holds
+    # the liver state it was shown beside.
+    assert len(check_ids) == len(flags)
+
+
+async def test_the_drug_check_reports_an_unreadable_problem_list_row(db) -> None:
+    """Its sibling on the same path, and the reason both are appended in one place: a condition
+    the tokeniser cannot read was compared to no contraindication rule at all, and the Safety
+    screen would otherwise render that as a clean chart."""
+    account, patient = await _patient(db)
+    db.add(Condition(patient_id=patient.id, condition_name="गर्भावस्था", status="active"))
+    await db.flush()
+
+    _vocab, _ctx, flags, _ids = await SafetyService(db).check_medication(
+        account_id=account.id,
+        patient_id=patient.id,
+        drug_reference_id="MTX-7.5",
+        drug_name=None,
+    )
+
+    unevaluated = [f for f in flags if f.check_type == "unevaluated_condition"]
+    assert len(unevaluated) == 1
+    assert unevaluated[0].is_hard_block is False
+    assert unevaluated[0].details["unevaluated_conditions"] == ["गर्भावस्था"]
+
+
+async def test_a_chart_level_flag_is_not_repeated_once_per_current_medication(db) -> None:
+    """The constraint that keeps the append in ``check_medication`` honest. ``active_flags``
+    evaluates every current medication against one context; folding these into
+    ``evaluate_drug_safety`` would print the same Child-Pugh sentence once per drug, and a
+    clinician on eight medications would scroll past eight copies of it to find the block."""
+    account, patient = await _patient(db)
+    await _lab(db, patient, "Total Bilirubin", "8.0", "mg/dL")
+    await _lab(db, patient, "Serum Albumin", "2.1", "g/dL")
+    await _lab(db, patient, "INR", "3.4", "")
+
+    results = await SafetyService(db).active_flags(account_id=account.id, patient_id=patient.id)
+
+    per_drug = [f for _vocab, flag_list in results for f in flag_list]
+    assert [f for f in per_drug if f.check_type == "hepatic_severity"] == []
 
 
 async def test_the_assessment_is_a_frozen_value_not_a_mutable_one() -> None:
