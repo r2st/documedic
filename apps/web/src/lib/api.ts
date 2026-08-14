@@ -94,12 +94,73 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
   return resp.json() as Promise<T>;
 }
 
-async function tryRefresh(): Promise<boolean> {
+// The refresh currently in flight, shared by every caller that wants one. See `tryRefresh`.
+let refreshInFlight: Promise<boolean> | null = null;
+
+/**
+ * Rotate the token pair, at most one exchange at a time.
+ *
+ * Refresh tokens are single-use: the API revokes the presented token as it issues the new pair,
+ * and a *second* presentation of an already-rotated token is treated as theft — it revokes every
+ * live session on the account, writes an `auth_refresh_token_reuse_detected` audit row, and
+ * signs the clinician out everywhere.
+ *
+ * Concurrent callers therefore cannot each run their own exchange, and this client had several
+ * ways to produce them. Any page that fans out (the patient chart issues four requests at once)
+ * has all of them 401 together the first time the access token has expired; each one read the
+ * same refresh token out of `localStorage` before any of them had written the new one, so the
+ * first exchange succeeded and the rest replayed a token the server had just revoked. The
+ * scheduled proactive refresh in `lib/auth` could collide with a 401 the same way. The result
+ * was a clinician signed out mid-consultation, on every device, with a security incident logged
+ * against them — from nothing worse than opening a chart after lunch.
+ *
+ * Sharing one promise makes the rotation single-flight: the first caller performs the exchange
+ * and everyone who asks while it is running awaits that same result and then retries with the
+ * token it stored. The promise is cleared when it settles, so a later expiry starts a fresh one.
+ */
+function tryRefresh(): Promise<boolean> {
+  refreshInFlight ??= refreshOnce().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+// Named lock held for the duration of an exchange. Scoped to the origin, which is exactly the
+// scope `localStorage` — and therefore the token pair — is shared over.
+const REFRESH_LOCK = 'aether:token-refresh';
+
+/**
+ * One exchange, serialised in this tab by the shared promise above and across the origin's
+ * other tabs by a Web Lock.
+ *
+ * The tabs matter as much as the promise does. A clinician with the chart in one tab and the
+ * guideline search in another has two independent copies of this module over one `localStorage`,
+ * so both see the same expiry and both would present the same single-use token — the second one
+ * looking exactly like a replayed steal. Whichever tab reaches the lock second finds the pair
+ * already rotated and takes it rather than exchanging again.
+ *
+ * Where `navigator.locks` is unavailable the in-tab promise still applies; the cross-tab race
+ * narrows to the width of one HTTP round trip rather than being closed.
+ */
+async function refreshOnce(): Promise<boolean> {
+  const presented = tokenStore.refresh;
+  const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+  if (!locks) return exchangeRefreshToken(presented);
+  return locks.request(REFRESH_LOCK, async () => {
+    const current = tokenStore.refresh;
+    // Another tab rotated while this one waited. `localStorage` is shared, so the new pair is
+    // already here; presenting the old one now is what would read as theft.
+    if (current && current !== presented) return true;
+    return exchangeRefreshToken(current);
+  });
+}
+
+async function exchangeRefreshToken(refreshToken: string | null): Promise<boolean> {
   try {
     const resp = await fetch(`${PREFIX}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: tokenStore.refresh }),
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
     if (!resp.ok) {
       tokenStore.clear();
