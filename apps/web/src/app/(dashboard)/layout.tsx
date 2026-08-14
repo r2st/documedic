@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useRequireAuth, useAuth } from '@/lib/auth';
 import { Button } from '@/components/ui';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -49,6 +50,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { account, loading } = useRequireAuth();
   const { logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Keys the error boundary below, so moving to another screen clears a caught error. React
+  // never resets a boundary on its own; without this, one page crashing would leave the
+  // fallback in place for every page after it and the header would be the only thing working.
+  const pathname = usePathname();
 
   // Escape is how every other expanded menu on the web closes. Without it the only way out of
   // this one is to find the toggle again, which on a phone means tabbing back up through the
@@ -184,7 +189,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         tabIndex={-1}
         className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8 animate-fade-in focus:outline-none"
       >
-        {children}
+        {/* Inside <main>, so a crashed screen keeps the header: the clinician can still reach
+            another chart, or sign out, instead of being stranded on a white page. */}
+        <ErrorBoundary key={pathname} section="This screen">
+          {children}
+        </ErrorBoundary>
       </main>
     </div>
   );

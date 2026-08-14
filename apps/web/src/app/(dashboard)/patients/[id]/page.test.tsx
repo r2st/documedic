@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AuditEntry,
@@ -270,5 +271,163 @@ describe('PatientDetailPage header fallbacks', () => {
     const { container } = render(<PatientDetailPage params={{ id: 'pat-1' }} />);
 
     await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+});
+
+describe('PatientDetailPage recovery', () => {
+  beforeEach(() => {
+    vi.mocked(api.getPatient).mockReset();
+    vi.mocked(api.getRecord).mockReset();
+    vi.mocked(api.auditTrail).mockReset();
+    vi.mocked(api.verifyAudit).mockReset();
+  });
+
+  it('offers a retry that reloads the chart in place', async () => {
+    // Four reads make up this chart and any one of them can be the one that failed, so a
+    // retry is usually all it needs. Before this the only way out was the browser's reload,
+    // which throws the whole page away to re-ask for the same four.
+    const boom = new ApiError(503, 'unavailable', 'briefly unavailable');
+    vi.mocked(api.getPatient).mockRejectedValueOnce(boom).mockResolvedValue(patient());
+    vi.mocked(api.getRecord).mockRejectedValueOnce(boom).mockResolvedValue(record());
+    vi.mocked(api.auditTrail).mockRejectedValueOnce(boom).mockResolvedValue(auditPage([AUDIT_ENTRY]));
+    vi.mocked(api.verifyAudit)
+      .mockRejectedValueOnce(boom)
+      .mockResolvedValue({ entries_checked: 1, chain_valid: true });
+
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText(/Failed to load patient data/);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('heading', { name: 'Asha Reddy' })).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load patient data/)).not.toBeInTheDocument();
+  });
+
+  it('offers the retry on a 404 too, rather than declaring the chart gone', async () => {
+    // From here a record that is momentarily unreachable and one that was deleted are the
+    // same status code. Withholding the retry would be deciding between them for the
+    // clinician on evidence we do not have.
+    const missing = new ApiError(404, 'not_found', 'Not found');
+    vi.mocked(api.getPatient).mockRejectedValue(missing);
+    vi.mocked(api.getRecord).mockRejectedValue(missing);
+    vi.mocked(api.auditTrail).mockRejectedValue(missing);
+    vi.mocked(api.verifyAudit).mockRejectedValue(missing);
+
+    render(<PatientDetailPage params={{ id: 'missing' }} />);
+    await screen.findByText(/Patient not found/);
+
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    // And the way out is still offered beside it.
+    expect(screen.getByRole('link', { name: /Back to patients/ })).toBeInTheDocument();
+  });
+
+  it('names the chart it is waiting on while the four reads are in flight', async () => {
+    mockAll();
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+
+    // The skeleton is grey boxes and nothing else; without this a screen reader would sit in
+    // silence and then find a chart that had appeared without comment.
+    const status = screen.getByRole('status', { name: 'Loading patient record' });
+    expect(status).toHaveAttribute('aria-busy', 'true');
+
+    await screen.findByRole('heading', { name: 'Asha Reddy' });
+  });
+});
+
+describe('PatientDetailPage section error boundaries', () => {
+  it('reports a section that failed to render as missing, not as empty', async () => {
+    // A record whose medication rows are not a list at all. Before the boundary this threw
+    // during render and React unmounted the whole chart, leaving a blank page; the wrong
+    // recovery would be an empty medications card, which reads as "no medications".
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockAll();
+    vi.mocked(api.getRecord).mockResolvedValue({
+      ...record(),
+      medications: 42 as unknown as LongitudinalRecord['medications'],
+    });
+
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+
+    expect(await screen.findAllByText(/could not be displayed/i)).not.toHaveLength(0);
+    expect(
+      screen.getAllByText(/treat this section as missing, not as empty/i).length,
+    ).toBeGreaterThan(0);
+    // Scoped to the sections: the patient header and the audit trail are still on screen
+    // rather than gone with them.
+    expect(screen.getByRole('heading', { name: 'Asha Reddy' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Audit trail' })).toBeInTheDocument();
+
+    consoleError.mockRestore();
+  });
+
+  it('re-fetches the chart when a crashed section is retried', async () => {
+    // Clearing the boundary's error alone would re-render the same payload and crash straight
+    // back, so `onReset` goes and gets the record again. Here the second read returns a
+    // well-formed one and the section comes back.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockAll();
+    vi.mocked(api.getRecord)
+      .mockResolvedValueOnce({
+        ...record(),
+        // Not iterable and not mappable, so both the timeline and the record grid throw.
+        medications: 42 as unknown as LongitudinalRecord['medications'],
+      })
+      .mockResolvedValue(
+        record({
+          medications: [{ id: 'm1', generic_name: 'Metformin', dose: '500mg', frequency: 'BD' }],
+        }),
+      );
+
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findAllByText(/could not be displayed/i);
+
+    // This record breaks both boundaries — the timeline and the record grid read the same
+    // rows — so each offers its own retry. Pressing either recovers both: the reload puts the
+    // page back into its loading state, which unmounts every boundary and remounts it clean.
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(2);
+    await userEvent.click(screen.getAllByRole('button', { name: 'Try again' })[0]);
+
+    expect(await screen.findByText('Metformin · 500mg · BD')).toBeInTheDocument();
+    expect(screen.queryByText(/could not be displayed/i)).not.toBeInTheDocument();
+
+    consoleError.mockRestore();
+  });
+});
+
+describe('PatientDetailPage retry while in flight', () => {
+  it('hands the wait back to the announced chart skeleton', async () => {
+    // The error view clears itself the moment the retry starts, so the feedback a clinician
+    // gets is the skeleton — which already says "Loading patient record" and aria-busy. That
+    // is why the retry button carries no in-flight label of its own: it is not on screen to
+    // show one.
+    const boom = new ApiError(503, 'unavailable', 'briefly unavailable');
+    vi.mocked(api.getPatient).mockReset().mockRejectedValueOnce(boom);
+    vi.mocked(api.getRecord).mockReset().mockRejectedValueOnce(boom);
+    vi.mocked(api.auditTrail).mockReset().mockRejectedValueOnce(boom);
+    vi.mocked(api.verifyAudit).mockReset().mockRejectedValueOnce(boom);
+
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText(/Failed to load patient data/);
+
+    // The retry hangs, so the in-flight state stays observable.
+    let release: (value: Patient) => void = () => {};
+    vi.mocked(api.getPatient).mockReturnValue(
+      new Promise<Patient>((resolve) => {
+        release = resolve;
+      }),
+    );
+    vi.mocked(api.getRecord).mockResolvedValue(record());
+    vi.mocked(api.auditTrail).mockResolvedValue(auditPage([AUDIT_ENTRY]));
+    vi.mocked(api.verifyAudit).mockResolvedValue({ entries_checked: 1, chain_valid: true });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(
+      await screen.findByRole('status', { name: 'Loading patient record' }),
+    ).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText(/Failed to load patient data/)).not.toBeInTheDocument();
+
+    release(patient());
+    expect(await screen.findByRole('heading', { name: 'Asha Reddy' })).toBeInTheDocument();
   });
 });

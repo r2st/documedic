@@ -1,3 +1,5 @@
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <main className="grid min-h-[calc(100vh-2.5rem)] place-items-center px-4 bg-gradient-to-b from-slate-50 via-white to-brand-50/30">
@@ -14,7 +16,9 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             Diagnostic & management decision support
           </p>
         </div>
-        {children}
+        {/* A crash here is the worst place for a white page: there is no header to navigate
+            from and nobody is signed in yet, so the fallback is the only way back. */}
+        <ErrorBoundary section="The sign-in form">{children}</ErrorBoundary>
       </div>
     </main>
   );

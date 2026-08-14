@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account } from '@/lib/types';
 
 let pathname = '/patients';
@@ -160,5 +160,59 @@ describe('DashboardLayout identity fallbacks', () => {
     expect(screen.getByText('?')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open menu' }));
     expect(screen.getAllByText('?')).toHaveLength(2);
+  });
+});
+
+describe('DashboardLayout error boundary', () => {
+  let consoleError: ReturnType<typeof vi.spyOn>;
+
+  function Boom(): JSX.Element {
+    throw new Error('a page component threw during render');
+  }
+
+  beforeEach(() => {
+    pathname = '/patients';
+    authState = { account: ACCOUNT, loading: false };
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleError.mockRestore();
+  });
+
+  it('keeps the header up when a screen crashes, so the clinician is not stranded', () => {
+    // React unmounts the whole tree on a render throw. Without the boundary inside <main>,
+    // one page failing left a white screen with no way to another chart and no way to sign
+    // out — mid-consultation, with the browser's back button as the only escape.
+    render(
+      <DashboardLayout>
+        <Boom />
+      </DashboardLayout>,
+    );
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Patients' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+  });
+
+  it('clears the caught error when the clinician navigates to another screen', () => {
+    // React never resets a boundary by itself. Keyed on the pathname, so without this one
+    // crashed page would leave the fallback in place for every page visited after it.
+    const { rerender } = render(
+      <DashboardLayout>
+        <Boom />
+      </DashboardLayout>,
+    );
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    pathname = '/guidelines';
+    rerender(
+      <DashboardLayout>
+        <p>the guidelines screen</p>
+      </DashboardLayout>,
+    );
+
+    expect(screen.getByText('the guidelines screen')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

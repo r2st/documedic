@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { ClinicalSuggestion, IntakeQuestion } from '@/lib/types';
 import { Button, Card, ErrorBanner } from '@/components/ui';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
 import { ReasoningTheatre } from '@/components/reasoning/ReasoningTheatre';
 import { SuggestionCard } from '@/components/reasoning/SuggestionCard';
@@ -84,9 +85,12 @@ export default function EncounterPage() {
   const [questions, setQuestions] = useState<IntakeQuestion[]>([]);
   const [suggestions, setSuggestions] = useState<ClinicalSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [resultsLoading, setResultsLoading] = useState(false);
 
   async function startReasoning() {
     setError(null);
+    setStarting(true);
     try {
       const state = await api.startReasoning(id, complaint.trim());
       setSessionId(state.session.id);
@@ -98,14 +102,29 @@ export default function EncounterPage() {
       }
     } catch (e) {
       setError(requestErrorMessage(e, 'the reasoning run'));
+    } finally {
+      setStarting(false);
     }
   }
 
   // Takes the session id as an argument rather than closing over the nullable state:
   // the only call site sits inside a `sessionId &&` guard, so the id is already narrowed.
   async function loadResults(sessionId: string) {
-    setSuggestions(await api.listSuggestions(sessionId));
-    setPhase('results');
+    setError(null);
+    setResultsLoading(true);
+    try {
+      setSuggestions(await api.listSuggestions(sessionId));
+      setPhase('results');
+    } catch (e) {
+      // Without this the rejection was unhandled and the screen simply stayed on the
+      // reasoning phase after the run had finished — the eight agents had already done their
+      // work and their output was sitting on the server, with nothing on screen saying so or
+      // offering to fetch it again. Staying in 'reasoning' is still right (there is nothing
+      // to show), but now it says why, and the retry re-reads rather than re-running.
+      setError(requestErrorMessage(e, 'the reasoning results'));
+    } finally {
+      setResultsLoading(false);
+    }
   }
 
   // Group results so can't-miss and hard blocks surface first.
@@ -134,7 +153,26 @@ export default function EncounterPage() {
 
       <StepIndicator currentPhase={phase} />
 
-      {error && <ErrorBanner message={error} />}
+      {/* The retry belongs to whichever step failed. On 'complaint' that is starting the run;
+          on 'reasoning' it is re-reading results the agents have already produced, which is
+          why it says so — a clinician who has just watched eight agents deliberate needs to
+          know a retry here does not put them through it a second time. */}
+      {error && phase === 'complaint' && (
+        <ErrorBanner
+          message={error}
+          onRetry={() => void startReasoning()}
+          retrying={starting}
+        />
+      )}
+      {error && phase === 'reasoning' && sessionId && (
+        <ErrorBanner
+          message={error}
+          onRetry={() => void loadResults(sessionId)}
+          retrying={resultsLoading}
+          retryLabel="Fetch results again"
+        />
+      )}
+      {error && phase !== 'complaint' && phase !== 'reasoning' && <ErrorBanner message={error} />}
 
       {phase === 'complaint' && (
         <Card className="animate-fade-in">
@@ -171,26 +209,39 @@ export default function EncounterPage() {
       )}
 
       {phase === 'reasoning' && sessionId && (
-        <div className="animate-slide-up">
-          <ReasoningTheatre sessionId={sessionId} onComplete={() => void loadResults(sessionId)} />
-          <p className="mt-3 text-center text-xs text-slate-400">
-            Evidence and dissent are shown before conclusions to counter automation bias.
-          </p>
-        </div>
+        <ErrorBoundary section="The reasoning theatre">
+          <div className="animate-slide-up">
+            <ReasoningTheatre sessionId={sessionId} onComplete={() => void loadResults(sessionId)} />
+            <p className="mt-3 text-center text-xs text-slate-400">
+              Evidence and dissent are shown before conclusions to counter automation bias.
+            </p>
+          </div>
+        </ErrorBoundary>
       )}
 
+      {/* The boundary that matters most on this screen. These cards render agent output, so
+          their shape is the least predictable thing in the app — and the thing a crash would
+          hide is a can't-miss flag or a hard block. Silently rendering fewer cards than the
+          Verifier passed is the automation-bias failure CLAUDE.md rule #5 exists to prevent,
+          only arrived at by accident, so the fallback says outright that something is missing
+          rather than letting a short list pass for a complete one. */}
       {phase === 'results' && sessionId && (
-        <div className="animate-fade-in space-y-3">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">Results</h2>
-            <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
-              The clinician is the decision-maker. These are decision-support outputs only.
-            </span>
+        <ErrorBoundary
+          section="The reasoning results"
+          onReset={() => void loadResults(sessionId)}
+        >
+          <div className="animate-fade-in space-y-3">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">Results</h2>
+              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+                The clinician is the decision-maker. These are decision-support outputs only.
+              </span>
+            </div>
+            {ordered.map((s) => (
+              <SuggestionCard key={s.id} suggestion={s} sessionId={sessionId} />
+            ))}
           </div>
-          {ordered.map((s) => (
-            <SuggestionCard key={s.id} suggestion={s} sessionId={sessionId} />
-          ))}
-        </div>
+        </ErrorBoundary>
       )}
     </div>
   );

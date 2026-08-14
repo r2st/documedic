@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import type { AuditEntry, LongitudinalRecord, Patient } from '@/lib/types';
 import { Button, Card } from '@/components/ui';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { LoadingBlock, Skeleton, SkeletonCards } from '@/components/Skeleton';
 import { Timeline } from '@/components/patient/Timeline';
 
 const SECTION_ICONS: Record<string, JSX.Element> = {
@@ -44,34 +46,44 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [patientData, recordData, auditData, verifyData] = await Promise.all([
-          api.getPatient(id),
-          api.getRecord(id),
-          api.auditTrail(id),
-          api.verifyAudit(id),
-        ]);
-        setPatient(patientData);
-        setRecord(recordData);
-        setAudit(auditData.items);
-        setChainValid(verifyData.chain_valid);
-      } catch (err) {
-        if (err instanceof ApiError) {
-          setError(
-            err.status === 404
-              ? 'Patient not found. They may have been deleted or the link is invalid.'
-              : `Failed to load patient data: ${err.message}`,
-          );
-        } else {
-          setError('An unexpected error occurred while loading patient data.');
-        }
-      } finally {
-        setLoading(false);
+  const load = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const [patientData, recordData, auditData, verifyData] = await Promise.all([
+        api.getPatient(id),
+        api.getRecord(id),
+        api.auditTrail(id),
+        api.verifyAudit(id),
+      ]);
+      setPatient(patientData);
+      setRecord(recordData);
+      setAudit(auditData.items);
+      setChainValid(verifyData.chain_valid);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(
+          err.status === 404
+            ? 'Patient not found. They may have been deleted or the link is invalid.'
+            : `Failed to load patient data: ${err.message}`,
+        );
+      } else {
+        setError('An unexpected error occurred while loading patient data.');
       }
-    })();
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // One reference shared by the retry button and both section boundaries: they all mean the
+  // same thing ("go and read the chart again"), and `load` puts the page back into its
+  // loading state, which unmounts every boundary and remounts it clean. So a retry from any
+  // one of them recovers all of them, and there is no per-section variant to keep in step.
+  const reloadChart = () => void load();
 
   if (error) return (
     // Replaces the chart that was being loaded, with focus still on whatever link opened it.
@@ -83,36 +95,42 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
       </div>
       <h2 className="text-lg font-semibold text-slate-900">Unable to load patient</h2>
       <p className="mt-1 max-w-md text-sm text-slate-500">{error}</p>
-      <Link href="/patients" className="mt-6">
-        <Button variant="secondary" size="sm">
-          <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-          </svg>
-          Back to patients
+      <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+        {/* Four reads make up this chart and any one of them can be the one that failed, so a
+            retry is usually all it needs — and it beats a browser reload, which throws the whole
+            page away to re-ask for the same four. Offered even on a 404, where it will fail
+            again: the alternative is deciding for the clinician that the chart is gone, and a
+            record that is briefly unreachable and one that was deleted look identical here. */}
+        {/* No in-flight label on this one: `load` clears the error as it starts, so this whole
+            view unmounts on the click and the chart skeleton — which already announces itself
+            as busy — is what the clinician sees while the retry runs. */}
+        <Button variant="secondary" size="sm" onClick={reloadChart}>
+          Try again
         </Button>
-      </Link>
+        <Link href="/patients">
+          <Button variant="secondary" size="sm">
+            <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+            </svg>
+            Back to patients
+          </Button>
+        </Link>
+      </div>
     </div>
   );
 
   // The skeleton is a set of empty grey boxes: it says "loading" to the eye and nothing at all
   // to a screen reader, which would sit in silence and then find a chart that appeared without
-  // comment. The roster page already names its own loading state; this one now does too.
+  // comment. LoadingBlock is what names the wait; the boxes themselves stay aria-hidden.
   if (loading) return (
-    <div role="status" aria-label="Loading patient record" aria-busy="true" className="space-y-6">
-      <div aria-hidden="true">
-        <div className="mb-2 h-4 w-20 animate-pulse rounded-md bg-slate-100" />
-        <div className="mb-1 h-7 w-52 animate-pulse rounded-md bg-slate-200" />
-        <div className="h-4 w-36 animate-pulse rounded-md bg-slate-100" />
+    <LoadingBlock label="Loading patient record" className="space-y-6">
+      <div>
+        <Skeleton className="mb-2 h-4 w-20" />
+        <Skeleton className="mb-1 h-7 w-52 bg-slate-200" />
+        <Skeleton className="h-4 w-36" />
       </div>
-      <div aria-hidden="true" className="grid gap-4 md:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i}>
-            <div className="mb-3 h-5 w-28 animate-pulse rounded-md bg-slate-100" />
-            <div className="h-4 w-full animate-pulse rounded-md bg-slate-50" />
-          </Card>
-        ))}
-      </div>
-    </div>
+      <SkeletonCards count={4} />
+    </LoadingBlock>
   );
 
   if (!patient) return null;
@@ -169,20 +187,27 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
       </div>
 
       {/* Chronological timeline (anti-automation-bias: raw history before any interpretation) */}
+      {/* One boundary per section rather than one around the chart: a Timeline that cannot
+          render a single malformed event should not take the allergy list down with it.
+          `onReset` re-fetches, because re-rendering the payload that just crashed only
+          crashes again. */}
       {record && (
-        <Card>
-          <div className="mb-3 flex items-center gap-2">
-            <svg aria-hidden="true" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-            </svg>
-            <h2 className="font-semibold text-slate-900">Timeline</h2>
-          </div>
-          <Timeline record={record} />
-        </Card>
+        <ErrorBoundary section="The timeline" onReset={reloadChart}>
+          <Card>
+            <div className="mb-3 flex items-center gap-2">
+              <svg aria-hidden="true" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+              <h2 className="font-semibold text-slate-900">Timeline</h2>
+            </div>
+            <Timeline record={record} />
+          </Card>
+        </ErrorBoundary>
       )}
 
       {/* Clinical record sections */}
       {record && (
+        <ErrorBoundary section="The record sections" onReset={reloadChart}>
         <div className="grid gap-4 md:grid-cols-2">
           <RecordSection title="Allergies" icon={SECTION_ICONS['Allergies']} rows={record.allergies} fields={['allergen_name', 'severity', 'status']} empty="No allergies recorded" />
           <RecordSection title="Active medications" icon={SECTION_ICONS['Active medications']} rows={record.medications} fields={['generic_name', 'dose', 'frequency']} empty="No medications" />
@@ -190,6 +215,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
           <RecordSection title="Lab results" icon={SECTION_ICONS['Lab results']} rows={record.lab_results} fields={['marker_name', 'value_numeric', 'unit', 'abnormality_direction']} empty="No labs" />
           <RecordSection title="Derived markers" icon={SECTION_ICONS['Derived markers']} rows={record.derived_markers} fields={['marker_name', 'value_numeric', 'unit', 'formula_name']} empty="None computed" />
         </div>
+        </ErrorBoundary>
       )}
 
       {/* Audit trail */}

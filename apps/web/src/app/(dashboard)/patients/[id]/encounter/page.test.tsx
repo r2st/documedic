@@ -36,10 +36,17 @@ vi.mock('@/components/reasoning/ReasoningTheatre', () => ({
     </div>
   ),
 }));
+/** Title that makes the mocked SuggestionCard below throw during render. */
+const CRASHING_TITLE = 'crash-this-card';
+
 vi.mock('@/components/reasoning/SuggestionCard', () => ({
-  SuggestionCard: ({ suggestion }: { suggestion: ClinicalSuggestion }) => (
-    <li>{suggestion.title}</li>
-  ),
+  SuggestionCard: ({ suggestion }: { suggestion: ClinicalSuggestion }) => {
+    // Throws on a sentinel title so the error-boundary test can model the real failure — one
+    // malformed suggestion among several — rather than handing the page a payload so broken
+    // it crashes in the sort above the boundary instead of inside it.
+    if (suggestion.title === CRASHING_TITLE) throw new Error('malformed suggestion payload');
+    return <li>{suggestion.title}</li>;
+  },
 }));
 
 import { ApiError, api } from '@/lib/api';
@@ -250,5 +257,186 @@ describe('EncounterPage', () => {
       'href',
       '/patients/pat-1',
     );
+  });
+});
+
+describe('EncounterPage when the results cannot be fetched', () => {
+  beforeEach(() => {
+    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(
+      intakeState({ intake_complete: true, pending_questions: [] }),
+    );
+    vi.mocked(api.listSuggestions).mockReset();
+  });
+
+  /** Drives the page to the point where the theatre reports the run has finished. */
+  async function runToCompletion() {
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText(/Presenting complaint/i), 'chest pain for one hour');
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+    await screen.findByText('theatre:sess-1');
+    await user.click(screen.getByRole('button', { name: 'finish reasoning' }));
+    return user;
+  }
+
+  it('says the results could not be read instead of stalling silently', async () => {
+    // Previously this rejection was unhandled: the screen simply stayed on the reasoning
+    // phase after the run had finished. Eight agents had done their work and their output was
+    // sitting on the server, with nothing on screen saying so or offering to fetch it.
+    vi.mocked(api.listSuggestions).mockRejectedValue(
+      new ApiError(503, 'unavailable', 'Briefly unavailable.'),
+    );
+
+    await runToCompletion();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Briefly unavailable.');
+  });
+
+  it('offers a retry that re-reads rather than re-running the agents', async () => {
+    // The label is the point. A clinician who has just watched eight agents deliberate needs
+    // to know the button does not put them through it a second time.
+    vi.mocked(api.listSuggestions)
+      .mockRejectedValueOnce(new ApiError(503, 'unavailable', 'Briefly unavailable.'))
+      .mockResolvedValue([suggestion()]);
+
+    const user = await runToCompletion();
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: 'Fetch results again' }));
+
+    expect(await screen.findByText('Differential')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // Re-read only: the run was never started again.
+    expect(api.startReasoning).toHaveBeenCalledOnce();
+  });
+
+  it('shows no results heading while the fetch is failing', async () => {
+    // Staying on the reasoning phase is right — there is nothing to show — but it now says
+    // why, rather than looking like a run that never finished.
+    vi.mocked(api.listSuggestions).mockRejectedValue(
+      new ApiError(503, 'unavailable', 'Briefly unavailable.'),
+    );
+
+    await runToCompletion();
+    await screen.findByRole('alert');
+
+    expect(screen.queryByRole('heading', { name: 'Results' })).not.toBeInTheDocument();
+  });
+});
+
+describe('EncounterPage retry on the opening step', () => {
+  beforeEach(() => {
+    vi.mocked(api.startReasoning).mockReset();
+    vi.mocked(api.listSuggestions).mockReset().mockResolvedValue([]);
+  });
+
+  it('offers a retry when the run could not be started', async () => {
+    vi.mocked(api.startReasoning)
+      .mockRejectedValueOnce(new ApiError(503, 'unavailable', 'Briefly unavailable.'))
+      .mockResolvedValue(intakeState());
+
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText(/Presenting complaint/i), 'chest pain for one hour');
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('intake:sess-1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('leaves an intake-phase error without a retry, since the retry belongs to the step', async () => {
+    // On 'intake' the failing action is IntakeFlow's own submit, which owns its retry. A
+    // second button here would re-run whichever step this page happened to know about.
+    vi.mocked(api.startReasoning).mockResolvedValue(intakeState());
+    vi.mocked(api.listSuggestions).mockRejectedValue(
+      new ApiError(503, 'unavailable', 'Briefly unavailable.'),
+    );
+
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText(/Presenting complaint/i), 'chest pain for one hour');
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+    await screen.findByText('intake:sess-1');
+
+    // Straight to results without passing through 'reasoning' — the failure lands in a phase
+    // that has no page-level retry to offer.
+    await user.click(screen.getByRole('button', { name: 'finish intake' }));
+    await user.click(screen.getByRole('button', { name: 'finish reasoning' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Briefly unavailable.');
+  });
+});
+
+describe('EncounterPage results error boundary', () => {
+  it('reports crashed results as missing rather than rendering a short list', async () => {
+    // The boundary that matters most in this app. These cards render agent output, so their
+    // shape is the least predictable thing here — and what a crash would hide is a can't-miss
+    // flag or a hard block. Silently showing fewer cards than the Verifier passed is the
+    // automation-bias failure rule #5 exists to prevent, arrived at by accident.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(
+      intakeState({ intake_complete: true, pending_questions: [] }),
+    );
+    vi.mocked(api.listSuggestions)
+      .mockReset()
+      .mockResolvedValue([
+        suggestion({ id: 'sug-1', title: 'Dengue fever', cant_miss_flag: true }),
+        suggestion({ id: 'sug-2', title: CRASHING_TITLE }),
+      ]);
+
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText(/Presenting complaint/i), 'chest pain for one hour');
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+    await screen.findByText('theatre:sess-1');
+    await user.click(screen.getByRole('button', { name: 'finish reasoning' }));
+
+    expect(
+      await screen.findByText(/The reasoning results could not be displayed/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/treat this section as missing, not as empty/i)).toBeInTheDocument();
+    // The card that rendered fine is gone too — React unmounts the whole boundary subtree —
+    // which is exactly why the fallback has to say the section is missing. A list showing
+    // only "Dengue fever", with the failure invisible, would be the dangerous outcome.
+    expect(screen.queryByText('Dengue fever')).not.toBeInTheDocument();
+
+    consoleError.mockRestore();
+  });
+});
+
+describe('EncounterPage when the results boundary’s own retry fails', () => {
+  it('states the failure without a second retry beside the boundary’s', async () => {
+    // The one path that reaches the page's plain, retry-less banner: the results section
+    // crashed, the boundary offered "Try again", its onReset re-fetched, and the re-fetch
+    // failed. The boundary's own button is still there, so a second one alongside it would
+    // just be two controls for the same action.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.startReasoning).mockReset().mockResolvedValue(
+      intakeState({ intake_complete: true, pending_questions: [] }),
+    );
+    vi.mocked(api.listSuggestions)
+      .mockReset()
+      .mockResolvedValueOnce([suggestion({ title: CRASHING_TITLE })])
+      .mockRejectedValue(new ApiError(503, 'unavailable', 'Briefly unavailable.'));
+
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText(/Presenting complaint/i), 'chest pain for one hour');
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+    await screen.findByText('theatre:sess-1');
+    await user.click(screen.getByRole('button', { name: 'finish reasoning' }));
+    await screen.findByText(/The reasoning results could not be displayed/i);
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    const banner = await screen.findByText('Briefly unavailable.');
+    expect(banner).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fetch results again' })).not.toBeInTheDocument();
+
+    consoleError.mockRestore();
   });
 });
