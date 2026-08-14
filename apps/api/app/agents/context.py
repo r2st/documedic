@@ -64,3 +64,13 @@ class ReasoningContext:
 
     def llm_available(self) -> bool:
         return self.llm.available()
+
+    def verifier_llm_available(self) -> bool:
+        """Whether the *gate's* client is configured — which is not the same question.
+
+        ``verifier_llm`` exists so the gate can be pointed at a different model from the agents
+        it checks. Once it can be a different client it can be separately unconfigured, and a
+        node asking ``llm_available()`` about a call it made with ``verifier=True`` gets an
+        answer about the wrong provider.
+        """
+        return self.verifier_llm.available()

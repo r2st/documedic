@@ -643,3 +643,85 @@ async def test_the_gate_asks_its_own_client_not_the_one_the_agents_answered_with
     # And it is the gate's answer that took effect, not the agents' client's.
     assert state.verifier_status == "major_disagreement"
     assert state.autonomy_tier == "flag_for_review"
+
+
+def _unverifiable_case() -> CaseState:
+    """A case whose floor is ``suggestive`` and nothing else escalates it.
+
+    Every deliberately-escalating input is absent: no can't-miss flag, no hard block, no
+    drug-safety warning, cited management options, not already degraded. So the tier the node
+    lands on is entirely a statement about whether the gate itself ran.
+    """
+    return _state(
+        hypothesis_set=[_hypothesis("Gastro-oesophageal reflux", probability_band="moderate")],
+        management_options=[ManagementOption(text="Consider a PPI trial", citations=[_citation()])],
+    )
+
+
+@pytest.mark.parametrize("gate_llm", [_OfflineLLM(), _FailingLLM()], ids=["offline", "outage"])
+async def test_a_gate_that_could_not_run_says_so_instead_of_reading_as_agreement(gate_llm):
+    """The node whose whole purpose is to be un-bypassable used to no-op silently.
+
+    When ``call_llm`` came back empty the node fell through to its deterministic floor and
+    emitted ``status: agree`` with no caveat — indistinguishable, in the session record and in
+    the Reasoning Theatre, from a gate that ran and agreed. The floor is not a substitute: it
+    re-reads flags the pipeline already raised and cannot catch anything the agents got wrong,
+    which is the one thing this node exists to do.
+
+    Both ways the call can come back empty are covered, because they are different faults:
+    ``verifier_llm`` unconfigured, and a configured provider failing mid-call.
+    """
+    state = _unverifiable_case()
+    ctx, _ = _ctx(gate_llm)
+
+    await verifier.run(state, ctx)
+
+    assert state.autonomy_tier == "flag_for_review"
+    caveats = state.verifier_verdicts[0].caveats
+    assert any("independent verification re-check did not complete" in c for c in caveats)
+    assert "Independent re-check unavailable" in state.verifier_verdicts[0].rationale
+
+
+async def test_a_working_gate_is_not_told_it_failed():
+    """The other side of the rule. If an answered re-check also carried the escalation, the
+    caveat would appear on every case and stop meaning anything."""
+    state = _unverifiable_case()
+    ctx, _ = _ctx(_CannedLLM({"status": "agree", "autonomy_tier": "suggestive"}))
+
+    await verifier.run(state, ctx)
+
+    assert state.autonomy_tier == "suggestive"
+    assert state.verifier_verdicts[0].caveats == []
+
+
+async def test_a_down_gate_is_degraded_even_while_the_agents_provider_answers():
+    """``degraded`` was read off ``ctx.llm_available()`` — the *agents'* client — for a call the
+    node makes with ``verifier=True``. Since the two clients are separate by design, the gate's
+    provider can be unconfigured while the agents' answers normally, and the run was recorded as
+    fully AI-backed with the one AI cross-check missing.
+    """
+    state = _unverifiable_case()
+    ctx, _ = _ctx()
+    ctx.llm = _CannedLLM({"status": "agree", "autonomy_tier": "suggestive"})
+    ctx.verifier_llm = _OfflineLLM()
+
+    await verifier.run(state, ctx)
+
+    assert ctx.llm_available() is True
+    assert ctx.verifier_llm_available() is False
+    assert state.degraded is True
+
+
+async def test_the_gates_own_provider_outage_still_is_not_relabelled_as_an_offline_run():
+    """The distinction ``degraded`` draws is preserved: a configured provider that fails
+    mid-call is a failed call, not "no AI in the loop". The escalation above is what carries the
+    safety weight; ``degraded`` stays a statement about configuration."""
+    state = _unverifiable_case()
+    ctx, _ = _ctx()
+    ctx.llm = _CannedLLM({"status": "agree", "autonomy_tier": "suggestive"})
+    ctx.verifier_llm = _FailingLLM()
+
+    await verifier.run(state, ctx)
+
+    assert state.degraded is False
+    assert state.autonomy_tier == "flag_for_review"

@@ -51,6 +51,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     status = "agree"
     case_caveats = list(floor_reasons)
     verdicts: list[VerifierVerdict] = []
+    unverified = False
 
     summary = summarize_snapshot(state.patient_graph_snapshot)
     leaders = state.leading_hypotheses(5)
@@ -85,7 +86,25 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             )
         case_caveats.extend(_caveat_list(result.get("case_caveats")))
     else:
-        state.degraded = state.degraded or not ctx.llm_available()
+        # The independent re-check did not happen. Until now that was silent: the node fell
+        # through to its deterministic floor, reported ``status: agree`` with the neutral
+        # rationale below, and the case reached the clinician looking exactly like one a working
+        # gate had agreed with. The floor is a floor, not a verification -- it re-reads flags the
+        # pipeline already raised and cannot notice anything the agents got wrong, which is the
+        # entire job of this node (Critical Safety Rule #1). A gate that no-ops silently is a
+        # bypassed gate, so the failure is stated and the case is escalated for a human.
+        #
+        # Reachable without the rest of the pipeline noticing, because ``verifier_llm`` is a
+        # separate client: the agents' provider can be up and answering while the gate's is down,
+        # and every other node reports itself perfectly healthy.
+        unverified = True
+        state.degraded = state.degraded or not ctx.verifier_llm_available()
+        tier = more_conservative_tier(tier, "flag_for_review")
+        case_caveats.append(
+            "The independent verification re-check did not complete, so nothing has "
+            "cross-checked the reasoning below; this case is escalated for active clinician "
+            "review."
+        )
 
     # Disagreement among source specialists also forces escalation (conservative).
     if _specialists_disagree(state):
@@ -98,7 +117,12 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             VerifierVerdict(
                 target="case",
                 status=status,
-                rationale="Deterministic verification floor applied.",
+                rationale=(
+                    "Independent re-check unavailable; deterministic verification floor applied "
+                    "on its own."
+                    if unverified
+                    else "Deterministic verification floor applied."
+                ),
                 caveats=case_caveats,
             )
         )
