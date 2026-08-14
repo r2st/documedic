@@ -10,11 +10,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.clinical import serum_creatinine_mg_dl
+from app.core.clinical import age_from_dob, serum_creatinine_mg_dl
+from app.core.dates import is_plausible_clinical_date
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
     ContraindicationRule,
@@ -193,8 +195,25 @@ class SafetyService:
                 conditions=await self._conditions(patient_id),
                 egfr=await self._latest_egfr(patient_id),
                 hepatic=await self._hepatic_panel(patient_id),
+                age_years=await self._age_years(patient_id),
             )
         return self._facts[patient_id]
+
+    async def _age_years(self, patient_id: uuid.UUID) -> int | None:
+        """The patient's age in whole years today, or None when the record cannot say.
+
+        None for a missing date of birth and for one that is not a date this patient could have
+        been born on — an OCR'd "2126" or a DOB in the future. ``check_geriatric_cautions``
+        reports a None as a check that did not run rather than as a check that passed, so the
+        honest answer here is the safe one; deriving an age from an implausible date would put a
+        confident number underneath a clinical caution.
+        """
+        row = await self.db.execute(select(Patient.date_of_birth).where(Patient.id == patient_id))
+        dob = row.scalars().first()
+        if dob is None or not is_plausible_clinical_date(dob):
+            return None
+        age = age_from_dob(dob, datetime.now(UTC).date())
+        return age if age >= 0 else None
 
     async def _current_medication_rows(self, patient_id: uuid.UUID) -> list[MedicationEvent]:
         result = await self.db.execute(

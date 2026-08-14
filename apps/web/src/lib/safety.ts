@@ -84,6 +84,7 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   contraindication: 'Contraindication',
   drug_interaction: 'Drug interaction',
   duplicate_therapy: 'Duplicate therapy',
+  geriatric_caution: 'Age-based caution',
   guideline_deviation: 'Guideline deviation',
   hepatic_dose: 'Hepatic dosing',
   hepatic_severity: 'Liver function',

@@ -21,7 +21,8 @@ class DrugSafetyCheck(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "('drug_interaction', 'contraindication', 'allergy_conflict', "
             "'renal_dose', 'hepatic_dose', 'duplicate_therapy', 'guideline_deviation', "
             "'unevaluated_medication', 'unevaluated_allergy', 'hepatic_severity', "
-            "'hepatotoxic_burden', 'unevaluated_condition', 'bleeding_burden')",
+            "'hepatotoxic_burden', 'unevaluated_condition', 'bleeding_burden', "
+            "'geriatric_caution')",
             name="ck_dsc_check_type",
         ),
         CheckConstraint(

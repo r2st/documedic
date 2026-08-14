@@ -131,6 +131,12 @@ describe('checkTypeLabel', () => {
     expect(checkTypeLabel('bleeding_burden')).not.toBe(checkTypeLabel('drug_interaction'));
   });
 
+  it('names the age-based caution after the reason it fired, not after the drug', () => {
+    // It fires on how old the patient is, not on anything about the prescription in isolation.
+    // "Contraindication" or "Dosing" would both send the clinician looking for the wrong thing.
+    expect(checkTypeLabel('geriatric_caution')).toBe('Age-based caution');
+  });
+
   it('words the unevaluated checks as a check that did not run, not as a finding', () => {
     // The distinction those flags exist for. A label reading "Condition" beside "no
     // contraindication rule was evaluated against it" would put the ambiguity straight back.

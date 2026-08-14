@@ -69,6 +69,7 @@ CheckType = Literal[
     "hepatic_severity",
     "hepatotoxic_burden",
     "bleeding_burden",
+    "geriatric_caution",
     "unevaluated_condition",
 ]
 
@@ -332,6 +333,10 @@ class SafetyContext:
     allergies: list[PatientAllergy] = field(default_factory=list)
     conditions: list[PatientCondition] = field(default_factory=list)
     egfr: float | None = None
+    # Whole years at the time of the check, or None when the record carries no usable date of
+    # birth. None is "not known", never "not elderly" — see ``check_geriatric_cautions``, which
+    # says so on the screen rather than falling silent.
+    age_years: int | None = None
     hepatic: HepaticPanel = field(default_factory=HepaticPanel)
     interaction_rules: list[InteractionRule] = field(default_factory=list)
     contraindication_rules: list[ContraindicationRule] = field(default_factory=list)
@@ -1704,6 +1709,182 @@ def check_bleeding_burden(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyF
     ]
 
 
+# --- Age-based prescribing cautions ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _GeriatricCaution:
+    """A curated age-based prescribing caution for a drug class."""
+
+    min_age_years: int
+    concern: str
+    # Prescriber-framed, per Critical Safety Rule #4 — a consideration, never an instruction.
+    consideration: str
+    reference: str
+
+
+# The engine's only age threshold besides CKD-EPI's paediatric floor. 65 is where the published
+# geriatric prescribing criteria are written, and each entry restates it so a criterion written
+# against a different age can carry its own.
+_GERIATRIC_AGE_YEARS = 65
+
+# Bleeding risk, renal clearance and hypoglycaemia awareness all change with age, and none of the
+# checks above can see that: an interaction rule is a pair of drugs, a contraindication rule is a
+# drug and a charted condition, and being 82 is neither. So a chart carrying glimepiride and
+# digoxin — two of the drugs the published criteria name most often — produced nothing whatever
+# about the patient's age.
+#
+# Keyed on drug CLASS, for the reason the bleeding table is: a per-strength key is the curation
+# surface that already drifted between the two aspirin strengths, and the digoxin caution below
+# is precisely the kind of dose-specific entry that would have been curated against one row.
+#
+# Every entry is a *caution*, never a block and never critical. Each of these drugs is correctly
+# prescribed to older patients every day; what the criteria say is that the decision deserves a
+# second look, which is a sentence on the screen, not a refusal.
+_GERIATRIC_CAUTIONS: dict[str, _GeriatricCaution] = {
+    "sulfonylurea": _GeriatricCaution(
+        min_age_years=_GERIATRIC_AGE_YEARS,
+        concern=(
+            "sulfonylureas cause prolonged hypoglycaemia in older adults, which presents as "
+            "confusion or a fall rather than as a recognised hypo"
+        ),
+        consideration=(
+            "Guidelines support considering an agent with a lower hypoglycaemia risk where one "
+            "is suitable, and reviewing whether the glycaemic target is still appropriate for "
+            "this patient's age and comorbidity."
+        ),
+        reference="AGS Beers Criteria 2023 — sulfonylureas in older adults",
+    ),
+    "nsaid": _GeriatricCaution(
+        min_age_years=_GERIATRIC_AGE_YEARS,
+        concern=(
+            "the risk of GI bleeding, acute kidney injury and fluid retention from an NSAID "
+            "rises sharply with age, and rises further alongside an anticoagulant, an "
+            "antiplatelet or a corticosteroid"
+        ),
+        consideration=(
+            "Guidelines support considering paracetamol or a topical NSAID first, and where an "
+            "oral NSAID is used, the shortest course and gastroprotection."
+        ),
+        reference="AGS Beers Criteria 2023 — NSAIDs in older adults",
+    ),
+    "cardiac glycoside": _GeriatricCaution(
+        min_age_years=_GERIATRIC_AGE_YEARS,
+        concern=(
+            "digoxin clearance falls with age and with renal function, and the published "
+            "criteria caution against a total daily dose above 0.125 mg in older adults. This "
+            "record carries the product's tablet strength but no structured daily dose, so the "
+            "dose actually taken was not compared against that threshold"
+        ),
+        consideration=(
+            "Guidelines support confirming the total daily dose and considering a digoxin level "
+            "alongside renal function and potassium."
+        ),
+        reference="AGS Beers Criteria 2023 — digoxin dosing in older adults",
+    ),
+    "ppi": _GeriatricCaution(
+        min_age_years=_GERIATRIC_AGE_YEARS,
+        concern=(
+            "scheduled PPI use beyond about eight weeks in older adults is associated with "
+            "C. difficile infection, bone loss and fracture. This record carries no structured "
+            "treatment duration, so how long this course has run was not evaluated"
+        ),
+        consideration=(
+            "Guidelines support reviewing whether a continuing indication is documented, and "
+            "considering step-down or on-demand use where it is not."
+        ),
+        reference="AGS Beers Criteria 2023 — proton pump inhibitors in older adults",
+    ),
+}
+
+
+def _geriatric_cautions(drug: DrugRef) -> list[tuple[_Ingredient, _GeriatricCaution]]:
+    """Every curated age-based caution this product's identities carry, in a stable order.
+
+    Ingredient-by-ingredient, because the combination is where an age-based caution disappears:
+    Glycomet GP is one of the most prescribed diabetes products in this market and its product
+    class is "Biguanide + Sulfonylurea", which is not "Sulfonylurea" and matches nothing. Its
+    glimepiride component is the whole reason the criteria name it.
+    """
+    seen: set[str] = set()
+    out: list[tuple[_Ingredient, _GeriatricCaution]] = []
+    for ing in _ingredients(drug):
+        caution = _GERIATRIC_CAUTIONS.get(_norm(ing.drug.drug_class))
+        if caution is None or caution.reference in seen:
+            continue
+        seen.add(caution.reference)
+        out.append((ing, caution))
+    return out
+
+
+def check_geriatric_cautions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Surface the published age-based prescribing cautions this drug carries.
+
+    Nothing else in this engine can see the patient's age. An interaction rule is a pair of
+    drugs; a contraindication rule is a drug and a charted condition; being 82 is neither. So the
+    two drugs the geriatric criteria name most often — a sulfonylurea and digoxin — sat on an
+    88-year-old's chart and produced no age-related finding at all.
+
+    An unknown date of birth does not fall silent. It produces an informational flag saying the
+    caution exists and was not evaluated, for exactly the reason ``check_unevaluated_medications``
+    exists: this engine's recurring failure is reporting a comparison it could not attempt as a
+    comparison that passed. The flag is raised only for drugs that actually carry a caution, so a
+    record with no date of birth does not grow a notice under every medication on it.
+
+    Never a hard block and never critical. Each of these drugs is correctly prescribed to older
+    patients every day; the criteria say the decision deserves a second look, and a second look
+    is a sentence on the screen rather than a refusal.
+    """
+    cautions = _geriatric_cautions(proposed)
+    if not cautions:
+        return []
+
+    if ctx.age_years is None:
+        return [
+            SafetyFlag(
+                check_type="geriatric_caution",
+                severity="info",
+                is_hard_block=False,
+                summary=(
+                    f"{ing.label} carries an age-based prescribing caution "
+                    f"({caution.reference}), and this record has no usable date of birth — so "
+                    "the caution was not evaluated for this patient. This is a check that did "
+                    "not run, not a check that passed."
+                ),
+                details={
+                    **ing.details(),
+                    "evaluated": False,
+                    "reason": "no_date_of_birth",
+                    "min_age_years": caution.min_age_years,
+                    "reference": caution.reference,
+                },
+            )
+            for ing, caution in cautions
+        ]
+
+    return [
+        SafetyFlag(
+            check_type="geriatric_caution",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"This patient is {ctx.age_years}, and at {caution.min_age_years} or over "
+                f"{caution.concern}. {caution.consideration} ({caution.reference}.)"
+            ),
+            details={
+                **ing.details(),
+                "evaluated": True,
+                "age_years": ctx.age_years,
+                "min_age_years": caution.min_age_years,
+                "drug_class": ing.drug.drug_class,
+                "reference": caution.reference,
+            },
+        )
+        for ing, caution in cautions
+        if ctx.age_years >= caution.min_age_years
+    ]
+
+
 def check_unevaluated_conditions(ctx: SafetyContext) -> list[SafetyFlag]:
     """Say so when a charted condition could not be compared to any rule, rather than dropping it.
 
@@ -1874,6 +2055,7 @@ def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFl
     flags.extend(check_duplicate_therapy(proposed, ctx))
     flags.extend(check_hepatotoxic_burden(proposed, ctx))
     flags.extend(check_bleeding_burden(proposed, ctx))
+    flags.extend(check_geriatric_cautions(proposed, ctx))
     flags.extend(check_guideline_adherence(proposed, ctx))
     return flags
 
