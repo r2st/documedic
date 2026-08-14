@@ -29,8 +29,9 @@ from app.core.security import (
     create_access_token,
     generate_refresh_token,
     hash_password,
+    hash_password_async,
     hash_token,
-    verify_password,
+    verify_password_async,
 )
 from app.exceptions import (
     EmailAlreadyExistsError,
@@ -48,7 +49,8 @@ from app.services.audit_service import AuditService
 # A bcrypt hash of a value no one can present, used to burn the same CPU time as a real
 # verification when the email doesn't exist. Without it, "unknown email" returns markedly
 # faster than "known email, wrong password" and the endpoint becomes an account-enumeration
-# oracle. Generated once at import, not per call.
+# oracle. Generated once at import, not per call -- and with the synchronous `hash_password`,
+# because at import time there is no event loop yet to keep clear of.
 _DUMMY_PASSWORD_HASH = hash_password(uuid.uuid4().hex)
 
 
@@ -73,7 +75,7 @@ class AuthService:
             raise EmailAlreadyExistsError()
         account = Account(
             email=email.lower(),
-            password_hash=hash_password(password),
+            password_hash=await hash_password_async(password),
             display_name=display_name,
         )
         self.db.add(account)
@@ -199,7 +201,7 @@ class AuthService:
         account = await self._get_by_email(email)
         # Always run a bcrypt verification, even for an unknown email, so response time does
         # not distinguish "no such account" from "wrong password" (account enumeration).
-        password_ok = verify_password(
+        password_ok = await verify_password_async(
             password, account.password_hash if account else _DUMMY_PASSWORD_HASH
         )
         if account is None or not password_ok:

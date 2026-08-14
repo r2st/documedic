@@ -157,13 +157,16 @@ async def test_unknown_email_performs_password_verification(monkeypatch, db):
     from app.services import auth_service as auth_module
 
     calls: list[str] = []
-    real_verify = auth_module.verify_password
+    # The verification runs on a worker thread now (see `test_password_hashing_off_loop`), but
+    # it still has to run: the defence is spending the same CPU on a miss as on a hit, and where
+    # that CPU is spent does not change what it is for.
+    real_verify = auth_module.verify_password_async
 
-    def spy(plain, hashed):
+    async def spy(plain, hashed):
         calls.append(hashed)
-        return real_verify(plain, hashed)
+        return await real_verify(plain, hashed)
 
-    monkeypatch.setattr(auth_module, "verify_password", spy)
+    monkeypatch.setattr(auth_module, "verify_password_async", spy)
 
     with pytest.raises(InvalidCredentialsError):
         await auth_module.AuthService(db).login("ghost@example.com", "password123")
@@ -341,8 +344,9 @@ async def test_signup_of_a_taken_email_does_not_hash_the_password(monkeypatch, d
     Signup answers 409 ``email_exists`` — it is an enumeration oracle by design, because a
     registration form has to tell you the address is taken. Since the *status code* already
     says so, skipping bcrypt on that path costs nothing and denies an unauthenticated
-    caller a free ~100ms of CPU per request. This test pins that reasoning in place so the
-    skipped hash is never mistaken for the login path's carefully preserved symmetry.
+    caller a free ~265ms of CPU per request (measured at the configured 12 rounds). This test
+    pins that reasoning in place so the skipped hash is never mistaken for the login path's
+    carefully preserved symmetry.
     """
     from app.exceptions import EmailAlreadyExistsError
     from app.services import auth_service as auth_module
@@ -351,9 +355,15 @@ async def test_signup_of_a_taken_email_does_not_hash_the_password(monkeypatch, d
     await db.commit()
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        auth_module, "hash_password", lambda plain: calls.append(plain) or "$2b$04$x"
-    )
+
+    async def spy(plain):
+        calls.append(plain)
+        return "$2b$04$x"
+
+    # Follows signup onto the off-loop wrapper. Left pointing at the synchronous helper this
+    # would have kept passing without watching anything, which for an assertion of the form
+    # "and then nothing happened" is the failure mode that never announces itself.
+    monkeypatch.setattr(auth_module, "hash_password_async", spy)
 
     with pytest.raises(EmailAlreadyExistsError):
         await auth_module.AuthService(db).signup("taken@example.com", "password123", None)
