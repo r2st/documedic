@@ -554,4 +554,36 @@ describe('SafetyPage loading state', () => {
 
     expect(await screen.findByRole('list', { name: '2 safety finding(s)' })).toBeInTheDocument();
   });
+
+  it('nests the findings as direct children of the list', async () => {
+    // `getAllByRole('listitem')` finds them at any depth, so it passes even when the list
+    // semantics are broken by a wrapper div between the list and its items. This asserts the
+    // parent relationship the ARIA role actually requires.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        flags: [
+          {
+            check_type: 'drug_interaction',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: 'One',
+            details: {},
+          },
+          {
+            check_type: 'renal_dose',
+            severity: 'warning',
+            is_hard_block: false,
+            summary: 'Two',
+            details: {},
+          },
+        ],
+      }),
+    );
+    await runCheck();
+
+    const list = await screen.findByRole('list', { name: '2 safety finding(s)' });
+    const items = screen.getAllByRole('listitem');
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item.parentElement === list)).toBe(true);
+  });
 });

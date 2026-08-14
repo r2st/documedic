@@ -211,18 +211,23 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
                  check. A non-overridable contraindication returned after three interaction
                  warnings would otherwise render below them, and the one flag that stops the
                  prescription is the one the clinician has to scroll for. */
-              <div role="list" aria-label={`${result.flags.length} safety finding(s)`}>
-                <div className="space-y-2">
-                  {orderFlagsForDisplay(result.flags).map((f, i) => (
-                    <SafetyFlagCard
-                      key={`${f.check_type}-${i}`}
-                      severity={f.severity}
-                      isHardBlock={f.is_hard_block}
-                      summary={f.summary}
-                      checkType={f.check_type}
-                    />
-                  ))}
-                </div>
+              /* `role="list"` sits on the same element as the spacing, not a wrapper around it:
+                 the `listitem`s have to be its direct children or the list semantics do not
+                 hold, and an intervening generic div is enough to break them. */
+              <div
+                role="list"
+                aria-label={`${result.flags.length} safety finding(s)`}
+                className="space-y-2"
+              >
+                {orderFlagsForDisplay(result.flags).map((f, i) => (
+                  <SafetyFlagCard
+                    key={`${f.check_type}-${i}`}
+                    severity={f.severity}
+                    isHardBlock={f.is_hard_block}
+                    summary={f.summary}
+                    checkType={f.check_type}
+                  />
+                ))}
               </div>
             )}
 
