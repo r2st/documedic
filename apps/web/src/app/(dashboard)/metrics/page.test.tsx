@@ -330,3 +330,73 @@ describe('MetricsPage error and badge fallbacks', () => {
     expect(within(item).getByText('escalated')).toBeInTheDocument();
   });
 });
+
+describe('MetricsPage recovery', () => {
+  beforeEach(() => {
+    vi.mocked(api.performanceMetrics).mockReset();
+    vi.mocked(api.listSafetyReports).mockReset().mockResolvedValue([]);
+    vi.mocked(api.pilotStatus).mockReset().mockResolvedValue({ pilot_mode: false, message: '' });
+    vi.mocked(api.runValidation).mockReset().mockResolvedValue(RUN);
+    vi.mocked(api.fileSafetyReport).mockReset().mockResolvedValue(REPORT);
+    vi.mocked(api.downloadSamdDossier).mockReset().mockResolvedValue(undefined);
+  });
+
+  it('offers a retry when the metrics could not be read', async () => {
+    // A metrics read changes nothing, so a retry here is unambiguously safe.
+    vi.mocked(api.performanceMetrics)
+      .mockRejectedValueOnce(new ApiError(503, 'unavailable', 'Briefly unavailable.'))
+      .mockResolvedValue(metrics());
+    render(<MetricsPage />);
+    await screen.findByRole('alert');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('42')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('offers no retry on a failed safety report, which is a write', async () => {
+    // Re-submitting on one button press is how a single incident becomes two rows in the
+    // register — and the register is a regulatory record, not a scratchpad.
+    vi.mocked(api.performanceMetrics).mockResolvedValue(metrics());
+    vi.mocked(api.fileSafetyReport).mockRejectedValue(
+      new ApiError(500, 'internal_error', 'That did not complete.'),
+    );
+    const user = userEvent.setup();
+    render(<MetricsPage />);
+    await screen.findByText('42');
+
+    await user.type(screen.getByLabelText('Description'), 'A near miss.');
+    await user.click(screen.getByRole('button', { name: 'Submit report' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('That did not complete.');
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('offers no retry on a failed validation run, which is also a write', async () => {
+    vi.mocked(api.performanceMetrics).mockResolvedValue(metrics());
+    vi.mocked(api.runValidation).mockRejectedValue(
+      new ApiError(500, 'internal_error', 'The harness did not finish.'),
+    );
+    const user = userEvent.setup();
+    render(<MetricsPage />);
+    await screen.findByText('42');
+
+    await user.click(screen.getByRole('button', { name: 'Run validation harness' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('names the metrics it is waiting on while the first read is in flight', async () => {
+    vi.mocked(api.performanceMetrics).mockResolvedValue(metrics());
+    render(<MetricsPage />);
+
+    expect(
+      screen.getByRole('status', { name: 'Loading performance metrics' }),
+    ).toHaveAttribute('aria-busy', 'true');
+
+    await screen.findByText('42');
+  });
+});

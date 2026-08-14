@@ -6,17 +6,30 @@ import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { PatientSummary } from '@/lib/types';
 import { Button, Card, ErrorBanner } from '@/components/ui';
+import { LoadingBlock, SkeletonList } from '@/components/Skeleton';
 
 export default function PatientsPage() {
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  // The failure this catches used to be silent, and silence was the wrong answer twice over.
+  // A rejected fetch left `patients` at [] with `loading` false, so the page rendered its
+  // empty state: "No patients yet. Create your first patient to get started." A clinician
+  // whose panel had failed to load was told, in as many words, that they had no patients —
+  // and the obvious next action was to re-register someone who was already in the system.
   async function load(q?: string) {
+    setError(null);
+    setLoading(true);
     try {
       const res = await api.listPatients(q);
       setPatients(res.items);
+    } catch (err) {
+      // The stale list stays on screen behind the banner rather than being cleared: it is
+      // still the last thing the server actually said, and it is more use than nothing.
+      setError(requestErrorMessage(err, 'the patient list'));
     } finally {
       setLoading(false);
     }
@@ -32,7 +45,9 @@ export default function PatientsPage() {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Patients</h1>
-          {!loading && (
+          {/* Suppressed while an error is up: the count would be of a list we know is stale,
+              and "0 patients registered" is the exact claim the banner is there to deny. */}
+          {!loading && !error && (
             <p className="mt-1 text-sm text-slate-500">
               {patients.length} patient{patients.length !== 1 ? 's' : ''} registered
             </p>
@@ -89,21 +104,19 @@ export default function PatientsPage() {
         </Button>
       </form>
 
+      {error && (
+        <ErrorBanner message={error} onRetry={() => void load(search)} retrying={loading} />
+      )}
+
       {/* Patient list */}
       {loading ? (
-        <div className="space-y-3" role="status" aria-label="Loading patients" aria-busy="true">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-card">
-              <div className="flex items-center gap-4">
-                <div className="h-10 w-10 animate-pulse rounded-full bg-slate-100" />
-                <div className="flex-1">
-                  <div className="mb-2 h-5 w-36 animate-pulse rounded-md bg-slate-100" />
-                  <div className="h-4 w-52 animate-pulse rounded-md bg-slate-50" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <LoadingBlock label="Loading patients">
+          <SkeletonList rows={3} />
+        </LoadingBlock>
+      ) : error ? (
+        // Deliberately no empty state under an error. "No patients yet" is a statement about
+        // the panel; all we know is that we could not read it.
+        patients.length > 0 && <PatientList patients={patients} />
       ) : patients.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white py-16 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand-50">
@@ -115,39 +128,46 @@ export default function PatientsPage() {
           <p className="mt-1 text-sm text-slate-500">Create your first patient to get started.</p>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {patients.map((p) => (
-            <li key={p.id} className="animate-fade-in">
-              <Link href={`/patients/${p.id}`} className="block group">
-                <Card className="transition-all duration-200 group-hover:border-brand-300 group-hover:shadow-card-hover">
-                  <div className="flex items-center gap-4">
-                    {/* Decorative: the initial is the patient's own name, read out below. */}
-                    <div
-                      aria-hidden="true"
-                      className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-brand-50 text-sm font-semibold text-brand-700 group-hover:bg-brand-100 transition-colors"
-                    >
-                      {p.full_name?.[0]?.toUpperCase() ?? '?'}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-900 group-hover:text-brand-700 transition-colors">
-                        {p.full_name}
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        {p.sex ?? 'unknown'} · {p.date_of_birth ?? 'DOB unknown'} ·{' '}
-                        {p.phone ?? 'no phone'}
-                      </p>
-                    </div>
-                    <svg aria-hidden="true" className="h-5 w-5 flex-shrink-0 text-slate-300 group-hover:text-brand-500 transition-colors" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                    </svg>
-                  </div>
-                </Card>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <PatientList patients={patients} />
       )}
     </div>
+  );
+}
+
+/** The roster itself. Extracted so the error branch can keep showing the last good list. */
+function PatientList({ patients }: { patients: PatientSummary[] }) {
+  return (
+    <ul className="space-y-3">
+      {patients.map((p) => (
+        <li key={p.id} className="animate-fade-in">
+          <Link href={`/patients/${p.id}`} className="block group">
+            <Card className="transition-all duration-200 group-hover:border-brand-300 group-hover:shadow-card-hover">
+              <div className="flex items-center gap-4">
+                {/* Decorative: the initial is the patient's own name, read out below. */}
+                <div
+                  aria-hidden="true"
+                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-brand-50 text-sm font-semibold text-brand-700 group-hover:bg-brand-100 transition-colors"
+                >
+                  {p.full_name?.[0]?.toUpperCase() ?? '?'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-slate-900 group-hover:text-brand-700 transition-colors">
+                    {p.full_name}
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    {p.sex ?? 'unknown'} · {p.date_of_birth ?? 'DOB unknown'} ·{' '}
+                    {p.phone ?? 'no phone'}
+                  </p>
+                </div>
+                <svg aria-hidden="true" className="h-5 w-5 flex-shrink-0 text-slate-300 group-hover:text-brand-500 transition-colors" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                </svg>
+              </div>
+            </Card>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 

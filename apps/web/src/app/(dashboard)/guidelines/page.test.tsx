@@ -113,3 +113,122 @@ describe('GuidelinesPage', () => {
     expect(screen.queryByText(/% match/)).not.toBeInTheDocument();
   });
 });
+
+describe('GuidelinesPage when a search fails', () => {
+  beforeEach(() => {
+    vi.mocked(api.corpusInfo).mockReset().mockResolvedValue(CORPUS);
+    vi.mocked(api.searchGuidelines).mockReset();
+  });
+
+  async function searchFor(term: string) {
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText(/Search the clinical guideline corpus/i));
+    await user.type(screen.getByLabelText(/Search the clinical guideline corpus/i), term);
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    return user;
+  }
+
+  it('says the search failed instead of leaving the rejection unhandled', async () => {
+    vi.mocked(api.searchGuidelines).mockRejectedValue(new Error('network down'));
+    render(<GuidelinesPage />);
+
+    await searchFor('dengue');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not/i);
+  });
+
+  it('clears the previous query’s citations rather than showing them under the new query', async () => {
+    // The dangerous shape of an unhandled rejection here: the results list kept rendering the
+    // *previous* search's citations while the box named a different condition. Guidance for
+    // one condition read under the heading of another is exactly the mix-up a cited corpus
+    // exists to prevent.
+    vi.mocked(api.searchGuidelines)
+      .mockResolvedValueOnce([citation()])
+      .mockRejectedValue(new Error('network down'));
+    render(<GuidelinesPage />);
+
+    await searchFor('dengue');
+    expect(await screen.findByText(/Standard Treatment Workflow: Dengue/)).toBeInTheDocument();
+
+    await searchFor('malaria');
+
+    await screen.findByRole('alert');
+    expect(screen.queryByText(/Standard Treatment Workflow: Dengue/)).not.toBeInTheDocument();
+  });
+
+  it('does not claim "no results found" for a search that never completed', async () => {
+    // "No results" is a statement about the corpus. A failed search supports no such claim,
+    // and here the difference is between "no guidance exists for this" and "we could not look".
+    vi.mocked(api.searchGuidelines).mockRejectedValue(new Error('network down'));
+    render(<GuidelinesPage />);
+
+    await searchFor('dengue');
+
+    await screen.findByRole('alert');
+    expect(screen.queryByText('No results found')).not.toBeInTheDocument();
+  });
+
+  it('offers a retry that re-runs the same query', async () => {
+    vi.mocked(api.searchGuidelines)
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValue([citation()]);
+    render(<GuidelinesPage />);
+
+    const user = await searchFor('dengue');
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText(/Standard Treatment Workflow: Dengue/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(api.searchGuidelines).toHaveBeenLastCalledWith('dengue');
+  });
+
+  it('announces the search while it is in flight', async () => {
+    let release: (value: Citation[]) => void = () => {};
+    vi.mocked(api.searchGuidelines).mockReturnValue(
+      new Promise<Citation[]>((resolve) => {
+        release = resolve;
+      }),
+    );
+    render(<GuidelinesPage />);
+
+    await searchFor('dengue');
+
+    expect(
+      screen.getByRole('status', { name: 'Searching the guideline corpus' }),
+    ).toBeInTheDocument();
+
+    release([citation()]);
+    expect(await screen.findByText(/Standard Treatment Workflow: Dengue/)).toBeInTheDocument();
+  });
+});
+
+describe('GuidelinesPage when the corpus header cannot be read', () => {
+  beforeEach(() => {
+    vi.mocked(api.corpusInfo).mockReset().mockRejectedValue(new Error('qdrant unreachable'));
+    vi.mocked(api.searchGuidelines).mockReset().mockResolvedValue([]);
+  });
+
+  it('says the details are unavailable rather than showing nothing at all', async () => {
+    // Downgraded to a line, not a banner: not knowing the corpus version stops nobody
+    // searching. It is still said, because "no version shown" and "version withheld" are
+    // indistinguishable to the reader otherwise.
+    render(<GuidelinesPage />);
+
+    expect(await screen.findByText(/Corpus details are unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('leaves the search itself working', async () => {
+    vi.mocked(api.searchGuidelines).mockResolvedValue([citation()]);
+    const user = userEvent.setup();
+    render(<GuidelinesPage />);
+    await screen.findByText(/Corpus details are unavailable/);
+
+    await user.type(screen.getByLabelText(/Search the clinical guideline corpus/i), 'dengue');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText(/Standard Treatment Workflow: Dengue/)).toBeInTheDocument();
+  });
+});

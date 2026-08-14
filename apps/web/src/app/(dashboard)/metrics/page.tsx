@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
 import type { PerformanceMetrics, SafetyReport, ValidationRun } from '@/lib/types';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, ErrorBanner } from '@/components/ui';
+import { LoadingBlock, Skeleton } from '@/components/Skeleton';
 
 // `as const` (rather than Record<string, string>) makes the key set a closed union, so
 // TypeScript rejects an unknown metric label at the call site instead of silently
@@ -68,6 +69,7 @@ export default function MetricsPage() {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   function clearFeedback() {
     setActionError(null);
@@ -91,6 +93,7 @@ export default function MetricsPage() {
 
   async function refresh() {
     setLoadError(null);
+    setRefreshing(true);
     try {
       const [metricsData, reportsData] = await Promise.all([
         api.performanceMetrics(),
@@ -104,6 +107,7 @@ export default function MetricsPage() {
       );
     } finally {
       setInitialLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -152,23 +156,14 @@ export default function MetricsPage() {
         </div>
       </div>
 
+      {/* A metrics read changes nothing, so a retry is unambiguously safe here — unlike the
+          action errors below, where re-running a validation harness or a dossier download is
+          the clinician's call rather than a button we should offer twice. */}
       {loadError && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-          <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <span>{loadError}</span>
-        </div>
+        <ErrorBanner message={loadError} onRetry={() => void refresh()} retrying={refreshing} />
       )}
 
-      {actionError && (
-        <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-          <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <span>{actionError}</span>
-        </div>
-      )}
+      {actionError && <ErrorBanner message={actionError} />}
 
       {actionSuccess && (
         <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
@@ -189,14 +184,17 @@ export default function MetricsPage() {
       )}
 
       {initialLoading && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <LoadingBlock
+          label="Loading performance metrics"
+          className="grid grid-cols-2 gap-3 sm:grid-cols-4"
+        >
           {Array.from({ length: 8 }).map((_, i) => (
             <Card key={i} className="border-t-4 border-t-slate-200 text-center">
-              <div className="mx-auto mb-2 h-8 w-20 animate-pulse rounded-md bg-slate-200" />
-              <div className="mx-auto h-3 w-24 animate-pulse rounded bg-slate-100" />
+              <Skeleton className="mx-auto mb-2 h-8 w-20 bg-slate-200" />
+              <Skeleton className="mx-auto h-3 w-24" />
             </Card>
           ))}
-        </div>
+        </LoadingBlock>
       )}
 
       {metrics && (
@@ -308,14 +306,9 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
     <Card>
       <p className="mb-4 text-sm font-semibold text-slate-900">File a safety report</p>
       <form onSubmit={submit} className="space-y-4">
-        {error && (
-          <div className="flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
-            <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-            <span>{error}</span>
-          </div>
-        )}
+        {/* No retry: this is a write, and resubmitting a safety report on one button press is
+            how a single incident becomes two rows in the register. */}
+        {error && <ErrorBanner message={error} />}
         {success && (
           <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
             <svg aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">

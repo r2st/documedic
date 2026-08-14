@@ -226,3 +226,80 @@ describe('CreatePatientForm optional demographics', () => {
     );
   });
 });
+
+describe('PatientsPage when the roster cannot be loaded', () => {
+  beforeEach(() => {
+    vi.mocked(api.createPatient).mockReset();
+  });
+
+  it('never tells the clinician they have no patients when the read failed', async () => {
+    // The bug this replaced was silent and specific: a rejected `listPatients` left the list
+    // empty with loading finished, so the page rendered "No patients yet — create your first
+    // patient to get started." A clinician whose panel had failed to load was told in as many
+    // words that their panel was empty, and the obvious next action was to re-register
+    // someone who was already in the system.
+    vi.mocked(api.listPatients).mockReset().mockRejectedValue(new ApiError(503, 'unavailable', 'The service is briefly unavailable.'));
+
+    render(<PatientsPage />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The service is briefly unavailable.',
+    );
+    expect(screen.queryByText('No patients yet')).not.toBeInTheDocument();
+    expect(screen.queryByText(/patient.? registered/)).not.toBeInTheDocument();
+  });
+
+  it('offers a retry that re-reads the roster', async () => {
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockRejectedValueOnce(new ApiError(503, 'unavailable', 'Briefly unavailable.'))
+      .mockResolvedValue(page([summary()]));
+
+    render(<PatientsPage />);
+    await screen.findByRole('alert');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Asha Reddy')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('1 patient registered')).toBeInTheDocument();
+  });
+
+  it('retries the search term that was in force, not the unfiltered list', async () => {
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockResolvedValueOnce(page([summary()]))
+      .mockRejectedValueOnce(new ApiError(503, 'unavailable', 'Briefly unavailable.'))
+      .mockResolvedValue(page([]));
+
+    const user = userEvent.setup();
+    render(<PatientsPage />);
+    await screen.findByText('Asha Reddy');
+
+    await user.type(screen.getByLabelText(/Search patients/i), 'Reddy');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(api.listPatients).toHaveBeenLastCalledWith('Reddy'));
+  });
+
+  it('keeps the last list the server actually returned behind the banner', async () => {
+    // More use than a blank page, and it is still the last thing the API said. The count
+    // above it is suppressed, so nothing on screen presents the stale list as current.
+    vi.mocked(api.listPatients)
+      .mockReset()
+      .mockResolvedValueOnce(page([summary()]))
+      .mockRejectedValue(new ApiError(503, 'unavailable', 'Briefly unavailable.'));
+
+    const user = userEvent.setup();
+    render(<PatientsPage />);
+    await screen.findByText('Asha Reddy');
+
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Asha Reddy')).toBeInTheDocument();
+  });
+});
