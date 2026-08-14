@@ -528,17 +528,21 @@ async def test_stream_relays_a_pipeline_failure_as_an_error_event(db, monkeypatc
 
     Without the relay the browser sees an open connection that never terminates, which the
     Reasoning Theatre renders as agents thinking forever.
+
+    What it relays is the exception *type*. SSE is the one channel that does not pass through
+    ``app.main.unhandled_error_handler``, which exists precisely to keep exception text out of
+    responses; sending str(exc) here reopened that hole one layer down. See ``app.core.logsafe``.
     """
     service = ReasoningService(db)
 
     async def _boom(*args, **kwargs):
-        raise RuntimeError("verifier exploded")
+        raise RuntimeError("verifier exploded on patient Asha Reddy")
 
     monkeypatch.setattr(service, "run", _boom)
 
     events = [item async for item in service.stream(uuid.uuid4(), uuid.uuid4())]
 
-    assert events == [("error", {"message": "verifier exploded"})]
+    assert events == [("error", {"message": "RuntimeError"})]
 
 
 async def test_closing_the_stream_early_cancels_the_still_running_pipeline(db, monkeypatch):

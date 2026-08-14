@@ -291,7 +291,11 @@ async def test_reasoning_failure_marks_the_session_failed_and_audits(db, monkeyp
 
     refreshed = await service.get_session(account.id, session.id)
     assert refreshed.status == "failed"
-    assert "agent graph exploded" in (refreshed.error_detail or "")
+    # The exception type, not its message. Failures here surface from an LLM provider that was
+    # just sent this patient's snapshot, and one that quotes the prompt back in its error would
+    # otherwise land that text in a plaintext column and in audit_logs.payload — immutable and
+    # never pruned. See app.core.logsafe.
+    assert refreshed.error_detail == "RuntimeError"
 
     audit = (
         (await db.execute(select(AuditLog).where(AuditLog.action == "reasoning_session_failed")))
@@ -299,6 +303,7 @@ async def test_reasoning_failure_marks_the_session_failed_and_audits(db, monkeyp
         .all()
     )
     assert audit, "a failed reasoning session must leave an audit trail"
+    assert audit[0].payload == {"error": "RuntimeError"}
 
 
 # --------------------------------------------------------------------------------------

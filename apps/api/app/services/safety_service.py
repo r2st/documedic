@@ -340,7 +340,14 @@ class SafetyService:
                 "was run — this is not the same as “no interactions found”. Try the "
                 "generic (INN) name, check the spelling of the brand name, or ask for the brand "
                 "to be added to the drug vocabulary.",
-                detail=f"unresolved drug reference_id={drug_reference_id!r} name={drug_name!r}",
+                # ``detail`` is logged, correlated by request id to an access-log line whose
+                # URL carries the patient id. The proposed drug name is that patient's
+                # prescribing, so it stays out of the log; the reference id is a row in the
+                # shared drug vocabulary and identifies the resolution failure on its own.
+                detail=(
+                    f"unresolved drug reference_id={drug_reference_id!r} "
+                    f"(free-text name supplied: {bool(drug_name)})"
+                ),
             )
 
         # The proposed drug's own reference id stays in current_meds if the patient is already

@@ -102,7 +102,15 @@ class DocumentService:
         if file_type is None:
             raise UnsupportedFileTypeError(
                 f"{UnsupportedFileTypeError().message} {describe_unsupported(data)}",
-                detail=f"unrecognised magic bytes: {data[:12]!r}",
+                # ``detail`` is logged. It used to carry ``data[:12]!r`` — the leading bytes of
+                # the rejected upload. Those are a signature only for formats we recognise;
+                # for everything else (a note pasted into a .txt, a lab CSV, an .eml) they are
+                # the file's first twelve characters of clinical text. Length and a hash prefix
+                # identify the upload for support without reproducing any of it, and
+                # describe_unsupported already names the format for the clinician.
+                detail=(
+                    f"unrecognised magic bytes, {len(data)}B, sha256={compute_sha256(data)[:12]}"
+                ),
             )
 
         sha256 = compute_sha256(data)

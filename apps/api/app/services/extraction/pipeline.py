@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 
 from app.config import settings
+from app.core.logsafe import describe_exception
 from app.services.extraction import claude_client
 from app.services.extraction.text_parser import ParsedEntity, parse_text
 
@@ -105,14 +106,15 @@ class ExtractionPipeline:
                     entities, doc_type, False, claude_client.model_label()
                 )
         except Exception as exc:  # noqa: BLE001 — fall through to the deterministic path
-            # Never log the document bytes or the model response (patient data) —
-            # only the exception type, so degraded extraction is diagnosable.
+            # Never log the document bytes or the model response (patient data) — only the
+            # exception type, so degraded extraction stays diagnosable. This appended
+            # str(exc)[:200] as well, which is the model's own response text on the most
+            # common failure here. See app.core.logsafe.
             logger.warning(
                 "Vision extraction unavailable, falling back to the deterministic "
-                "parser (file_type=%s): %s: %s",
+                "parser (file_type=%s): %s",
                 file_type,
-                type(exc).__name__,
-                str(exc)[:200],
+                describe_exception(exc),
             )
         return None
 

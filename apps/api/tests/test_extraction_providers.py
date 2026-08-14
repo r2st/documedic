@@ -157,12 +157,21 @@ def test_failing_primary_falls_through_to_the_next_provider(monkeypatch):
 
 
 def test_extract_raises_when_every_provider_fails(monkeypatch, openrouter_only):
+    """The raised error names the failure type and carries none of the upstream's text.
+
+    The document bytes were sent to that provider, so its error message is a route back out for
+    them: OpenRouter's moderation refusals quote the flagged input, and a reply containing no
+    JSON object fails with the model's whole response as the message. See ``app.core.logsafe``.
+    """
+
     def boom(file_bytes, file_type):
-        raise RuntimeError("upstream 503")
+        raise RuntimeError("upstream 503 on input 'Asha Reddy, HbA1c 9.2%'")
 
     monkeypatch.setitem(claude_client._EXTRACTORS, "openrouter", boom)
-    with pytest.raises(RuntimeError, match="upstream 503"):
+    with pytest.raises(RuntimeError) as raised:
         claude_client.extract(PNG_BYTES, "image/png")
+
+    assert str(raised.value) == "RuntimeError"
 
 
 def test_extract_raises_when_no_provider_is_configured(monkeypatch):

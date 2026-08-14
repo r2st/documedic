@@ -29,12 +29,20 @@ from typing import Any
 
 from app.agents import demo_data
 from app.config import settings
+from app.core.logsafe import describe_exception
 
 logger = logging.getLogger(__name__)
 
 
 class LLMUnavailable(RuntimeError):
-    """Raised when no LLM provider can be reached so the caller can degrade gracefully."""
+    """Raised when no LLM provider can be reached so the caller can degrade gracefully.
+
+    ``log_safe_message`` says the message is written here rather than by a provider, so it may
+    be logged in full — which is only true as long as every raise site passes provider errors
+    through :func:`describe_exception` first. See ``app.core.logsafe``.
+    """
+
+    log_safe_message = True
 
 
 def _provider_order() -> list[str]:
@@ -217,23 +225,23 @@ class LLMClient:
                 except Exception as exc:  # noqa: BLE001 — surfaced to caller as LLMUnavailable
                     last_err = exc
                     logger.warning(
-                        "LLM provider %r failed (attempt %d/%d): %s: %s",
+                        "LLM provider %r failed (attempt %d/%d): %s",
                         provider,
                         attempt + 1,
                         retries + 1,
-                        type(exc).__name__,
-                        str(exc)[:200],
+                        describe_exception(exc),
                     )
                     if attempt < retries:
                         backoff = min(settings.llm_retry_backoff_base_seconds * (attempt + 1), 2.0)
                         time.sleep(backoff)
         # Every configured provider failed. Final safety net: simulated demo data if enabled.
         logger.error(
-            "All configured LLM providers failed (%s); last error: %s: %s",
+            "All configured LLM providers failed (%s); last error: %s",
             ", ".join(providers),
-            type(last_err).__name__ if last_err else "unknown",
-            str(last_err)[:200] if last_err else "",
+            describe_exception(last_err),
         )
         if demo_fallback_enabled():
             return demo_data.simulated_response(system, user)
-        raise LLMUnavailable(str(last_err))
+        # Not ``str(last_err)``: that laundered a provider's response body into an app-owned
+        # exception, which every downstream handler then treats as safe to log and persist.
+        raise LLMUnavailable(describe_exception(last_err))

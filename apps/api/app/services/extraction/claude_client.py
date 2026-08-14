@@ -25,6 +25,7 @@ from typing import Any
 from app.agents import demo_data
 from app.agents.llm import available_providers, demo_fallback_enabled
 from app.config import settings
+from app.core.logsafe import describe_exception
 from app.services.extraction.text_parser import ParsedEntity, ParsedField
 
 logger = logging.getLogger(__name__)
@@ -270,10 +271,12 @@ def extract(file_bytes: bytes, file_type: str) -> tuple[list[ParsedEntity], str 
         except Exception as exc:  # noqa: BLE001 — try next provider, then deterministic path
             last_err = exc
             logger.warning(
-                "Vision extraction via %r failed for file_type=%s: %s: %s",
+                "Vision extraction via %r failed for file_type=%s: %s",
                 provider,
                 file_type,
-                type(exc).__name__,
-                str(exc)[:200],
+                describe_exception(exc),
             )
-    raise RuntimeError(str(last_err))
+    # The document bytes went upstream, so an upstream error can quote them back — and on the
+    # failure that matters most (a reply with no JSON object in it) the exception text is the
+    # model's response, which is the chart. See app.core.logsafe.
+    raise RuntimeError(describe_exception(last_err))

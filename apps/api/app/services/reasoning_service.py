@@ -22,6 +22,7 @@ from app.agents.context import EventEmitter, ReasoningContext, Retriever, Safety
 from app.agents.llm import LLMClient, is_available
 from app.agents.state import CaseState, IntakeQuestionState
 from app.config import settings
+from app.core.logsafe import describe_exception
 from app.exceptions import NotFoundError, ValidationError
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
 from app.models.intake import IntakeAnswer, IntakeQuestion
@@ -313,14 +314,19 @@ class ReasoningService:
             output = await graph.run_reasoning(state, ctx)
         except Exception as exc:  # noqa: BLE001 — record failure, surface to clinician
             session.status = "failed"
-            session.error_detail = str(exc)
+            # Both of these took str(exc). Exceptions here come back from an LLM provider that
+            # was just sent this patient's snapshot, and audit_logs.payload is unencrypted,
+            # immutable and never pruned — so a provider that quoted the prompt in its error
+            # wrote a piece of the chart into the one table that outlives the record.
+            failure = describe_exception(exc)
+            session.error_detail = failure
             await self.audit.record(
                 action="reasoning_session_failed",
                 account_id=account_id,
                 patient_id=session.patient_id,
                 entity_type="reasoning_session",
                 entity_id=session.id,
-                payload={"error": str(exc)},
+                payload={"error": failure},
             )
             await self.db.commit()
             raise
@@ -433,7 +439,10 @@ class ReasoningService:
             try:
                 await self.run(account_id, session_id, emit=emit)
             except Exception as exc:  # noqa: BLE001 — relay error to the stream
-                await queue.put(("error", {"message": str(exc)}))
+                # app.main.unhandled_error_handler keeps exception text out of every HTTP
+                # response body. SSE bypasses it: this shipped str(exc) to the browser
+                # verbatim, internals and whatever the provider echoed along with them.
+                await queue.put(("error", {"message": describe_exception(exc)}))
             finally:
                 await queue.put(_SENTINEL)
 
