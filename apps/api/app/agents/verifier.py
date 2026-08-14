@@ -16,7 +16,7 @@ from app.agents.state import (
     more_conservative_tier,
 )
 from app.agents.tools import summarize_snapshot
-from app.agents.util import as_text, call_llm
+from app.agents.util import as_text, call_llm, text_list
 
 AGENT = "verifier"
 _VALID_STATUS = {"agree", "partial_disagreement", "major_disagreement"}
@@ -37,19 +37,9 @@ def _recognised(value: object, allowed: set[str], default: str | None) -> str | 
     return value if isinstance(value, str) and value in allowed else default
 
 
-def _caveat_list(value: object) -> list[str]:
-    """Coerce a model-supplied caveats field to a list of non-empty strings.
-
-    A bare string is one caveat, not a list of characters -- which is what ``list("...")``
-    would have made of it. Null entries are dropped: they reach the Reasoning Theatre as list
-    items and the frontend already defends against them, so they are real, not hypothetical.
-    """
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if not isinstance(value, (list | tuple)):
-        return []
-    return [text for text in (as_text(v) for v in value) if text]
+# Caveats are a model-supplied list of sentences, coerced the same way every other agent's is.
+# This guard started here and now lives in ``util`` because the Devil's-Advocate needed it too.
+_caveat_list = text_list
 
 
 async def run(state: CaseState, ctx: ReasoningContext) -> None:

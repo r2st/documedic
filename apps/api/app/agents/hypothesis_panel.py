@@ -173,9 +173,26 @@ def _parse_evidence(items: Any, supports: bool) -> list[Evidence]:
     A weak model may shape an evidence item as ``{"evidence": ..., "probability": ...}`` instead
     of ``{"text": ...}``; ``as_text`` flattens it so the item is shown rather than dropped or
     crashing the UI. The ``source_ref`` is only kept when it is a plain string.
+
+    The field itself is normalised before any of that, because ``for e in items or []`` trusted
+    it to be iterable and to iterate into items. Neither held. A scalar -- a model answering
+    ``"evidence_for": 0`` for a hypothesis it found nothing for -- raised TypeError, and the four
+    specialists run under ``asyncio.gather``, so one of them hitting it discarded the other
+    three's work, escaped ``hypothesis_panel.run`` and failed the whole case; the deterministic
+    panel that exists for exactly "the model gave us nothing usable" never ran, because the
+    exception happened while parsing a response that had already arrived. A bare string was
+    quieter and worse: ``"evidence_for": "no relevant findings"`` iterated into characters and
+    put nineteen single-letter bullet points on the card as evidence for a diagnosis.
+
+    A string is one piece of evidence, an object is one piece of evidence, and anything with no
+    readable text in it is none -- which is the empty list the caller's fallback already handles.
     """
+    if isinstance(items, (dict | str)):
+        items = [items]
+    elif not isinstance(items, (list | tuple)):
+        items = []
     out: list[Evidence] = []
-    for e in items or []:
+    for e in items:
         if isinstance(e, dict):
             text = as_text(e.get("text") or e.get("evidence") or e.get("finding"))
             ref = e.get("source_ref") if isinstance(e.get("source_ref"), str) else None

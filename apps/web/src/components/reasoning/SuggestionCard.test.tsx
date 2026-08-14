@@ -457,3 +457,102 @@ describe('SuggestionCard decision failures', () => {
     expect(api.recordDecision).toHaveBeenCalledOnce();
   });
 });
+
+/**
+ * Suggestions are immutable and persisted, so a card renders whatever the reasoning engine
+ * recorded — including sessions recorded before the engine coerced these fields. Both list
+ * fields of the critique, and both evidence lists, are rendered by mapping over them; a string
+ * survives the `?? []` guard and then has no `.map`, which throws during render and unmounts
+ * the whole card. The Devil's-Advocate case is the one that matters most: Critical Safety Rule
+ * #5 says the counter-argument is always shown, and a malformed one took the suggestion it was
+ * attached to down with it — leaving the leading hypothesis on screen with nothing against it.
+ */
+describe('SuggestionCard with malformed reasoning output', () => {
+  beforeEach(() => {
+    vi.mocked(api.recordDecision).mockReset().mockResolvedValue({ id: 'd1', decision: 'ok' });
+  });
+
+  it('renders a devils-advocate critique whose evidence arrived as a string', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          devils_advocate: {
+            summary: 'The findings are not specific.',
+            disconfirming_evidence: 'The ECG was normal throughout.',
+            alternative_explanations: 'Gastro-oesophageal reflux',
+          },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+
+    expect(screen.getByText(/Devil's advocate/i)).toBeInTheDocument();
+    expect(screen.getByText('The ECG was normal throughout.')).toBeInTheDocument();
+    expect(screen.getByText(/Gastro-oesophageal reflux/)).toBeInTheDocument();
+  });
+
+  it('flattens objects inside the dissent lists rather than white-screening on them', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          devils_advocate: {
+            disconfirming_evidence: [{ text: 'No troponin rise.' }, null, ''],
+            alternative_explanations: [{ summary: 'Costochondritis' }],
+            base_rate_caveat: { reason: 'Low pre-test probability.' },
+          },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+
+    expect(screen.getByText('No troponin rise.')).toBeInTheDocument();
+    expect(screen.getByText(/Costochondritis/)).toBeInTheDocument();
+    expect(screen.getByText(/Low pre-test probability\./)).toBeInTheDocument();
+  });
+
+  it('still shows the dissent when every critique field is unreadable (Safety Rule #5)', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          devils_advocate: { disconfirming_evidence: 7, alternative_explanations: {} },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+
+    expect(screen.getByText(/Devil's advocate/i)).toBeInTheDocument();
+    // The conclusion it is attached to must still be on screen — that is what used to be lost.
+    expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+  });
+
+  it('renders evidence that arrived as a string as one item, not one per character', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          evidence: {
+            evidence_for: 'Productive cough and fever for three days',
+            evidence_against: [{ evidence: 'No hypoxia on exam' }, 'Afebrile at review'],
+          },
+        })}
+        sessionId="sess-1"
+      />,
+    );
+
+    expect(screen.getByText('Productive cough and fever for three days')).toBeInTheDocument();
+    expect(screen.getByText('No hypoxia on exam')).toBeInTheDocument();
+    expect(screen.getByText('Afebrile at review')).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+  });
+
+  it('renders the conclusion when the evidence object is missing entirely', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ evidence: undefined as never })}
+        sessionId="sess-1"
+      />,
+    );
+
+    expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+    expect(screen.queryByText(/Evidence supporting/)).not.toBeInTheDocument();
+  });
+});

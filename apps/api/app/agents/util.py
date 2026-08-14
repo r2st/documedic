@@ -79,6 +79,26 @@ def objects(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def text_list(value: Any) -> list[str]:
+    """Coerce a model-supplied "list of strings" field to exactly that.
+
+    Three shapes have to survive, because models produce all three where a list of sentences was
+    asked for. A list is read item by item, through ``as_text``, so an item that arrived as an
+    object is flattened rather than dropped. A bare string is *one* item, not a list of
+    characters -- which is what ``list("...")`` would have made of it, and what iterating it
+    downstream does. Anything else carries no readable text and yields nothing.
+
+    Empty entries are dropped: they reach the Reasoning Theatre as list items, and the frontend
+    already defends against them, so they are real rather than hypothetical.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list | tuple)):
+        return []
+    return [text for text in (as_text(v) for v in value) if text]
+
+
 def as_float(value: Any, default: float) -> float:
     """A float from a model-supplied value, falling back when it is not a usable number.
 

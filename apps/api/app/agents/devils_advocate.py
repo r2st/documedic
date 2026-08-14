@@ -10,7 +10,7 @@ from app.agents.context import ReasoningContext
 from app.agents.prompts import DEVILS_ADVOCATE
 from app.agents.state import CaseState
 from app.agents.tools import summarize_snapshot
-from app.agents.util import call_llm
+from app.agents.util import as_text, call_llm, text_list
 
 AGENT = "devils_advocate"
 
@@ -31,13 +31,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
         f"Presenting complaint: {state.presenting_complaint}\nRecord:\n{summary}",
     )
     if result:
-        critique = {
-            "leading_hypothesis": leader.diagnosis_name,
-            "disconfirming_evidence": result.get("disconfirming_evidence", []),
-            "alternative_explanations": result.get("alternative_explanations", []),
-            "base_rate_caveat": result.get("base_rate_caveat", ""),
-            "summary": result.get("summary", ""),
-        }
+        critique = _critique(leader.diagnosis_name, result)
     else:
         state.degraded = state.degraded or not ctx.llm_available()
         critique = _fallback(state, leader.diagnosis_name)
@@ -46,6 +40,31 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     state.add_trace(AGENT, f"Counter-argument to '{leader.diagnosis_name}'", critique)
     await ctx.emit("devils_advocate", {"agent": AGENT, "critique": critique})
     await ctx.emit("agent_complete", {"agent": AGENT})
+
+
+def _critique(leading: str, result: dict) -> dict:
+    """Read one Devil's-Advocate response, coercing every field to the shape the UI renders.
+
+    This was the last agent passing model output straight through: the four fields below went
+    from the response into ``CaseState``, into the persisted ``case_state`` snapshot, over SSE,
+    and into ``SuggestionCard``'s ``DevilsAdvocate`` — uninspected at every step. Two of them are
+    rendered by mapping over them, so a model that answered ``"disconfirming_evidence": "Nothing
+    argues against it."`` — a string, not a list, and an entirely ordinary thing for a model to
+    say — reached the browser as a ``.map is not a function`` and white-screened the card.
+
+    That is a worse failure here than anywhere else in the engine. Critical Safety Rule #5 says
+    the counter-argument is always shown to the clinician and cannot be hidden or collapsed; a
+    malformed one took down not just the dissent but the whole suggestion it was attached to,
+    leaving the leading hypothesis on screen with nothing arguing against it. Coercion keeps the
+    dissent readable instead: a bare string becomes one item, an object is flattened to its text.
+    """
+    return {
+        "leading_hypothesis": leading,
+        "disconfirming_evidence": text_list(result.get("disconfirming_evidence")),
+        "alternative_explanations": text_list(result.get("alternative_explanations")),
+        "base_rate_caveat": as_text(result.get("base_rate_caveat")),
+        "summary": as_text(result.get("summary")),
+    }
 
 
 def _fallback(state: CaseState, leading: str) -> dict:

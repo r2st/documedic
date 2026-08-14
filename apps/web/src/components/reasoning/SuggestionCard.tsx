@@ -35,6 +35,43 @@ function asText(value: unknown): string {
   return '';
 }
 
+/**
+ * Coerce a value to a renderable list of strings.
+ *
+ * `((x as unknown[]) ?? []).map(asText)` only defends against null: a *string* passes the `??`
+ * and then has no `.map`, which throws while rendering and takes out the whole card. The
+ * reasoning engine now coerces these fields on the way out, but suggestions are immutable and
+ * already persisted, so a session recorded before that fix still returns whatever the model
+ * said — and this component is the last line of defense by design.
+ */
+function asTextList(value: unknown): string[] {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean);
+  const text = asText(value);
+  return text ? [text] : [];
+}
+
+/**
+ * Coerce the evidence field of a suggestion to renderable items.
+ *
+ * Same reason as `asTextList`: `(s.evidence.evidence_for as EvidenceItem[]) ?? []` lets a string
+ * through, where `.length` quietly reports its character count and `.map` throws. Evidence is
+ * ordered before the conclusion by design, so this throws before the clinician has seen anything
+ * at all.
+ */
+function asEvidenceItems(value: unknown): EvidenceItem[] {
+  const raw = Array.isArray(value) ? value : value == null ? [] : [value];
+  return raw
+    .map((e) => {
+      if (e && typeof e === 'object' && !Array.isArray(e)) {
+        const o = e as Record<string, unknown>;
+        return { text: asText(o.text ?? o.evidence ?? o.finding ?? o), source_ref: o.source_ref };
+      }
+      return { text: asText(e) };
+    })
+    .filter((e): e is EvidenceItem => Boolean(e.text)) as EvidenceItem[];
+}
+
 function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'against' }) {
   if (!items.length) return null;
   const styles =
@@ -81,12 +118,8 @@ function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'a
 
 function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
   // Anti-automation-bias: ALWAYS visible, never collapsed by default.
-  const disconfirming = ((critique.disconfirming_evidence as unknown[]) ?? [])
-    .map(asText)
-    .filter(Boolean);
-  const alternatives = ((critique.alternative_explanations as unknown[]) ?? [])
-    .map(asText)
-    .filter(Boolean);
+  const disconfirming = asTextList(critique.disconfirming_evidence);
+  const alternatives = asTextList(critique.alternative_explanations);
   const baseRate = asText(critique.base_rate_caveat);
   const summary = asText(critique.summary);
   return (
@@ -151,9 +184,12 @@ export function SuggestionCard({
   } | null>(null);
   const [recording, setRecording] = useState(false);
 
-  const evFor = (s.evidence.evidence_for as EvidenceItem[]) ?? [];
-  const evAgainst = (s.evidence.evidence_against as EvidenceItem[]) ?? [];
-  const hasDevil = s.devils_advocate && Object.keys(s.devils_advocate).length > 0;
+  const evFor = asEvidenceItems(s.evidence?.evidence_for);
+  const evAgainst = asEvidenceItems(s.evidence?.evidence_against);
+  const hasDevil =
+    s.devils_advocate &&
+    typeof s.devils_advocate === 'object' &&
+    Object.keys(s.devils_advocate).length > 0;
 
   /**
    * Write a clinician decision to the immutable audit trail.
