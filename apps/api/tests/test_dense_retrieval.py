@@ -22,6 +22,10 @@ guideline.
 from __future__ import annotations
 
 import math
+import sys
+import threading
+import time
+import types
 
 import pytest
 
@@ -483,3 +487,100 @@ def test_a_shared_section_id_does_not_hand_one_source_the_others_similarity():
     reranked = apply_dense_rerank(scored, dense, THRESHOLD)
 
     assert [c.source for _, c in reranked] == ["who", "icmr"]
+
+
+# --- embed_documents: the corpus-side encode -------------------------------------------------
+#
+# The write half of the dense path. It is optional in exactly the same ways the read half is,
+# and each of those ways has to end in "chunks stored without vectors", never in an exception --
+# ``ingest`` runs on the boot path of every deployment.
+
+
+def test_an_empty_corpus_batch_does_not_load_a_model(monkeypatch):
+    """Same bargain as ``embed_query`` on an empty query: nothing to embed, so nothing should
+    pay a few hundred MB to discover that.
+
+    This is the ordinary case on a warm deployment, not an edge one -- ``ingest`` is idempotent
+    and runs on every boot, so the batch it offers is empty every time the corpus is unchanged.
+    """
+    monkeypatch.setattr(
+        dense_retrieval, "_load_model", lambda: pytest.fail("model loaded for an empty batch")
+    )
+
+    assert dense_retrieval.embed_documents([]) is None
+
+
+def test_corpus_embedding_can_be_switched_off_by_environment(monkeypatch):
+    """``DENSE_RETRIEVAL_DISABLED`` has to reach the ingest too. Honouring it only on the query
+    side would still load a transformer on every boot -- the cost the switch exists to avoid."""
+    monkeypatch.setenv("DENSE_RETRIEVAL_DISABLED", "1")
+    monkeypatch.setattr(
+        dense_retrieval, "_load_model", lambda: pytest.fail("model loaded while disabled")
+    )
+
+    assert dense_retrieval.embed_documents(["hydration guidance"]) is None
+
+
+def test_a_failed_corpus_encode_is_logged_and_leaves_the_chunks_unembedded(monkeypatch, caplog):
+    """An OOM or tokeniser failure part-way through a corpus encode must not abort ingestion:
+    the rows still have to land so the deterministic lexical retriever works (Safety Rule #8).
+
+    Logged because a silent optional-path failure is indistinguishable from a working one --
+    the same reason R33's vision extraction fell back on every document unnoticed.
+    """
+
+    class _Exploding:
+        def encode(self, texts, normalize_embeddings=False):
+            raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(dense_retrieval, "_load_model", lambda: _Exploding())
+
+    with caplog.at_level("WARNING"):
+        assert dense_retrieval.embed_documents(["hydration guidance"]) is None
+
+    assert "CUDA out of memory" in caplog.text
+
+
+def test_a_thread_that_waited_for_the_lock_reuses_the_model_rather_than_building_another():
+    """Why ``_load_model`` holds a lock at all.
+
+    It is reached from ``asyncio.to_thread`` — several concurrent reasoning runs, or a retrieval
+    racing an ingest, arrive together on a cold process. Without the re-check inside the lock
+    each waiter would build its own copy of the transformer on the way to the same cache entry,
+    which is a few hundred MB apiece.
+    """
+    dense_retrieval.reset()
+    holding = threading.Event()
+    built: list[str] = []
+
+    class _SlowModel:
+        def __init__(self, name: str) -> None:
+            built.append(name)
+            holding.set()  # the lock is held from here until __init__ returns
+            time.sleep(0.3)
+
+    loaded: list[object] = []
+
+    def _load() -> None:
+        loaded.append(dense_retrieval._load_model())
+
+    original = sys.modules.get("sentence_transformers")
+    sys.modules["sentence_transformers"] = types.SimpleNamespace(SentenceTransformer=_SlowModel)
+    try:
+        first = threading.Thread(target=_load)
+        first.start()
+        assert holding.wait(5), "the first thread never entered the model constructor"
+        second = threading.Thread(target=_load)  # starts while the lock is held
+        second.start()
+        first.join(10)
+        second.join(10)
+    finally:
+        if original is None:
+            sys.modules.pop("sentence_transformers", None)
+        else:
+            sys.modules["sentence_transformers"] = original
+        dense_retrieval.reset()
+
+    assert built == [dense_retrieval.EMBEDDING_MODEL], f"built {len(built)} models, expected 1"
+    assert len(loaded) == 2
+    assert loaded[0] is loaded[1] is not None

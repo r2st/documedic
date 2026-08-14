@@ -42,7 +42,14 @@ disallow_untyped_defs = true
 [tool.coverage.run]
 # SQLAlchemy async executes inside greenlets; without this, service-layer lines that
 # await the DB are under-counted.
-concurrency = ["greenlet"]
+#
+# "thread" is listed explicitly because naming any concurrency library *replaces* coverage's
+# default thread tracing rather than adding to it. With "greenlet" alone, nothing running in a
+# worker thread was measured -- and the blocking work this codebase deliberately pushes off the
+# event loop with ``asyncio.to_thread`` (bcrypt, blob I/O, audit-chain walks, the corpus and
+# query encodes) all runs there. Those lines read as uncovered however thoroughly they were
+# tested, which is a misleading number in the direction that hides gaps.
+concurrency = ["greenlet", "thread"]
 source = ["app"]
 
 [tool.pytest.ini_options]
