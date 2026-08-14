@@ -45,6 +45,71 @@ def _tokens(text: str) -> set[str]:
     return {t for t in _TOKEN.findall((text or "").lower()) if t not in _STOP and len(t) > 2}
 
 
+# A finding the clinician wrote down as absent. Deliberately small and unambiguous: every cue
+# here negates what follows it in plain clinical shorthand, and nothing here has a second
+# clinical reading. "rule out"/"ruled out" is *not* a cue -- "rule out ACS" means ACS is being
+# actively considered, which is the opposite of absent -- and neither is "normal", which says a
+# test was done rather than that a finding is absent.
+_NEGATION_CUES = frozenset(
+    {
+        "no",
+        "not",
+        "none",
+        "never",
+        "nil",
+        "denies",
+        "denied",
+        "denying",
+        "without",
+        "negative",
+        "absent",
+        "afebrile",
+    }
+)
+# A cue negates to the end of its clause, capped so that one stray "no" cannot erase a long
+# clause behind it. Clinical shorthand negates in short runs -- "no chest pain, no fever, no
+# bleeding" -- so the clause boundary almost always arrives first.
+_NEGATION_SCOPE = 5
+_CLAUSE = re.compile(r"[.,;:!?()\[\]|/]+")
+
+
+def query_tokens(query: str) -> set[str]:
+    """The tokens of a retrieval query, with findings recorded as *absent* left out.
+
+    A guideline query carries the clinician's free-text complaint, and clinical free text
+    documents what is not there as carefully as what is: "no chest pain, no breathlessness, no
+    fever, no bleeding" is an ordinary line in a note. Scored as plain tokens, every one of those
+    words is positive evidence -- "no chest pain" contributed a full keyword hit to *Recognition
+    of acute coronary syndrome*, which is precisely backwards, since the clinician had just
+    written that the patient does not have it.
+
+    The engine already holds this principle: ``agents.util.text_blob`` deliberately drops the
+    keywords of an intake question the clinician answered "no" to, so a screened-out symptom
+    cannot trigger a can't-miss match. It was only ever applied to intake answers, and the
+    complaint free text -- where clinicians actually write their negatives -- went through
+    untouched. Measured against the shipped corpus, an otherwise ordinary note (family history,
+    vitals, prior normal investigations, and four documented negatives) pushed 12 of 15 sections
+    over the citation threshold; dropping the negated spans removes 5 of them.
+
+    Only the *query* is treated this way. Guideline text states contraindications for a living
+    ("NSAIDs should be avoided in dengue"), and a clinician searching for NSAIDs in dengue must
+    still find that section -- so chunk body tokens keep their negations.
+    """
+    kept: list[str] = []
+    for clause in _CLAUSE.split(query or ""):
+        remaining = 0
+        for word in clause.split():
+            token = word.strip("-'\"").lower()
+            if token in _NEGATION_CUES:
+                remaining = _NEGATION_SCOPE
+                continue
+            if remaining:
+                remaining -= 1
+                continue
+            kept.append(word)
+    return _tokens(" ".join(kept))
+
+
 # A query token counts as a keyword hit if it *is* a keyword word, or is that word give or take
 # a short inflectional suffix ("platelet" ~ "platelets", "fever" ~ "fevers"). Both bounds matter:
 # below _MIN_STEM_LEN a prefix carries no clinical meaning ("hyp" would hit "hypertension",
@@ -54,17 +119,23 @@ _MIN_STEM_LEN = 4
 _MAX_STEM_SUFFIX = 3
 
 
-def _keyword_tokens(keywords: Sequence[str]) -> frozenset[str]:
-    """The individual words of a chunk's keywords, so a phrase matches word-wise.
+def _keyword_phrases(keywords: Sequence[str]) -> tuple[frozenset[str], ...]:
+    """Each curated keyword split into its own words, keeping the phrase boundaries.
 
-    Keywords are curated as phrases ("dengue fever", "first-line"), and the query is scored
-    token by token, so the phrase has to be broken up for either to reach the other.
+    Keywords are curated as phrases ("dengue fever", "acute coronary syndrome"), and the query
+    is scored token by token, so the phrase has to be broken up for either to reach the other.
+    The split is per keyword rather than corpus-wide because a phrase names *one* concept, and
+    ``lexical_score`` has to know how much of that concept a query actually named.
     """
-    return frozenset(t for k in keywords for t in _TOKEN.findall(k.lower()) if len(t) > 2)
+    return tuple(
+        words
+        for k in keywords
+        if (words := frozenset(t for t in _TOKEN.findall(k.lower()) if len(t) > 2))
+    )
 
 
-def _is_keyword_hit(token: str, keyword_tokens: frozenset[str]) -> bool:
-    """Whether a query token matches a keyword word exactly or as a short inflection.
+def _matches_keyword_word(token: str, word: str) -> bool:
+    """Whether a query token names a keyword word, exactly or as a short inflection.
 
     This used to be a substring test — ``any(t in k2 for k2 in keywords)`` — which matched on
     any run of characters anywhere inside a keyword. "ten" hit "hypertension", "art" hit
@@ -73,9 +144,7 @@ def _is_keyword_hit(token: str, keyword_tokens: frozenset[str]) -> bool:
     threshold and into a management option's citations. Keyword hits have to mean the query
     named the concept, not that its letters happened to appear in the middle of it.
     """
-    if token in keyword_tokens:
-        return True
-    return any(_is_inflection(token, k) for k in keyword_tokens)
+    return token == word or _is_inflection(token, word)
 
 
 def _is_inflection(a: str, b: str) -> bool:
@@ -112,15 +181,24 @@ class RetrievableChunk:
     corpus_version: str
     keywords: tuple[str, ...]
     body_tokens: frozenset[str]
-    # The words of ``keywords``, split once here for the same reason ``body_tokens`` is: the
-    # retriever scores every chunk in the corpus on every query.
+    # ``keywords`` split into words, once here, for the same reason ``body_tokens`` is: the
+    # retriever scores every chunk in the corpus on every query. ``keyword_phrases`` keeps each
+    # keyword's words together (what ``lexical_score`` scores against); ``keyword_tokens`` is the
+    # flattened union of them, kept because it answers "is this word a keyword word at all".
+    keyword_phrases: tuple[frozenset[str], ...] = ()
     keyword_tokens: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         # Derived, never passed: a directly-constructed chunk (tests, fixtures) would otherwise
         # score with no keywords at all and silently lose every keyword hit.
-        if not self.keyword_tokens and self.keywords:
-            object.__setattr__(self, "keyword_tokens", _keyword_tokens(self.keywords))
+        if not self.keyword_phrases and self.keywords:
+            object.__setattr__(self, "keyword_phrases", _keyword_phrases(self.keywords))
+        if not self.keyword_tokens and self.keyword_phrases:
+            object.__setattr__(
+                self,
+                "keyword_tokens",
+                frozenset(t for words in self.keyword_phrases for t in words),
+            )
 
     @classmethod
     def of(cls, chunk: GuidelineChunk) -> RetrievableChunk:
@@ -137,24 +215,56 @@ class RetrievableChunk:
         )
 
 
+_KEYWORD_WEIGHT = 1.5
+
+
+def _keyword_weight(q_tokens: set[str], phrases: tuple[frozenset[str], ...]) -> float:
+    """How much keyword evidence a query supplies, counted a keyword at a time.
+
+    Each matched keyword word is worth ×1.5, as before — discounted by how much of its own
+    keyword the query actually named. A keyword is a phrase naming one concept, and matching one
+    word of "acute coronary syndrome" is not naming that concept.
+
+    This is the same rule as ``_matches_keyword_word``, one level up. That rule stopped a token
+    matching part of a *word* ("ten" inside "hypertension"); this one stops a token matching part
+    of a *phrase*, which had the same effect and the same cause. Every word of a phrase scored a
+    full, independent keyword hit, so the generic qualifier that clinical phrases tend to start
+    with certified a match on its own. Measured against the shipped corpus: "acute" — from the
+    hypothesis name "Acute gastroenteritis" — scored both acute-coronary-syndrome sections at
+    0.625 on a query with nothing cardiac in it, and "high", from "high blood pressure", scored
+    the hypertension section on any query that mentioned a high fever.
+
+    Recall is untouched where it was earned, by construction rather than by measurement: when the
+    query names every word of a phrase the discount is 1, so the phrase contributes exactly what
+    it always did, and a single-word keyword ("dengue", "metformin") is a one-word phrase that
+    can only ever be matched in full. Only a partial match loses weight, and it loses it in
+    proportion to how partial it is — "dengue" against "dengue fever" is half a phrase and keeps
+    half of one hit, still enough to rank that section first, because nothing else in the corpus
+    matches "dengue" at all.
+    """
+    total = 0.0
+    for words in phrases:
+        matched = sum(1 for w in words if any(_matches_keyword_word(t, w) for t in q_tokens))
+        if matched:
+            total += _KEYWORD_WEIGHT * matched * (matched / len(words))
+    return total
+
+
 def lexical_score(query: str, chunks: Sequence[RetrievableChunk], k: int) -> list[dict]:
-    """Deterministic lexical retriever: keyword hits (×1.5) + body token overlap, normalised.
+    """Deterministic lexical retriever: keyword evidence (×1.5) + body token overlap, normalised.
 
     Shared by the async ``GuidelineService.retrieve`` and the sync retriever closure the
     ReasoningContext needs (it has no event loop / DB access).
     """
-    q_tokens = _tokens(query)
+    q_tokens = query_tokens(query)
     if not q_tokens or not chunks:
         return []
     scored: list[tuple[float, RetrievableChunk]] = []
     for chunk in chunks:
-        kw = chunk.keyword_tokens
-        kw_hits = sum(1 for t in q_tokens if _is_keyword_hit(t, kw))
-        overlap = len(q_tokens & chunk.body_tokens)
+        raw = _keyword_weight(q_tokens, chunk.keyword_phrases) + len(q_tokens & chunk.body_tokens)
         # Saturating relevance: independent of query length so a long multi-diagnosis query
         # is not penalised. raw>=4.5 (≈3 keyword hits, or 2 hits + body overlap) clears 0.75.
-        raw = 1.5 * kw_hits + overlap
-        score = round(raw / (raw + 1.5), 4) if raw else 0.0
+        score = round(raw / (raw + _KEYWORD_WEIGHT), 4) if raw else 0.0
         if score > 0:
             scored.append((score, chunk))
     scored.sort(key=lambda x: x[0], reverse=True)
