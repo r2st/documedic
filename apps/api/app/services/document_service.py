@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -183,7 +184,25 @@ class DocumentService:
         await self.db.flush()
 
         try:
-            result = self.pipeline.run(data, document.file_type)
+            # Off the event loop. ``ExtractionPipeline.run`` is synchronous and every branch of
+            # it blocks for a long time: a vision call through a *sync* provider SDK
+            # (``settings.llm_request_timeout_seconds``, 30s by default), a Tesseract
+            # ``subprocess.run`` capped at 60s, and pypdf parsing that is CPU-bound on a large
+            # scan. Called directly from this ``async def`` it held the only thread the worker
+            # runs its event loop on, so one upload of one unreadable scan stalled *every*
+            # concurrent request in that process — other clinicians' chart reads, the SSE
+            # reasoning streams, and the ``/health/ready`` probe that tells the load balancer
+            # this instance is alive — for up to a minute and a half.
+            #
+            # The pipeline is documented stateless and takes no session, so a worker thread is
+            # safe: bytes in, result out, nothing shared. The transaction is still open across
+            # this (extraction is synchronous within the upload by design until P1-05c moves it
+            # to a worker), but the event loop is now free to serve everyone else while it runs.
+            #
+            # ``asyncio.to_thread`` rather than Starlette's ``run_in_threadpool`` to match
+            # ``app.agents.util.call_llm``, which already takes the reasoning engine's identical
+            # sync-SDK calls off the loop this way. One offload idiom, one thread pool.
+            result = await asyncio.to_thread(self.pipeline.run, data, document.file_type)
         except Exception as exc:  # noqa: BLE001 — the upload survives any extraction failure
             await self._mark_extraction_failed(account_id, document, exc)
             return

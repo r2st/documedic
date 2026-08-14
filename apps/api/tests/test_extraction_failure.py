@@ -15,12 +15,15 @@ longer existed, so each retry wrote another orphan.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
 
 from app.models.document import Document
+from app.services.extraction.pipeline import ExtractionResultInternal
 from tests.conftest import create_patient
 
 SCAN = b"%PDF-1.4\nMEDICATIONS:\nGlycomet 500mg BD\n"
@@ -157,3 +160,45 @@ async def test_a_later_upload_of_a_different_file_still_extracts_normally(auth_c
     good = await _upload(auth_client, patient["id"], content=SCAN + b"LABS:\nHbA1c: 8.1 %\n")
     assert good.status_code == 201
     assert good.json()["extraction_status"] in {"completed", "needs_confirmation"}
+
+
+@pytest.mark.asyncio
+async def test_a_slow_extraction_does_not_stall_the_rest_of_the_worker(auth_client):
+    """A blocked extraction must not take the event loop — and every other request — with it.
+
+    ``ExtractionPipeline.run`` is synchronous and slow by nature: a vision call through a sync
+    provider SDK, a Tesseract subprocess capped at 60s, CPU-bound PDF parsing. Awaited directly
+    from ``_run_extraction`` it occupied the worker's only event-loop thread, so one clinician
+    uploading one unreadable scan froze every other in-flight request in the process.
+
+    The pipeline here blocks until this test releases it, standing in for that minute and a
+    half. What is asserted is that an unrelated request still completes while it is blocked;
+    before the threadpool offload the loop never regained control to serve it and this timed
+    out.
+    """
+    patient = await create_patient(auth_client)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_run(_self, _data, _file_type, *, raw_text=None):
+        entered.set()
+        # Bounded so a regression fails the assertion below rather than hanging the suite.
+        release.wait(timeout=10)
+        return ExtractionResultInternal([], None, False, None)
+
+    with patch("app.services.document_service.ExtractionPipeline.run", new=_blocking_run):
+        upload = asyncio.create_task(_upload(auth_client, patient["id"]))
+        try:
+            # Hand the loop over so the upload reaches the pipeline and parks there.
+            await asyncio.wait_for(asyncio.to_thread(entered.wait, 5), timeout=6)
+            assert entered.is_set(), "extraction never started"
+
+            probe = await asyncio.wait_for(auth_client.get("/health/live"), timeout=3)
+            assert probe.status_code == 200
+        finally:
+            release.set()
+        resp = await upload
+
+    # And the upload itself still lands, with the empty extraction the pipeline returned.
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["extraction_status"] == "completed"
