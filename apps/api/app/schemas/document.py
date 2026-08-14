@@ -48,6 +48,12 @@ class ExtractionResult(BaseModel):
     ocr_fallback_used: bool
     entities: list[ExtractedEntity]
     confirmation_required_count: int
+    # Lines under a clinical section header that no grammar could read. The entity list cannot
+    # express a loss -- it shows what was extracted, never what was on the page and was not -- so
+    # a page whose warfarin line the scanner mangled looks like a clean three-drug prescription.
+    # A count rather than the text: this is rendered from `extraction_metadata`, which is not an
+    # encrypted column, and an unreadable line is still the patient's prescribing.
+    unreadable_line_count: int = 0
 
 
 # The widest text column an extracted field lands in (medication brand/generic name) is

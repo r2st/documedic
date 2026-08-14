@@ -273,6 +273,22 @@ export default function UploadPage({ params }: { params: { id: string } }) {
               {reviewed.extraction.confirmation_required_count} field(s) need confirmation. Uncheck
               any entity to exclude it.
             </p>
+            {/*
+              The list below can only show what was read. Without this, a page whose drug line the
+              scanner mangled reads as a complete, cleanly-extracted prescription — so the one
+              thing the clinician needs to know is that the queue is short of the original.
+              Phrased as what to do about it, since the remedy is to open the scan and compare.
+            */}
+            {(reviewed.extraction.unreadable_line_count ?? 0) > 0 && (
+              <p
+                role="alert"
+                className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-200"
+              >
+                {reviewed.extraction.unreadable_line_count} line(s) in a clinical section could not
+                be read and are not listed below. Compare against the original before approving —
+                anything missing here is missing from the chart.
+              </p>
+            )}
           </div>
 
           <ul className="space-y-3">

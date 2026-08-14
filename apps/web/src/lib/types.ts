@@ -76,6 +76,13 @@ export interface ExtractionResult {
   ocr_fallback_used: boolean;
   entities: ExtractedEntity[];
   confirmation_required_count: number;
+  /**
+   * Lines under a clinical section header that no grammar could read. The entity list below shows
+   * what was extracted and cannot show what was on the page and was not, so this is the only
+   * signal that the review queue is short of the original. Optional because documents extracted
+   * before the parser began counting have no value stored.
+   */
+  unreadable_line_count?: number;
 }
 
 export type RecordSection =

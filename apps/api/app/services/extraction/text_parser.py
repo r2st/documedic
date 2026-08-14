@@ -250,6 +250,10 @@ _TIME_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?")
 
 _LABELLED_RE = re.compile(r"^(?P<label>[^:=]{1,60})[:=]\s*(?P<value>.*)$")
 
+# Whether a line carries a number at all — the cheapest test for "this could have been a
+# medication or a lab result". See ``parse_document`` on why the loss count needs it.
+_DIGIT_RE = re.compile(r"\d")
+
 # How many leading words of a colon-less line may form a label. "Sample Collected on" is three.
 _MAX_LABEL_WORDS = 4
 
@@ -500,15 +504,53 @@ _PARSERS = {
 }
 
 
-def parse_text(text: str) -> list[ParsedEntity]:
+@dataclass
+class ParsedDocument:
+    """What the walk produced, and what it had to give up on.
+
+    ``unreadable`` is the count of lines *inside a recognised clinical section* that no grammar
+    could read. It exists because the entity list alone cannot express a loss: a prescription
+    whose warfarin line was scanned as "Warfarin 5rng OD" yields three medications where the page
+    printed four, every one of them cleanly read and confidently banded, and nothing anywhere says
+    a fourth line was ever there. The clinician reviews three drugs, approves them, and the chart
+    is missing the most interaction-heavy drug on the page.
+
+    A count and not the text. ``extraction_metadata``, where this ends up, is not an encrypted
+    column — the same reason ``DocumentService._mark_extraction_failed`` records an exception's
+    type and not its message, and the reason the upload audit payload carries no file name. An
+    unreadable line is still the patient's prescribing. The count is what the clinician needs to
+    know to go back to the original, and the original is a download away.
+    """
+
+    entities: list[ParsedEntity]
+    unreadable: int
+
+
+def parse_document(text: str) -> ParsedDocument:
     """Parse free text into typed entities by walking section headers.
 
     Labelled masthead lines are consumed before the entity grammars see them: administrative
     ones are dropped, and the best report date found anywhere in the document is attached to
     every lab result as ``sample_date`` (see ``_apply_sample_date``). The date is applied after
     the whole document is walked because the masthead can sit either side of the results block.
+
+    Only lines under a section header are counted as unreadable, and only ones containing a digit.
+    Both restrictions exist to keep the count meaningful rather than merely present:
+
+    * An un-sectioned line that parses to nothing is ordinary page furniture — a letterhead, an
+      address, a footer.
+    * ``section`` persists until the *next* header, so the prescriber's name and signature at the
+      foot of a prescription are still "under MEDICATIONS". Counting those would put a nonzero
+      loss on nearly every real document, and a review flag that is always on is one clinicians
+      learn to click past — the automation bias this system is built to resist. The medication and
+      lab grammars both require a number, so a line without one was never a candidate for either;
+      a line *with* one that the grammar still rejected is the case worth raising.
+
+    (The condition and allergy grammars accept any non-empty line, so they never reach this at
+    all.)
     """
     entities: list[ParsedEntity] = []
+    unreadable = 0
     section: str | None = None
     best_date: tuple[int, float, datetime] | None = None
     for raw_line in text.splitlines():
@@ -539,9 +581,16 @@ def parse_text(text: str) -> list[ParsedEntity]:
         ent = parser(line)
         if ent:
             entities.append(ent)
+        elif _DIGIT_RE.search(line):
+            unreadable += 1
     if best_date is not None:
         _apply_sample_date(entities, best_date[2], best_date[1])
-    return entities
+    return ParsedDocument(entities=entities, unreadable=unreadable)
+
+
+def parse_text(text: str) -> list[ParsedEntity]:
+    """The entities alone. See :func:`parse_document` for what the walk could not read."""
+    return parse_document(text).entities
 
 
 def _apply_sample_date(entities: list[ParsedEntity], value: datetime, confidence: float) -> None:

@@ -273,13 +273,24 @@ class DocumentService:
             "ocr_fallback_used": result.ocr_fallback_used,
             "entities": entities_meta,
             "confirmation_required_count": confirmation_required,
+            "unreadable_line_count": result.unreadable_lines,
             "approved": False,
         }
         document.document_type = result.document_type
         document.extraction_model = result.model
         document.ocr_fallback_used = result.ocr_fallback_used
         document.extraction_completed_at = datetime.now(UTC)
-        document.extraction_status = "needs_confirmation" if confirmation_required else "completed"
+        # A dropped line holds the document too. The review queue can only show what was read, so
+        # on its own it is silent about a line that produced nothing: a prescription whose warfarin
+        # line the scanner mangled shows three cleanly-read drugs, every field banded "high", and
+        # "completed" — which reads as "this page has been fully understood". It has not been, and
+        # the one thing standing between that and a chart missing a drug is whether the clinician
+        # happens to compare the queue against the original.
+        document.extraction_status = (
+            "needs_confirmation"
+            if confirmation_required or result.unreadable_lines
+            else "completed"
+        )
         await self.db.flush()
         await self.audit.record(
             action="extraction_completed",
@@ -315,6 +326,7 @@ class DocumentService:
             "ocr_fallback_used": False,
             "entities": [],
             "confirmation_required_count": 0,
+            "unreadable_line_count": 0,
             "approved": False,
             # Type only. The exception's message can quote the document's contents (a parser
             # error carries the text it choked on), and extraction_metadata is not encrypted.
@@ -403,6 +415,9 @@ class DocumentService:
             ocr_fallback_used=meta.get("ocr_fallback_used", False),
             entities=entities,
             confirmation_required_count=meta.get("confirmation_required_count", 0),
+            # Absent on documents extracted before the parser began counting; those were not
+            # known to be complete either, so the default understates rather than reassures.
+            unreadable_line_count=meta.get("unreadable_line_count", 0),
         )
 
     async def approve(

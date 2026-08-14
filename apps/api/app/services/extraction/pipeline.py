@@ -11,7 +11,7 @@ import tempfile
 from app.config import settings
 from app.core.logsafe import describe_exception
 from app.services.extraction import claude_client
-from app.services.extraction.text_parser import ParsedEntity, parse_text
+from app.services.extraction.text_parser import ParsedDocument, ParsedEntity, parse_document
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +66,17 @@ class ExtractionResultInternal:
         document_type: str | None,
         ocr_fallback_used: bool,
         model: str | None,
+        unreadable_lines: int = 0,
     ) -> None:
         self.entities = entities
         self.document_type = document_type
         self.ocr_fallback_used = ocr_fallback_used
         self.model = model
+        # Lines under a clinical section header that no grammar could read — see
+        # ``text_parser.ParsedDocument``. Defaults to zero because only the deterministic parser
+        # can know: the vision path is handed a page and returns entities, with no line-by-line
+        # account of the page to compare them against.
+        self.unreadable_lines = unreadable_lines
 
 
 class ExtractionPipeline:
@@ -90,10 +96,16 @@ class ExtractionPipeline:
             return vision
 
         text, ocr_used = self._recover_text(file_bytes, file_type, raw_text)
-        entities = parse_text(text) if text.strip() else []
-        if not entities:
+        parsed = parse_document(text) if text.strip() else ParsedDocument([], 0)
+        if not parsed.entities:
             return self._no_entities(ocr_used)
-        return ExtractionResultInternal(entities, self._infer_doc_type(entities), ocr_used, None)
+        return ExtractionResultInternal(
+            parsed.entities,
+            self._infer_doc_type(parsed.entities),
+            ocr_used,
+            None,
+            parsed.unreadable,
+        )
 
     def _try_vision(self, file_bytes: bytes, file_type: str) -> ExtractionResultInternal | None:
         """Claude vision, when configured and confident enough. ``None`` means "fall through"."""

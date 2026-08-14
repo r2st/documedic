@@ -401,3 +401,46 @@ describe('UploadPage retries', () => {
     expect(screen.queryByText('Review extraction')).not.toBeInTheDocument();
   });
 });
+
+describe('UploadPage unreadable-line warning', () => {
+  // The review list can only render what was extracted. A page whose drug line the scanner
+  // mangled therefore looks identical to a page that was read in full — three clean medications
+  // where the original printed four — and the clinician has no reason to open the scan again.
+  // This banner is the only signal that the queue below is short of the source.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.uploadDocument).mockResolvedValue(DOC);
+  });
+
+  async function review(overrides: Partial<ExtractionResult>) {
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction(overrides));
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Review extraction');
+  }
+
+  it('warns that lines are missing from the list when the parser lost some', async () => {
+    await review({ unreadable_line_count: 2 });
+
+    const warning = await screen.findByRole('alert');
+    expect(warning).toHaveTextContent(/2 line\(s\)/);
+    expect(warning).toHaveTextContent(/could not be read/i);
+    // The remedy, not just the fact: the scan is the only place the lost lines still exist.
+    expect(warning).toHaveTextContent(/compare against the original/i);
+  });
+
+  it('stays silent when every line in a clinical section was read', async () => {
+    await review({ unreadable_line_count: 0 });
+
+    expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+  });
+
+  it('stays silent for an extraction recorded before the count existed', async () => {
+    // Older documents have no value stored. Absent must read as "not measured" and render
+    // nothing, rather than as NaN or a spurious "0 line(s)" reassurance.
+    await review({ unreadable_line_count: undefined });
+
+    expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+  });
+});
