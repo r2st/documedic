@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit
 from app.exceptions import NotFoundError
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, errors
@@ -33,7 +33,8 @@ router = APIRouter(tags=["validation"])
     response_model=ValidationRunOut,
     status_code=201,
     summary="Execute the validation case set against the reasoning engine",
-    responses=AUTH_ERRORS,
+    responses=AUTH_ERRORS | errors(429),
+    dependencies=[Depends(rate_limit("validation_run"))],
 )
 async def run_validation(
     account: Account = Depends(get_current_account),
@@ -44,6 +45,11 @@ async def run_validation(
     The Phase 4 instrumentation behind the CDSCO SaMD submission: top-1 and top-3 diagnostic
     accuracy, can't-miss recall, citation faithfulness. Each run is persisted so accuracy can
     be tracked across prompt and corpus changes rather than asserted once.
+
+    The most expensive route in the system, and metered per hour rather than per minute
+    accordingly: one request replays every vignette, and each vignette costs a full eight-agent
+    panel plus its intake rounds. A run takes minutes, so the ceiling is only ever reached by a
+    loop.
     """
     run = await ValidationService(db).run(account.id)
     return ValidationRunOut.model_validate(run)

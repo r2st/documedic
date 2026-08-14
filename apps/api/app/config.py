@@ -155,6 +155,17 @@ class Settings(BaseSettings):
     # above are bypassable by signing up repeatedly; DEMO_MODE removes the credential gate but
     # not this one.
     rate_limit_signups_per_hour: int = 10
+    # The Phase 4 validation harness, and by far the most expensive route in the system: one
+    # request replays every gold-standard vignette, and each vignette costs a full eight-agent
+    # panel plus its intake rounds. A single POST therefore spends several times what the
+    # metered POST ../run spends, which is why leaving it unmetered made every ceiling above
+    # academic — the cheapest way to drain the provider budget was the one route with no
+    # ceiling on it.
+    #
+    # Per hour, not per minute: this is a batch job run after a prompt or corpus change, and one
+    # execution takes minutes of wall clock. Twelve an hour is far beyond any human cadence
+    # while still capping a runaway loop at a bounded spend.
+    rate_limit_validation_runs_per_hour: int = 12
 
     # --- Single-run claim (reasoning sessions) ---
     # How long a claim on a reasoning session stays valid before another request may take it
