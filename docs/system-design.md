@@ -761,7 +761,12 @@ Collected via application instrumentation, exposed at `/metrics` (Prometheus-com
 | `GET /health` | Load balancer health | Returns 200 if process is running |
 | `GET /health/ready` | Readiness probe | PostgreSQL connected, Redis connected, Qdrant reachable |
 | `GET /health/live` | Liveness probe | Process responsive, no deadlocks |
-| `GET /health/dependencies` | Dependency status | Individual status of each dependency with latency |
+| `GET /health/dependencies` | Dependency status (**authenticated**) | Individual status of each dependency with latency |
+
+The first three answer anonymously — load balancers and container probes call them without
+credentials. `/health/dependencies` requires a bearer token: `nginx.conf` proxies
+`location /health` as a prefix, so leaving it open published the deployment's provider and
+storage inventory to the public internet.
 
 **Example `/health/dependencies` response:**
 

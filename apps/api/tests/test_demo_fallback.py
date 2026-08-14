@@ -197,14 +197,16 @@ async def test_demo_mode_produces_management_options(auth_client, demo_llm):
 
 
 @pytest.mark.asyncio
-async def test_health_reports_demo_mode(client, demo_llm):
+async def test_health_reports_demo_mode(client, auth_client, demo_llm):
+    # `/health` stays anonymous — a clinician must be able to see "reasoning is simulated"
+    # from the sign-in screen. The per-dependency view behind it is authenticated.
     resp = await client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["llm_mode"] == "demo"
     assert body["llm_simulated"] is True
 
-    resp = await client.get("/health/dependencies")
+    resp = await auth_client.get("/health/dependencies")
     body = resp.json()
     assert body["llm_mode"] == "demo"
     assert body["llm_demo_fallback"] is True
@@ -248,13 +250,15 @@ def test_production_provider_failure_degrades_rather_than_simulating(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_health_reports_offline_not_demo_in_production(client, demo_llm, monkeypatch):
+async def test_health_reports_offline_not_demo_in_production(
+    client, auth_client, demo_llm, monkeypatch
+):
     monkeypatch.setattr(settings, "app_env", "production")
     body = (await client.get("/health")).json()
     assert body["llm_mode"] == "offline"
     assert body["llm_simulated"] is False
 
-    body = (await client.get("/health/dependencies")).json()
+    body = (await auth_client.get("/health/dependencies")).json()
     assert body["llm_demo_fallback"] is False
     assert body["llm_simulated"] is False
 

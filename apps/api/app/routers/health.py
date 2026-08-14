@@ -13,6 +13,7 @@ from app.agents.llm import (
 )
 from app.config import settings
 from app.db.session import get_db
+from app.dependencies import get_current_account
 from app.openapi import errors
 
 router = APIRouter(tags=["health"])
@@ -64,12 +65,29 @@ async def ready(db: AsyncSession = Depends(get_db)) -> dict:
     return {"status": "ready"}
 
 
-@router.get("/health/dependencies", summary="Per-dependency detail for operators")
+@router.get(
+    "/health/dependencies",
+    summary="Per-dependency detail for operators",
+    responses=errors(401),
+    dependencies=[Depends(get_current_account)],
+)
 async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
     """Which backing services and LLM providers are reachable and configured.
 
     Always 200, including when a dependency is down — the point is to report the state, not to
     gate traffic on it. Use `/health/ready` for that.
+
+    Authenticated, unlike its three sibling probes. `nginx.conf` proxies `location /health` as
+    a prefix, so this was answering anonymous callers on the public internet with the
+    deployment's vendor inventory: which LLM providers hold keys, which is primary, the
+    OpenRouter fallback topology, and the storage backend. None of that is PHI and none of it
+    is secret on its own, but it is the shape of the infrastructure, published to whoever asks.
+
+    `/health`, `/health/live` and `/health/ready` stay open — load balancers and container
+    probes call those without credentials, and their bodies are deliberately thin. (`/health`
+    does report `llm_mode`, so "reasoning is simulated" remains public by design: a clinician
+    needs to know the engine is in demo mode, and it is a property of the deployment rather
+    than of its wiring.)
     """
     db_ok = True
     try:

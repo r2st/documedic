@@ -32,7 +32,9 @@ PUBLIC_PATHS = {
     "/health",
     "/health/live",
     "/health/ready",
-    "/health/dependencies",
+    # Deliberately *not* "/health/dependencies": nginx proxies `location /health` as a prefix,
+    # so it answered anonymous callers on the public internet with the deployment's vendor
+    # inventory. The sweep below is what holds it authenticated.
 }
 
 # The SSE stream authenticates from a `token` query parameter because EventSource cannot

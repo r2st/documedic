@@ -210,13 +210,13 @@ def test_complete_openrouter_uses_openai_sdk_with_custom_base_url(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_health_dependencies_report_openrouter(client, monkeypatch):
+async def test_health_dependencies_report_openrouter(auth_client, monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "openrouter_api_key", "or-key")
     monkeypatch.setattr(settings, "llm_openrouter_fallback", True)
 
-    body = (await client.get("/health/dependencies")).json()
+    body = (await auth_client.get("/health/dependencies")).json()
     assert body["llm_openrouter_fallback"] is True
     assert body["llm_openrouter_configured"] is True
     assert "openrouter" in body["llm_available_providers"]

@@ -492,6 +492,7 @@ async def test_dependencies_health_reports_database_error_without_raising(app, m
     from httpx import ASGITransport, AsyncClient
 
     from app.db.session import get_db
+    from app.dependencies import get_current_account
 
     class _BrokenSession:
         async def execute(self, *args, **kwargs):
@@ -502,11 +503,17 @@ async def test_dependencies_health_reports_database_error_without_raising(app, m
 
     previous = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = _broken_db
+    # The probe is authenticated, and resolving a real account needs the database this test
+    # has just broken. The route declares the dependency for its side effect (reject anonymous
+    # callers) and never reads the account, so a stand-in is enough to get past the gate and
+    # exercise what is under test: the DB outage being reported as data rather than a 500.
+    app.dependency_overrides[get_current_account] = lambda: None
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             resp = await ac.get("/health/dependencies")
     finally:
+        del app.dependency_overrides[get_current_account]
         if previous is not None:
             app.dependency_overrides[get_db] = previous
         else:

@@ -40,13 +40,13 @@ async def test_readiness_probe_checks_the_database(client):
 
 
 @pytest.mark.asyncio
-async def test_dependencies_probe_lists_provider_state(client, monkeypatch):
+async def test_dependencies_probe_lists_provider_state(auth_client, monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "openrouter")
     monkeypatch.setattr(settings, "openrouter_api_key", "or-key")
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
 
-    body = (await client.get("/health/dependencies")).json()
+    body = (await auth_client.get("/health/dependencies")).json()
     assert body["database"] == "ok"
     assert body["llm_provider"] == "openrouter"
     assert body["llm_openrouter_configured"] is True
@@ -55,16 +55,32 @@ async def test_dependencies_probe_lists_provider_state(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dependencies_probe_reports_offline_without_any_key(client, monkeypatch):
+async def test_dependencies_probe_reports_offline_without_any_key(auth_client, monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "openrouter_api_key", "")
     monkeypatch.setattr(settings, "llm_demo_fallback", False)
 
-    body = (await client.get("/health/dependencies")).json()
+    body = (await auth_client.get("/health/dependencies")).json()
     assert body["llm_available_providers"] == []
     assert body["llm_mode"] == "offline"
     assert body["llm_simulated"] is False
+
+
+@pytest.mark.asyncio
+async def test_dependencies_probe_does_not_answer_anonymous_callers(client):
+    """The operator view is authenticated; the probes the load balancer calls are not.
+
+    `nginx.conf` proxies `location /health` as a prefix, so every path under it is reachable
+    from the public internet. The three thin probes are meant to be. This one answers with the
+    deployment's vendor inventory — which LLM providers hold keys, which is primary, the
+    OpenRouter fallback topology, the storage backend — and must not.
+    """
+    assert (await client.get("/health/dependencies")).status_code == 401
+
+    # The probes an unauthenticated load balancer depends on keep working.
+    for path in ("/health", "/health/live", "/health/ready"):
+        assert (await client.get(path)).status_code == 200, path
 
 
 @pytest.mark.asyncio
