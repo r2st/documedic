@@ -577,3 +577,130 @@ describe('SuggestionCard with malformed reasoning output', () => {
     expect(screen.queryByText(/Evidence supporting/)).not.toBeInTheDocument();
   });
 });
+
+// A response shaped by a backend this build has not caught up with. Every field below is read
+// straight off the payload by the card, and each one threw before rendering anything.
+describe('SuggestionCard given a payload from a newer backend', () => {
+  beforeEach(() => {
+    vi.mocked(api.recordDecision).mockReset().mockResolvedValue({ id: 'd1', decision: 'ok' });
+  });
+
+  it('does not crash on an autonomy tier it does not recognise', () => {
+    expect(() =>
+      render(
+        <SuggestionCard
+          suggestion={suggestion({ autonomy_tier: 'advisory' as never })}
+          sessionId="sess-1"
+        />,
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([['advisory'], [undefined], [null], ['']] as const)(
+    'gates an unrecognised tier (%s) behind the engagement click rather than showing it ungated',
+    (tier) => {
+      render(
+        <SuggestionCard
+          suggestion={suggestion({ autonomy_tier: tier as never })}
+          sessionId="sess-1"
+        />,
+      );
+      // The conservative reading wins: an unknown tier is treated as flag-for-review, so the
+      // evidence and the assessment stay behind the gate until the clinician engages.
+      expect(screen.getByText(/This output is flagged for review/)).toBeInTheDocument();
+      expect(screen.queryByText('Assessment to consider')).not.toBeInTheDocument();
+      expect(screen.queryByText('Productive cough and fever for 3 days')).not.toBeInTheDocument();
+    },
+  );
+
+  it('still reveals the evidence once an unrecognised tier is engaged with', async () => {
+    const user = userEvent.setup();
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ autonomy_tier: 'advisory' as never })}
+        sessionId="sess-1"
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Review evidence/ }));
+    expect(screen.getByText('Productive cough and fever for 3 days')).toBeInTheDocument();
+    expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
+  });
+
+  it('keeps a known non-flagged tier ungated (the fallback does not gate everything)', () => {
+    render(<SuggestionCard suggestion={suggestion()} sessionId="sess-1" />);
+    expect(screen.queryByText(/This output is flagged for review/)).not.toBeInTheDocument();
+    expect(screen.getByText('Assessment to consider')).toBeInTheDocument();
+  });
+
+  it.each([[undefined], [null], [{ nested: 'shape' }]] as const)(
+    'renders the assessment when output_type is %s',
+    (outputType) => {
+      render(
+        <SuggestionCard
+          suggestion={suggestion({ output_type: outputType as never })}
+          sessionId="sess-1"
+        />,
+      );
+      expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+    },
+  );
+
+  it.each([[undefined], [null], ['not-a-list']] as const)(
+    'renders the assessment when citations is %s',
+    (citations) => {
+      render(
+        <SuggestionCard
+          suggestion={suggestion({ citations: citations as never })}
+          sessionId="sess-1"
+        />,
+      );
+      expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+      expect(screen.queryByText(/Guideline citations/)).not.toBeInTheDocument();
+    },
+  );
+
+  it('shows a citation missing its source rather than dropping the grounding', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          citations: [
+            { document_title: 'ICMR STW — Community-acquired pneumonia' },
+            { source: 'icmr', document_title: 'ICMR STW', section_id: '4.2' },
+          ] as never,
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText(/Guideline citations/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ICMR STW — Community-acquired pneumonia/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('ICMR')).toBeInTheDocument();
+    expect(screen.getByText('[4.2]')).toBeInTheDocument();
+  });
+
+  it('drops only a citation with nothing renderable in it at all', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({ citations: [{}, null, { snippet: 'Consider X.' }] as never })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByText(/Consider X\./)).toBeInTheDocument();
+  });
+
+  it('does not crash on a hard block whose body is a non-conforming shape', () => {
+    render(
+      <SuggestionCard
+        suggestion={suggestion({
+          is_hard_block: true,
+          autonomy_tier: 'advisory' as never,
+          body: { reason: 'Documented penicillin allergy' } as never,
+        })}
+        sessionId="sess-1"
+      />,
+    );
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText(/Documented penicillin allergy/)).toBeInTheDocument();
+  });
+});

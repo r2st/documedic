@@ -4,7 +4,7 @@ import { useState } from 'react';
 import type { AutonomyTier, ClinicalSuggestion } from '@/lib/types';
 import { api } from '@/lib/api';
 import { requestErrorMessage } from '@/lib/errors';
-import { AutonomyBadge, CantMissBadge, ProbabilityBandBadge } from './badges';
+import { AutonomyBadge, CantMissBadge, ProbabilityBandBadge, resolveTier } from './badges';
 import { Button, ErrorBanner } from '@aether/ui';
 
 interface EvidenceItem {
@@ -70,6 +70,44 @@ function asEvidenceItems(value: unknown): EvidenceItem[] {
       return { text: asText(e) };
     })
     .filter((e): e is EvidenceItem => Boolean(e.text)) as EvidenceItem[];
+}
+
+interface CitationItem {
+  source: string;
+  document_title: string;
+  heading: string;
+  section_id: string;
+  snippet: string;
+}
+
+/**
+ * Coerce the citations field to renderable items.
+ *
+ * `s.citations.length` was read straight off the payload, so a response without the field — a
+ * suggestion row from before citations existed, an endpoint that omits them on a list view —
+ * threw on `.length` before rendering anything. Each field then had the same problem one level
+ * down: `c.source.toUpperCase()` throws for a citation carrying a title but no source, which is
+ * exactly the shape a partially-populated retrieval hit has.
+ *
+ * Citations are the grounding for a clinical claim, so the failure direction matters: a citation
+ * that cannot be fully rendered is shown with the parts that survived rather than dropped, and
+ * only one with nothing to show at all is discarded. Showing a claim while silently dropping the
+ * guideline it was grounded in is the one outcome worth avoiding.
+ */
+function asCitations(value: unknown): CitationItem[] {
+  const raw = Array.isArray(value) ? value : value == null ? [] : [value];
+  return raw
+    .map((c) => {
+      const o = (c && typeof c === 'object' ? c : {}) as Record<string, unknown>;
+      return {
+        source: asText(o.source),
+        document_title: asText(o.document_title),
+        heading: asText(o.heading),
+        section_id: asText(o.section_id),
+        snippet: asText(o.snippet),
+      };
+    })
+    .filter((c) => c.source || c.document_title || c.heading || c.section_id || c.snippet);
 }
 
 function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'against' }) {
@@ -172,7 +210,13 @@ export function SuggestionCard({
   sessionId: string;
 }) {
   const s = suggestion;
-  const [acknowledged, setAcknowledged] = useState(s.autonomy_tier !== 'flag_for_review');
+  // The tier this card behaves as. Resolved rather than read, because everything below keys off
+  // it and `!== 'flag_for_review'` treats every value that is not that exact string — including
+  // one from a newer backend, and including a missing field — as safe to show ungated. See
+  // `resolveTier`: an unrecognised tier is the case where this build provably does not know what
+  // it was told, so it gets the gate, not the bypass (Critical Safety Rule #2).
+  const { tier } = resolveTier(s.autonomy_tier);
+  const [acknowledged, setAcknowledged] = useState(tier !== 'flag_for_review');
   const [overrideReason, setOverrideReason] = useState('');
   const [decided, setDecided] = useState<string | null>(null);
   // The decision that failed to reach the audit log, kept so the banner can offer to send that
@@ -186,6 +230,7 @@ export function SuggestionCard({
 
   const evFor = asEvidenceItems(s.evidence?.evidence_for);
   const evAgainst = asEvidenceItems(s.evidence?.evidence_against);
+  const citations = asCitations(s.citations);
   const hasDevil =
     s.devils_advocate &&
     typeof s.devils_advocate === 'object' &&
@@ -324,15 +369,21 @@ export function SuggestionCard({
 
   return (
     <div
-      className={`animate-slide-up rounded-xl border bg-white p-5 shadow-card ${tierBorder[s.autonomy_tier]}`}
+      className={`animate-slide-up rounded-xl border bg-white p-5 shadow-card ${tierBorder[tier]}`}
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <AutonomyBadge tier={s.autonomy_tier} />
         {s.cant_miss_flag && <CantMissBadge />}
         {s.confidence_band && <ProbabilityBandBadge band={s.confidence_band} />}
-        <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
-          {s.output_type.replace(/_/g, ' ')}
-        </span>
+        {/* `output_type` is a required field of the response schema and was read as one. A
+            payload missing it — an older suggestion, a partial row, a proxy that dropped it —
+            made this `undefined.replace(...)`, which throws and takes the card down over a
+            decorative label. */}
+        {asText(s.output_type) && (
+          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
+            {asText(s.output_type).replace(/_/g, ' ')}
+          </span>
+        )}
       </div>
 
       {/* Engagement gate for flag-for-review: clinician must actively click through. */}
@@ -387,21 +438,25 @@ export function SuggestionCard({
 
           {hasDevil && <DevilsAdvocate critique={s.devils_advocate} />}
 
-          {s.citations.length > 0 && (
+          {citations.length > 0 && (
             <div className="mt-4 rounded-xl bg-slate-50 p-4">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Guideline citations (grounding)
               </p>
               <div className="space-y-2">
-                {s.citations.map((c, i) => (
+                {citations.map((c, i) => (
                   <div key={i} className="border-l-2 border-slate-300 pl-3">
                     <p className="text-xs font-medium text-slate-700">
-                      <span className="rounded bg-brand-50 px-1.5 py-0.5 text-brand-700 ring-1 ring-brand-200">
-                        {c.source.toUpperCase()}
-                      </span>{' '}
+                      {c.source && (
+                        <>
+                          <span className="rounded bg-brand-50 px-1.5 py-0.5 text-brand-700 ring-1 ring-brand-200">
+                            {c.source.toUpperCase()}
+                          </span>{' '}
+                        </>
+                      )}
                       {c.document_title}
                       {c.heading ? ` — ${c.heading}` : ''}{' '}
-                      <span className="text-slate-400">[{c.section_id}]</span>
+                      {c.section_id && <span className="text-slate-400">[{c.section_id}]</span>}
                     </p>
                     {c.snippet && (
                       <p className="mt-1 text-xs italic text-slate-500">

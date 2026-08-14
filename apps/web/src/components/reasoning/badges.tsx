@@ -16,7 +16,42 @@ const TIER: Record<AutonomyTier, { label: string; cls: string }> = {
   },
 };
 
-export function AutonomyBadge({ tier }: { tier: AutonomyTier }) {
+/**
+ * The tier this badge should render as, for a value that arrived over the wire.
+ *
+ * `TIER[tier]` for an unrecognised tier is `undefined`, and the next line reads `.cls` off it —
+ * so an autonomy tier this build has never heard of did not render oddly, it threw a TypeError
+ * and took out whatever was rendering it. That is not hypothetical: `ReasoningTheatre` renders
+ * this badge from `ev.verifier.autonomy_tier`, which is a *cast* of raw SSE JSON with no
+ * validation behind it, so a backend deployed ahead of the web app — a fourth tier, a renamed
+ * one — white-screens the signature screen in the middle of a live reasoning run.
+ *
+ * Which tier to fall back to is a safety decision, not a rendering one. Critical Safety Rule #2
+ * says the more conservative classification wins when there is disagreement, and "the server
+ * says a tier this build cannot interpret" is the strongest form of that disagreement. So an
+ * unrecognised tier renders as flag-for-review — amber, warning icon, and (in `SuggestionCard`)
+ * behind the engagement gate. Falling back to `informational` would take the one case where the
+ * UI provably does not understand what it was told and render it as the quietest thing on the
+ * screen.
+ *
+ * The fallback also says so rather than silently relabelling: the badge reads "Flag for review"
+ * and carries a screen-reader-only note naming the tier that was not recognised. Degrading
+ * loudly is what this codebase does everywhere else it cannot interpret its input — an
+ * unreadable lab is reported unread, an unresolvable drug is a 422 — and a clinician who sees
+ * an unexplained amber badge deserves the same courtesy.
+ */
+export function resolveTier(tier: unknown): { tier: AutonomyTier; unrecognised: string | null } {
+  if (typeof tier === 'string' && tier in TIER) {
+    return { tier: tier as AutonomyTier, unrecognised: null };
+  }
+  return {
+    tier: 'flag_for_review',
+    unrecognised: typeof tier === 'string' && tier.trim() ? tier : 'none',
+  };
+}
+
+export function AutonomyBadge({ tier: raw }: { tier: AutonomyTier }) {
+  const { tier, unrecognised } = resolveTier(raw);
   const t = TIER[tier];
   return (
     <span
@@ -39,6 +74,13 @@ export function AutonomyBadge({ tier }: { tier: AutonomyTier }) {
         </svg>
       )}
       {t.label}
+      {unrecognised && (
+        <span className="sr-only">
+          {' '}
+          — the autonomy tier reported for this output ({unrecognised}) is not one this version
+          recognises, so it is shown at the most conservative tier.
+        </span>
+      )}
     </span>
   );
 }
@@ -52,10 +94,26 @@ const BAND: Record<ProbabilityBand, string> = {
 };
 
 // Qualitative bands only — never numeric percentages (anti-automation-bias).
+//
+// Unlike the autonomy tier above, an unrecognised band is not a safety decision — a confidence
+// band changes nothing about what the clinician has to do — so this degrades to neutral styling
+// and prints the band as it came, rather than claiming a band the server did not send. It still
+// has to not crash: `BAND[band]` for an unknown value is `undefined`, which merely styles badly,
+// but `band.replace` on a null or a number thrown into this field by a non-conforming payload
+// throws, and this badge sits inline in the header of every suggestion card.
+//
+// `replaceAll`, not `replace`: the latter substitutes only the first underscore, so any band
+// name with two of them would render half-formatted.
 export function ProbabilityBandBadge({ band }: { band: ProbabilityBand }) {
+  const known = typeof band === 'string' && band in BAND;
+  const label = typeof band === 'string' && band.trim() ? band : 'unspecified';
   return (
-    <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${BAND[band]}`}>
-      {band.replace('_', ' ').toUpperCase()}
+    <span
+      className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${
+        known ? BAND[band] : 'bg-slate-100 text-slate-500'
+      }`}
+    >
+      {label.replaceAll('_', ' ').toUpperCase()}
     </span>
   );
 }
