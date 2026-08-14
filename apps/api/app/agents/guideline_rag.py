@@ -1,7 +1,8 @@
 """Agent 6: Guideline-RAG — guideline-grounded, cited management options.
 
-Retrieves chunks via the injected retriever (Qdrant in production, deterministic lexical
-fallback otherwise — Phase 3). Management options are STRICTLY grounded in retrieved chunks;
+Retrieves chunks via the injected retriever: a deterministic lexical retriever decides what may
+be cited, and dense similarity orders it (``services.guideline_service``). Management options are
+STRICTLY grounded in retrieved chunks;
 when retrieval confidence is below threshold the agent emits an explicit "insufficient
 guideline support" notice rather than inventing guidance. Citation faithfulness (the share of
 the section_ids the model CLAIMED to cite that were actually retrieved) is computed and stored;
@@ -11,7 +12,7 @@ an option left with no surviving citation cannot be presented as sufficiently su
 from __future__ import annotations
 
 from app.agents import demo_data
-from app.agents.context import ReasoningContext
+from app.agents.context import ReasoningContext, resolve_retrieved
 from app.agents.llm import using_simulated_llm
 from app.agents.prompts import GUIDELINE_RAG
 from app.agents.state import CaseState, GuidelineChunkRef, ManagementOption
@@ -29,9 +30,10 @@ def _query(state: CaseState) -> str:
 def _citable(chunks: object) -> list[dict]:
     """The retrieved chunks that can actually be cited, in retrieval order.
 
-    ``ctx.retrieve`` is an injection point, not app-internal code: the lexical retriever always
-    returns well-formed dicts, but the production path is dense search in Qdrant, whose payloads
-    are whatever the ingestion wrote. A chunk with no ``section_id`` raised KeyError building the
+    ``ctx.retrieve`` is an injection point, not app-internal code: the retriever the service
+    injects always returns well-formed dicts, but a substituted one (a future Qdrant first stage,
+    whose payloads are whatever the ingestion wrote) need not. A chunk with no ``section_id``
+    raised KeyError building the
     ``refs`` map, and a non-numeric ``score`` raised ValueError one line earlier -- both inside a
     node with no edge around it, so a single malformed payload failed the case rather than
     costing it one citation. A chunk that cannot be cited is dropped, which is what the
@@ -42,7 +44,7 @@ def _citable(chunks: object) -> list[dict]:
 
 async def run(state: CaseState, ctx: ReasoningContext) -> None:
     await ctx.emit("agent_start", {"agent": AGENT, "label": "Guideline-RAG"})
-    chunks_raw = _citable(ctx.retrieve(_query(state), 6))
+    chunks_raw = _citable(await resolve_retrieved(ctx.retrieve(_query(state), 6)))
     retrieved = [c for c in chunks_raw if as_float(c.get("score"), 0.0) >= ctx.retrieval_threshold]
     retrieved_ids = {c["section_id"] for c in retrieved}
 

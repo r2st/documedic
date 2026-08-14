@@ -142,16 +142,21 @@ class ReasoningService:
         return ctx
 
     async def _make_retriever(self) -> Retriever:
-        # Pull the whole active corpus once; score in-memory (the agent's retriever is sync and
-        # has no DB/event-loop access). ``_load_corpus`` caches the tokenised corpus per version
-        # behind a one-aggregate freshness check, so this is not a full read per request — see
-        # GuidelineService._load_corpus, which this is the heaviest caller of.
-        from app.services.guideline_service import lexical_score
+        # Pull the whole active corpus once; score in-memory. ``_load_corpus`` caches the
+        # tokenised corpus per version behind a one-aggregate freshness check, so this is not a
+        # full read per request — see GuidelineService._load_corpus, which this is the heaviest
+        # caller of.
+        #
+        # The closure is async so the dense re-ranker's query embedding can be awaited off the
+        # event loop. It used to be sync because the lexical retriever needs nothing but CPU and
+        # the corpus in hand; a transformer forward pass on the loop that is streaming this
+        # reasoning run's events to the clinician is a different proposition.
+        from app.services.guideline_service import dense_scores, lexical_score
 
         chunks = await self.guidelines._load_corpus(None)  # noqa: SLF001 — internal reuse
 
-        def retrieve(query: str, k: int) -> list[dict]:
-            return lexical_score(query, chunks, k)
+        async def retrieve(query: str, k: int) -> list[dict]:
+            return lexical_score(query, chunks, k, dense=await dense_scores(query, chunks))
 
         return retrieve
 

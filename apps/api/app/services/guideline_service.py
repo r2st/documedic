@@ -1,16 +1,31 @@
 """Guideline retrieval service (Phase 3, used by the Guideline-RAG agent in Phase 2+).
 
-Production retrieval is dense vector search in Qdrant; ``qdrant-client`` and the embedding model
-are optional and imported lazily. When they are unavailable the service falls back to a
-deterministic lexical retriever over ``guideline_chunks`` (keyword + token overlap, normalised to
-a 0..1 score) so retrieval and citation work offline and in tests. Either way every result keeps
-its citation metadata (source, section_id, page_range, corpus_version).
+Retrieval is lexical first and dense second, in that order of authority.
+
+**Lexical** — a deterministic retriever over ``guideline_chunks`` (curated-keyword evidence +
+body token overlap, normalised to a 0..1 score) — decides what is *citable*. It is deterministic,
+needs no model, and works offline (Critical Safety Rule #8), and every calibration decision in
+this module is measured against the shipped corpus by ``tests/test_retrieval_quality_benchmark``.
+
+**Dense** — cosine similarity between the query embedding and the vector ``guideline_ingest``
+stored on each chunk — decides only the *order* of what lexical already made citable. It cannot
+promote a chunk across the citation threshold in either direction; see ``apply_dense_rerank`` for
+the invariant and for the measurement that says it must not.
+
+This docstring used to claim that "production retrieval is dense vector search in Qdrant" with
+lexical as an offline fallback. That was never true: ``retrieve`` called ``lexical_score``
+unconditionally and nothing in the application read an embedding or queried Qdrant. See
+``app.services.dense_retrieval``.
+
+Either way every result keeps its citation metadata (source, section_id, page_range,
+corpus_version).
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -19,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.guideline import GuidelineChunk
+from app.services import dense_retrieval
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOP = {
@@ -223,6 +239,11 @@ class RetrievableChunk:
     corpus_version: str
     keywords: tuple[str, ...]
     body_tokens: frozenset[str]
+    # The chunk's stored dense embedding, unit-normalised once here, or None when the corpus was
+    # ingested without ``sentence-transformers`` (or with an unusable vector -- see
+    # ``dense_retrieval.as_vector``). Carried on the chunk for the same reason the token sets
+    # are: the corpus is read and tokenised once per version and reused by every query.
+    embedding: tuple[float, ...] | None = None
     # ``keywords`` split into words, once here, for the same reason ``body_tokens`` is: the
     # retriever scores every chunk in the corpus on every query. ``keyword_phrases`` keeps each
     # keyword's words together (what ``lexical_score`` scores against); ``keyword_tokens`` is the
@@ -270,6 +291,7 @@ class RetrievableChunk:
             corpus_version=chunk.corpus_version,
             keywords=tuple(str(x).lower() for x in (chunk.keywords or [])),
             body_tokens=frozenset(_tokens(f"{chunk.heading or ''} {chunk.content}")),
+            embedding=dense_retrieval.as_vector(chunk.embedding),
         )
 
 
@@ -368,12 +390,88 @@ def _intent_weight(
     return _INTENT_WEIGHT if _document_key(chunk) in confirmed_documents else 0.0
 
 
+# How much of a result's position *within its band* dense similarity decides. 0 is lexical order
+# untouched, 1 is pure dense order. Only ever a ranking knob: ``apply_dense_rerank`` cannot move a
+# result across the citation threshold at any value of this, so it has no bearing on which
+# guideline a management option may cite -- only on which excerpt the model reads first.
+_DENSE_RERANK_WEIGHT = 0.5
+
+# Scores are rounded to 4dp, so this is one representable step below the citation threshold: what
+# a sub-threshold result is capped at so re-ranking cannot lift it over the line.
+_SCORE_EPSILON = 0.0001
+
+
+def apply_dense_rerank(
+    scored: list[tuple[float, RetrievableChunk]],
+    dense: Mapping[str, float],
+    cut: float,
+) -> list[tuple[float, RetrievableChunk]]:
+    """Reorder results by dense similarity *within* the citable and non-citable bands.
+
+    The invariant, which is what makes dense retrieval safe to switch on at all: **a result that
+    lexical evidence placed below the citation threshold stays below it, and one placed at or
+    above it stays above.** That is enforced structurally rather than by tuning -- each result is
+    re-positioned inside its own band, and the sub-threshold band is capped one representable step
+    under ``cut`` -- so no value of ``_DENSE_RERANK_WEIGHT``, and no embedding model however
+    miscalibrated, can make a guideline citable that the deterministic retriever did not already
+    make citable.
+
+    That bound is not caution for its own sake; it is what the measurement supports. Dense
+    similarity ranks the right document first on all seven benchmark cases *and* on all five
+    paraphrased ones, where the lexical retriever cites nothing at all -- so it clearly knows
+    something lexical does not. But its absolute scale does not separate "the corpus covers this
+    condition" from "it does not". Measured on the shipped corpus: the weakest genuine paraphrase
+    match (hypertension, "giddiness with bp running high") scores 0.337 against its own document,
+    while an off-corpus glaucoma query scores 0.319 against the *diabetes* document and an
+    off-corpus hepatitis B query scores 0.299 against *malaria*. There is no cut between them.
+    Simulated end to end, every dense weight large enough to recover one paraphrase case also
+    produced at least one off-corpus citation -- a management option for glaucoma grounded in the
+    diabetes guideline. In a CDSS that is the precise failure the citation threshold exists to
+    prevent, and recall bought with it is not a trade worth making.
+
+    What is left is real and measurable: within the citable set, dense order puts the *management*
+    section first on 3 of the 7 benchmark cases against 1 for lexical order alone. ``guideline_rag``
+    asks a management question and hands the model its excerpts in the order given, so that is the
+    excerpt the option gets grounded in.
+
+    Closing the paraphrase gap needs first-stage dense retrieval over a corpus large enough for
+    absolute similarity to mean something -- the full ICMR spine rather than the 15 chunks that
+    ship today -- and a re-measurement of the separation above. Until then a paraphrased query
+    fails *safe*: it cites nothing and ``guideline_rag`` reports insufficient guideline support,
+    rather than citing the wrong condition.
+    """
+    if not dense:
+        return scored
+    reranked: list[tuple[float, RetrievableChunk]] = []
+    for score, chunk in scored:
+        similarity = dense.get(chunk.section_id)
+        if similarity is None:
+            reranked.append((score, chunk))
+            continue
+        low, high = (cut, 1.0) if score >= cut else (0.0, cut)
+        span = high - low
+        # Where lexical evidence put this result inside its own band, then nudged toward where
+        # dense evidence would put it. Both terms are in 0..1, so the blend is too, and the
+        # result cannot leave the band it came from.
+        position = (score - low) / span if span else 0.0
+        blended = (1 - _DENSE_RERANK_WEIGHT) * position + _DENSE_RERANK_WEIGHT * similarity
+        adjusted = round(low + blended * span, 4)
+        if score < cut:
+            adjusted = min(adjusted, round(cut - _SCORE_EPSILON, 4))
+        else:
+            adjusted = max(adjusted, cut)
+        reranked.append((adjusted, chunk))
+    reranked.sort(key=lambda x: x[0], reverse=True)
+    return reranked
+
+
 def lexical_score(
     query: str,
     chunks: Sequence[RetrievableChunk],
     k: int,
     *,
     threshold: float | None = None,
+    dense: Mapping[str, float] | None = None,
 ) -> list[dict]:
     """Deterministic lexical retriever: keyword evidence (×1.5) + body token overlap, normalised.
 
@@ -384,6 +482,11 @@ def lexical_score(
     about; the second adds intent evidence within those documents (``_intent_weight``).
     ``threshold`` is the citation threshold the caller will apply to the result -- it is what
     "this document is about the case" means -- and defaults to the one the reasoning engine uses.
+
+    ``dense`` maps section_id to the query's cosine similarity with that chunk, when a dense
+    model is available. It reorders results inside their band and never changes which of them
+    clear ``threshold`` -- see ``apply_dense_rerank``. The name of this function is therefore
+    still accurate: what it *retrieves* is lexical, always.
     """
     q_tokens = query_tokens(query)
     if not q_tokens or not chunks:
@@ -411,7 +514,33 @@ def lexical_score(
         if score > 0:
             scored.append((score, chunk))
     scored.sort(key=lambda x: x[0], reverse=True)
+    if dense:
+        scored = apply_dense_rerank(scored, dense, cut)
     return [GuidelineService._to_dict(c, s) for s, c in scored[:k]]
+
+
+async def dense_scores(query: str, chunks: Sequence[RetrievableChunk]) -> dict[str, float] | None:
+    """Cosine similarity of ``query`` against every chunk that carries an embedding.
+
+    None when dense retrieval is unavailable — no model installed, the corpus was ingested
+    without embeddings, or the query would not encode. Every one of those is an ordinary
+    configuration rather than an error, and each leaves retrieval exactly as lexical as it was.
+
+    The encode is CPU-bound (a transformer forward pass) and runs on a worker thread for the same
+    reason ``guideline_ingest`` off-loads the corpus-side encode and ``security`` off-loads
+    bcrypt: this is called from request handlers and from the reasoning engine, on the event loop
+    that is serving every other request at the same time.
+    """
+    if not any(c.embedding for c in chunks):
+        return None
+    vector = await asyncio.to_thread(dense_retrieval.embed_query, query)
+    if vector is None:
+        return None
+    return {
+        c.section_id: dense_retrieval.cosine(vector, c.embedding)
+        for c in chunks
+        if c.embedding is not None
+    }
 
 
 # corpus_version -> (stamp, chunks). See GuidelineService._load_corpus for why this is safe.
@@ -477,8 +606,13 @@ class GuidelineService:
     async def retrieve(
         self, query: str, k: int = 6, *, corpus_version: str | None = None
     ) -> list[dict]:
-        """Return up to ``k`` chunk dicts with a 0..1 ``score`` (lexical fallback retriever)."""
-        return lexical_score(query, await self._load_corpus(corpus_version), k)
+        """Return up to ``k`` chunk dicts with a 0..1 ``score``.
+
+        Lexical evidence decides what is citable; dense similarity, when available, decides the
+        order within that (see ``apply_dense_rerank``).
+        """
+        chunks = await self._load_corpus(corpus_version)
+        return lexical_score(query, chunks, k, dense=await dense_scores(query, chunks))
 
     @staticmethod
     def _to_dict(chunk: GuidelineChunk | RetrievableChunk, score: float) -> dict:

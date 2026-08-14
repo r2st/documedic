@@ -29,6 +29,7 @@ import pytest
 
 from app.config import settings
 from app.models.guideline import GuidelineChunk
+from app.services import dense_retrieval
 from app.services.guideline_ingest import load_corpus
 from app.services.guideline_service import lexical_score
 
@@ -329,3 +330,168 @@ def test_the_noisy_note_still_ranks_its_own_condition_above_the_distractors(corp
     assert by_id["NICE-AGE-MGMT"] >= THRESHOLD
     for other in ("ICMR-T2DM-MGMT", "ICMR-CAP-MGMT", "WHO-MAL-MGMT", "ICMR-DENGUE-MGMT"):
         assert by_id.get(other, 0.0) < by_id["NICE-AGE-MGMT"], other
+
+
+# --- conditions the corpus does not cover ---------------------------------------------------
+
+# The shipped corpus holds seven conditions. A clinician will ask about others long before the
+# full ICMR spine is ingested, and the only safe answer to "management of hypothyroidism" from a
+# corpus with no thyroid guideline is *nothing*. ``guideline_rag`` turns that into an explicit
+# "insufficient guideline support" notice; what it must never do is ground a management option in
+# the nearest document that happens to share some vocabulary.
+OFF_CORPUS = [
+    (
+        "hypothyroidism",
+        "Hypothyroidism",
+        "tiredness, weight gain and cold intolerance for six months",
+    ),
+    (
+        "wrist fracture",
+        "Distal radius fracture",
+        "fell on an outstretched hand, wrist deformed and painful",
+    ),
+    (
+        "depression",
+        "Major depressive disorder",
+        "low mood, poor sleep and loss of interest for two months",
+    ),
+    ("hepatitis B", "Chronic hepatitis B", "incidental positive surface antigen on screening"),
+    (
+        "glaucoma",
+        "Primary open angle glaucoma",
+        "gradual peripheral vision loss with raised intraocular pressure",
+    ),
+    ("eczema", "Atopic dermatitis", "itchy dry skin rash in the elbow creases since childhood"),
+    ("CKD", "Chronic kidney disease stage 4", "falling eGFR with anaemia and fatigue"),
+    (
+        "asthma",
+        "Asthma exacerbation",
+        "episodic wheeze and night-time cough responsive to an inhaler",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "diagnoses", "complaint"), OFF_CORPUS, ids=[c[0] for c in OFF_CORPUS]
+)
+def test_a_condition_the_corpus_does_not_cover_cites_nothing(corpus, label, diagnoses, complaint):
+    """Failing safe is a result, not an absence of one.
+
+    This is the precision bound that decides how much authority dense similarity may be given.
+    Lexical evidence puts nothing over the line for any of these -- there is no thyroid, renal or
+    dermatology document to match -- so the case ends with an explicit insufficient-support
+    notice. A retriever that instead returned its nearest neighbour would hand the model a
+    diabetes excerpt for a glaucoma query, and every management option built on it would carry a
+    real ICMR citation to a guideline about a different disease.
+    """
+    cited = _cited(_query(diagnoses, complaint), corpus)
+
+    assert not cited, f"{label}: cited {[r['section_id'] for r in cited]} from a corpus without it"
+
+
+# --- the dense re-ranker, measured against the real embedding model -------------------------
+
+
+@pytest.fixture(scope="module")
+def dense(corpus):
+    """Real query->chunk similarities from the shipped embedding model, or skip.
+
+    Skipped rather than mocked when ``sentence-transformers`` or the model cache is missing:
+    a synthetic vector would measure the arithmetic, and what these tests exist to measure is
+    whether the actual model separates the cases well enough to be trusted with ranking.
+    """
+    st = pytest.importorskip("sentence_transformers")
+    try:
+        model = st.SentenceTransformer(dense_retrieval.EMBEDDING_MODEL)
+    except Exception as exc:  # no cache and no network
+        pytest.skip(f"embedding model unavailable: {exc}")
+
+    vectors = {
+        c.section_id: dense_retrieval.as_vector(
+            [float(x) for x in model.encode([f"{c.heading or ''} {c.content}"])[0]]
+        )
+        for c in corpus
+    }
+
+    def similarities(query: str) -> dict[str, float]:
+        q = dense_retrieval.as_vector([float(x) for x in model.encode([query])[0]])
+        assert q is not None
+        return {sid: dense_retrieval.cosine(q, v) for sid, v in vectors.items() if v}
+
+    return similarities
+
+
+def test_dense_similarity_ranks_the_right_document_first_on_every_case(corpus, dense):
+    """Dense retrieval genuinely knows something the lexical retriever does not.
+
+    Worth pinning because it is the whole justification for carrying an embedding model at all:
+    if the model could not do this, the re-ranker would be cost without benefit.
+    """
+    for label, diagnoses, complaint, condition in CASES:
+        sims = dense(_query(diagnoses, complaint))
+        top = max(sims, key=lambda sid: sims[sid])
+
+        assert _document_of(top) == condition, f"{label}: dense ranked {top} first"
+
+
+def test_dense_reranking_puts_the_management_section_first_more_often(corpus, dense):
+    """The measured benefit, as a number that can regress.
+
+    ``guideline_rag`` asks a management question and hands the model its excerpts in the order
+    given, so the first citable section is the one an option gets grounded in. Lexical order puts
+    a *management* section first on 1 of the 7 cases; dense re-ranking within the citable set
+    makes it 3. Asserted as "at least as good, and strictly better somewhere" rather than as the
+    exact pair, so a corpus edit that changes the counts fails only if it makes ranking worse.
+    """
+    lexical_first = dense_first = 0
+    for _label, diagnoses, complaint, _condition in CASES:
+        query = _query(diagnoses, complaint)
+        lexical_first += bool((cited := _cited(query, corpus)) and "MGMT" in cited[0]["section_id"])
+        reranked = [
+            r
+            for r in lexical_score(query, corpus, 6, dense=dense(query))
+            if r["score"] >= THRESHOLD
+        ]
+        dense_first += bool(reranked and "MGMT" in reranked[0]["section_id"])
+
+    assert dense_first >= lexical_first
+    assert dense_first > lexical_first, "dense re-ranking no longer improves excerpt order"
+
+
+def test_the_real_model_cannot_change_what_is_citable_on_any_benchmark_query(corpus, dense):
+    """The invariant of ``apply_dense_rerank``, re-checked against the real model rather than a
+    constructed one -- on the in-corpus cases *and* on the off-corpus ones, which is where a
+    dense model given any authority over citability would do its damage."""
+    queries = [_query(dx, complaint) for _l, dx, complaint, _c in CASES]
+    queries += [_query(dx, complaint) for _l, dx, complaint in OFF_CORPUS]
+
+    for query in queries:
+        plain = {
+            r["section_id"]
+            for r in lexical_score(query, corpus, len(corpus))
+            if r["score"] >= THRESHOLD
+        }
+        with_dense = {
+            r["section_id"]
+            for r in lexical_score(query, corpus, len(corpus), dense=dense(query))
+            if r["score"] >= THRESHOLD
+        }
+
+        assert with_dense == plain, f"{query}: dense re-ranking changed the citable set"
+
+
+def test_an_off_corpus_query_stays_uncitable_with_dense_similarity_applied(corpus, dense):
+    """The specific failure the bound exists to prevent, named.
+
+    Measured on the shipped corpus, an off-corpus glaucoma query's strongest dense match is the
+    *type 2 diabetes* document at 0.319, while a genuine paraphrased hypertension query matches
+    its own document at 0.337. There is no similarity cut that separates those, which is why
+    dense evidence is not allowed to make anything citable on its own.
+    """
+    for label, diagnoses, complaint in OFF_CORPUS:
+        query = _query(diagnoses, complaint)
+        results = lexical_score(query, corpus, len(corpus), dense=dense(query))
+
+        assert not [r for r in results if r["score"] >= THRESHOLD], (
+            f"{label}: became citable once dense similarity was applied"
+        )

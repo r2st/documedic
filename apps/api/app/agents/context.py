@@ -1,13 +1,13 @@
 """Shared execution context passed to every agent node.
 
 Carries the LLM clients (a separate one for the independent Verifier), a guideline retriever
-callable (injected by the ReasoningService; Phase 3 wires the real Qdrant/lexical retriever),
-a deterministic drug-safety evaluator, and an async event emitter used to stream the Reasoning
-Theatre over SSE.
+callable (injected by the ReasoningService), a deterministic drug-safety evaluator, and an async
+event emitter used to stream the Reasoning Theatre over SSE.
 """
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,7 +16,13 @@ from app.agents.llm import LLMClient
 
 # (query, k) -> list of guideline-chunk dicts with keys:
 #   section_id, source, document_title, heading, content, score, corpus_version, page_range
-Retriever = Callable[[str, int], list[dict[str, Any]]]
+#
+# May be sync or async. The retriever the ReasoningService injects is async because the dense
+# re-ranker embeds the query on a worker thread; the empty default and the ones tests inject are
+# ordinary functions, and requiring those to be coroutines would be ceremony for no gain at an
+# injection point whose whole purpose is to be easy to substitute. ``resolve_retrieved`` is how
+# agents consume either.
+Retriever = Callable[[str, int], "list[dict[str, Any]] | Awaitable[list[dict[str, Any]]]"]
 # proposed-drug name -> list of safety-flag dicts (deterministic engine output)
 SafetyEvaluator = Callable[[str], list[dict[str, Any]]]
 EventEmitter = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -28,6 +34,16 @@ async def _noop_emit(event: str, data: dict[str, Any]) -> None:  # pragma: no co
 
 def _empty_retriever(query: str, k: int) -> list[dict[str, Any]]:
     return []
+
+
+async def resolve_retrieved(result: Any) -> list[dict[str, Any]]:
+    """Await a retriever's result if it is awaitable, else pass it through.
+
+    ``ReasoningContext.retrieve`` is an injection point that may be either shape (see
+    ``Retriever``). Awaiting the coroutine here rather than at each agent keeps the "did the
+    injected callable happen to be async" question in one place.
+    """
+    return await result if inspect.isawaitable(result) else result
 
 
 def _empty_safety(drug: str) -> list[dict[str, Any]]:
