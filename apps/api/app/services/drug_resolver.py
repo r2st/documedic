@@ -62,6 +62,11 @@ class ResolvedDrug:
     # its curated liver-injury tier. Without it the hepatotoxic burden of a chart would depend
     # on which of its rows happened to have a vocabulary id.
     hepatotoxicity: str | None = None
+    # Likewise for the ingredients of a fixed-dose combination, and for the same reason with
+    # more at stake: without them a Glycomet GP row resolved by name reaches the engine as an
+    # opaque product and matches none of metformin's rules, including the hard block below an
+    # eGFR of 30. Which rules fire must not depend on how the row happened to be linked.
+    components: list[dict] | None = None
 
 
 # Exact-match tiers in precedence order: a reference id is the canonical key, and a brand name
@@ -389,4 +394,5 @@ class DrugResolver:
             match_type=match_type,
             score=score,
             hepatotoxicity=row.hepatotoxicity,
+            components=row.components,
         )

@@ -16,7 +16,13 @@ import pytest
 from sqlalchemy import select
 
 from app.core.lab_safety import evaluate_lab_results
-from app.core.safety import ContraindicationRule, DrugRef, SafetyContext, _evaluate_renal
+from app.core.safety import (
+    ContraindicationRule,
+    DrugRef,
+    SafetyContext,
+    _evaluate_renal,
+    _Ingredient,
+)
 from app.exceptions import ValidationError
 from app.models.condition import Condition
 from app.models.drug_vocabulary import DrugVocabulary
@@ -319,7 +325,7 @@ def test_renal_rule_without_an_egfr_threshold_produces_no_flag():
     )
     proposed = DrugRef(reference_id="ref-1", generic_name="Metformin")
 
-    assert _evaluate_renal(proposed, rule, SafetyContext(egfr=22.0)) is None
+    assert _evaluate_renal(_Ingredient(proposed, proposed), rule, SafetyContext(egfr=22.0)) is None
 
 
 def test_renal_rule_with_no_egfr_on_record_reports_itself_unevaluated():
@@ -339,12 +345,12 @@ def test_renal_rule_with_no_egfr_on_record_reports_itself_unevaluated():
     )
     proposed = DrugRef(reference_id="ref-1", generic_name="Metformin")
 
-    unevaluated = _evaluate_renal(proposed, rule, SafetyContext(egfr=None))
+    unevaluated = _evaluate_renal(_Ingredient(proposed, proposed), rule, SafetyContext(egfr=None))
     assert unevaluated is not None
     assert unevaluated.is_hard_block is False
     assert unevaluated.details["evaluated"] is False
     # ...but a recorded eGFR under the threshold must still hard-block.
-    flag = _evaluate_renal(proposed, rule, SafetyContext(egfr=22.0))
+    flag = _evaluate_renal(_Ingredient(proposed, proposed), rule, SafetyContext(egfr=22.0))
     assert flag is not None and flag.is_hard_block is True
 
 

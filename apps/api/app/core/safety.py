@@ -11,6 +11,13 @@ Safety rules (per CLAUDE.md NON-NEGOTIABLE rules 3 & 8):
   * Renal threshold with action 'contraindicated'             -> HARD BLOCK.
 Hard blocks can never be dismissed; everything else is a warning/info flag.
 
+Every check runs against the *molecules* a proposed product contains, not against the product
+row alone. A fixed-dose combination — Glycomet GP, Telma H, Augmentin, which between them are
+among the most prescribed products in this market — is one vocabulary row carrying several
+active ingredients, and every curated rule here is keyed on a single molecule. Matching a
+combination by its own reference id, generic name and drug class matched it against nothing at
+all, so it came back clean. See ``_ingredients``.
+
 Duplicate-therapy detection (check_duplicate_therapy) is a separate, deterministic check: it
 flags re-ordering an active medication, prescribing a second product with the same active
 ingredient (e.g. two paracetamol brands -> unintentional overdose risk), or prescribing a
@@ -139,6 +146,101 @@ class DrugRef:
     # the liver". See ``check_hepatotoxic_burden``, which is written so a None contributes
     # nothing rather than counting as a clean drug.
     hepatotoxicity: str | None = None
+    # The active ingredients of a fixed-dose combination, empty for a single-ingredient product.
+    # See ``_ingredients`` for why every check here is written against these rather than against
+    # the product alone.
+    components: tuple[DrugRef, ...] = ()
+
+
+# --- Fixed-dose combinations --------------------------------------------------------------------
+#
+# Every curated rule in this engine is keyed on a single molecule: an interaction is a pair of
+# reference ids, a contraindication is one reference id and a condition, an allergy match is a
+# generic name or a drug class. A fixed-dose combination is one product row carrying several
+# molecules — "Metformin + Glimepiride" (Glycomet GP), "Telmisartan + HCTZ" (Telma H),
+# "Amoxicillin + Clavulanic acid" (Augmentin) — and matching it against those rules by its own
+# reference id, its own generic name and its own drug class is matching it against nothing.
+#
+# Nothing is what it produced. Glycomet GP prescribed at eGFR 20 came back with no flags at all:
+# the metformin hard block below 30 is written on MET-500, and MET-GLM-1-500 is not MET-500, so
+# ``_evaluate_renal`` never saw the rule. Augmentin for a patient with a documented amoxicillin
+# allergy came back clean, because "Amoxicillin + Clavulanic acid" is not "Amoxicillin" and the
+# class "Penicillin + BLI" is not "Penicillin" — the single most common drug allergy in this
+# product's market, against the combination form of the drug it is an allergy to, failing open.
+# Telma 40 alongside Telma H is a doubled telmisartan dose that ``check_duplicate_therapy``
+# reported as two unrelated drugs. In India, where these brands are among the most prescribed
+# products on the market, the combination is not the edge case — it is the prescription.
+#
+# The fix is to stop treating a combination as a drug and start treating it as the set of drugs
+# it contains. Each check below evaluates the *identities* of the product: the product itself
+# first (so a rule curated against the combination as such still fires), then each ingredient.
+# Ingredients are curated data carried on the vocabulary row, not a split of the generic name on
+# "+": which molecules a brand contains is a fact about the product, and inferring it from
+# punctuation would put an unverified ingredient list underneath a hard block.
+#
+# An ingredient with no reference id of its own (clavulanic acid, hydrochlorothiazide — real
+# molecules with no standalone row in this vocabulary) carries an empty one, and still carries a
+# name and a class, so it participates in allergy matching and duplicate-therapy detection and
+# simply matches no reference-id-keyed rule. That is a smaller gap than the one it replaces, and
+# it fails in the direction of saying less rather than of saying "clean". Every comparison of
+# two reference ids below has to check the id is non-empty first, or two unrelated unidentified
+# molecules would compare equal.
+
+
+@dataclass(frozen=True)
+class _Ingredient:
+    """One identity a rule may be written against, and the product it was reached through.
+
+    ``product`` is what the clinician is prescribing and what every flag must name — a warning
+    about "Metformin" on a chart whose prescription says "Glycomet GP" reads as being about some
+    other drug. ``drug`` is the identity the rule matched. They are the same object for a
+    single-ingredient product, and for the whole-product pass over a combination.
+    """
+
+    product: DrugRef
+    drug: DrugRef
+
+    @property
+    def is_component(self) -> bool:
+        # Identity, not reference id: an ingredient with no standalone vocabulary row carries an
+        # empty id, and comparing ids would make that ingredient's identity depend on the
+        # product's rather than on which object it is.
+        return self.drug is not self.product
+
+    @property
+    def label(self) -> str:
+        """How to name this in clinician-facing text."""
+        if not self.is_component:
+            return self.product.generic_name
+        return f"{self.product.generic_name} (via its {self.drug.generic_name} component)"
+
+    def details(self) -> dict:
+        """The identity half of a flag's ``details``, naming the component when there is one."""
+        base: dict = {"proposed_drug": self.product.generic_name}
+        if self.is_component:
+            base["component"] = self.drug.generic_name
+            base["component_reference_id"] = self.drug.reference_id
+        return base
+
+
+def _ingredients(drug: DrugRef) -> tuple[_Ingredient, ...]:
+    """The product, then each active ingredient it contains.
+
+    Product first so that a rule curated against the combination as a product — which is the
+    right place for anything true of the formulation rather than of a molecule — wins the
+    "first match" races below and is named without a component qualifier.
+    """
+    return (_Ingredient(drug, drug), *(_Ingredient(drug, part) for part in drug.components))
+
+
+def ingredient_reference_ids(drug: DrugRef) -> set[str]:
+    """Every reference id a rule for this product could be keyed on.
+
+    The service layer scopes its rule-table queries to the drugs in play; a combination whose
+    components were left out of that scope loads none of its components' rules, and the checks
+    below then find nothing to apply. Exported so the two stay in step.
+    """
+    return {i.drug.reference_id for i in _ingredients(drug) if i.drug.reference_id}
 
 
 @dataclass(frozen=True)
@@ -264,24 +366,46 @@ def _interaction_key(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a <= b else (b, a)
 
 
+def _allergy_conflict(allergy: PatientAllergy, ing: _Ingredient) -> str | None:
+    """``"direct"``/``"cross_class"`` if this allergy hard-blocks this identity, else None."""
+    drug = ing.drug
+    direct = bool(allergy.drug_reference_id) and allergy.drug_reference_id == drug.reference_id
+    name_match = _norm(allergy.allergen_name) == _norm(drug.generic_name)
+    if direct or name_match:
+        return "direct"
+    if (
+        allergy.drug_class is not None
+        and drug.drug_class is not None
+        and _norm(allergy.drug_class) == _norm(drug.drug_class)
+    ):
+        return "cross_class"
+    return None
+
+
 def check_allergies(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Hard-block a documented allergy against the product or any ingredient it contains.
+
+    One flag per allergy at most, and the hard block wins: an allergen that both matches an
+    ingredient outright and cross-reacts with another is one conflict, not two, and stacking the
+    dismissible flag on top of the undismissible one only adds noise to a card that already
+    cannot be cleared.
+    """
     flags: list[SafetyFlag] = []
     for allergy in ctx.allergies:
-        direct = (
-            allergy.drug_reference_id is not None
-            and allergy.drug_reference_id == proposed.reference_id
+        blocked = next(
+            (
+                (ing, match_type)
+                for ing in _ingredients(proposed)
+                if (match_type := _allergy_conflict(allergy, ing)) is not None
+            ),
+            None,
         )
-        name_match = _norm(allergy.allergen_name) == _norm(proposed.generic_name)
-        cross_class = (
-            allergy.drug_class is not None
-            and proposed.drug_class is not None
-            and _norm(allergy.drug_class) == _norm(proposed.drug_class)
-        )
-        if direct or name_match or cross_class:
+        if blocked is not None:
+            ing, match_type = blocked
             reason = (
                 "direct match"
-                if (direct or name_match)
-                else f"cross-class match (class: {proposed.drug_class})"
+                if match_type == "direct"
+                else f"cross-class match (class: {ing.drug.drug_class})"
             )
             flags.append(
                 SafetyFlag(
@@ -290,73 +414,95 @@ def check_allergies(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
                     is_hard_block=True,
                     summary=(
                         f"Documented allergy to {allergy.allergen_name} conflicts with "
-                        f"{proposed.generic_name} ({reason}). This is a hard block."
+                        f"{ing.label} ({reason}). This is a hard block."
                     ),
                     details={
                         "allergen": allergy.allergen_name,
-                        "proposed_drug": proposed.generic_name,
-                        "match_type": "direct" if (direct or name_match) else "cross_class",
+                        **ing.details(),
+                        "match_type": match_type,
                     },
                     allergy_id=allergy.allergy_id,
                 )
             )
             continue
 
-        if allergy.drug_class and proposed.drug_class:
-            related = _cross_reactive_classes(allergy.drug_class)
-            if _norm(proposed.drug_class) in related:
-                flags.append(
-                    SafetyFlag(
-                        check_type="allergy_conflict",
-                        severity="critical",
-                        is_hard_block=False,
-                        summary=(
-                            f"Documented allergy to {allergy.allergen_name} "
-                            f"({allergy.drug_class}) has recognised cross-reactivity with "
-                            f"{proposed.generic_name} ({proposed.drug_class}). Evidence "
-                            "suggests considering an alternative or confirming tolerance "
-                            "before prescribing."
-                        ),
-                        details={
-                            "allergen": allergy.allergen_name,
-                            "allergen_class": allergy.drug_class,
-                            "proposed_drug": proposed.generic_name,
-                            "proposed_drug_class": proposed.drug_class,
-                            "match_type": "cross_reactivity",
-                        },
-                        allergy_id=allergy.allergy_id,
-                    )
+        if not allergy.drug_class:
+            continue
+        related = _cross_reactive_classes(allergy.drug_class)
+        cross = next(
+            (
+                ing
+                for ing in _ingredients(proposed)
+                if ing.drug.drug_class and _norm(ing.drug.drug_class) in related
+            ),
+            None,
+        )
+        if cross is not None:
+            flags.append(
+                SafetyFlag(
+                    check_type="allergy_conflict",
+                    severity="critical",
+                    is_hard_block=False,
+                    summary=(
+                        f"Documented allergy to {allergy.allergen_name} "
+                        f"({allergy.drug_class}) has recognised cross-reactivity with "
+                        f"{cross.label} ({cross.drug.drug_class}). Evidence "
+                        "suggests considering an alternative or confirming tolerance "
+                        "before prescribing."
+                    ),
+                    details={
+                        "allergen": allergy.allergen_name,
+                        "allergen_class": allergy.drug_class,
+                        **cross.details(),
+                        "proposed_drug_class": cross.drug.drug_class,
+                        "match_type": "cross_reactivity",
+                    },
+                    allergy_id=allergy.allergy_id,
                 )
+            )
     return flags
 
 
 def check_guideline_adherence(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
     """Informational-only nudge when a prescribed drug is off guideline first-line for an
-    active condition it plausibly treats. Never a hard block; see module docstring."""
+    active condition it plausibly treats. Never a hard block; see module docstring.
+
+    A combination product is adherent if *any* ingredient it carries is first-line: metformin
+    plus glimepiride is the guideline's own step-up from metformin, and calling it a deviation
+    because one of its two molecules is a sulfonylurea would be the check contradicting the
+    guideline it cites.
+    """
     flags: list[SafetyFlag] = []
-    if not proposed.drug_class:
+    classes = [(ing, _norm(ing.drug.drug_class)) for ing in _ingredients(proposed)]
+    classes = [(ing, name) for ing, name in classes if name]
+    if not classes:
         return flags
-    proposed_class = _norm(proposed.drug_class)
     for condition in ctx.conditions:
         entry = _GUIDELINE_FIRST_LINE.get(_norm(condition.condition_name))
-        if entry is None or proposed_class not in entry["domain_classes"]:
+        if entry is None:
             continue
-        if proposed_class in entry["first_line_classes"]:
+        if any(name in entry["first_line_classes"] for _ing, name in classes):
             continue
+        in_domain = next(
+            ((ing, name) for ing, name in classes if name in entry["domain_classes"]), None
+        )
+        if in_domain is None:
+            continue
+        ing, _name = in_domain
         flags.append(
             SafetyFlag(
                 check_type="guideline_deviation",
                 severity="info",
                 is_hard_block=False,
                 summary=(
-                    f"{proposed.generic_name} ({proposed.drug_class}) is not among the "
+                    f"{ing.label} ({ing.drug.drug_class}) is not among the "
                     f"guideline-preferred first-line classes for {condition.condition_name}. "
                     f"{entry['guideline_reference']}. Consider whether first-line therapy has "
                     "already been tried or is contraindicated for this patient."
                 ),
                 details={
-                    "proposed_drug": proposed.generic_name,
-                    "proposed_drug_class": proposed.drug_class,
+                    **ing.details(),
+                    "proposed_drug_class": ing.drug.drug_class,
                     "condition": condition.condition_name,
                     "first_line_classes": sorted(entry["first_line_classes"]),
                     "guideline_reference": entry["guideline_reference"],
@@ -367,36 +513,67 @@ def check_guideline_adherence(proposed: DrugRef, ctx: SafetyContext) -> list[Saf
 
 
 def check_interactions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Every curated pair between an identity of the proposal and one of a current medication.
+
+    Combination products make this a cross-product rather than a single lookup. Telma H beside
+    enalapril is the curated ARB/ACE-inhibitor pair, reachable only through Telma H's telmisartan
+    component; Glycomet GP before a contrast study is the metformin/contrast lactic-acidosis
+    pair, reachable only through its metformin. Both products matched no rule at all until each
+    was read as the molecules it contains.
+
+    Two products can meet in more than one curated rule — a two-molecule product against a
+    two-molecule product has four candidate pairs — and each such rule is a separate clinical
+    fact, so each is flagged. What is *not* evaluated is a pair inside one product: a licensed
+    fixed-dose combination is a formulation decision already made, and flagging it as an
+    interaction would put an alert on the card that the prescriber cannot act on.
+    """
     flags: list[SafetyFlag] = []
     rules_by_pair = {
         _interaction_key(r.drug_a_reference_id, r.drug_b_reference_id): r
         for r in ctx.interaction_rules
     }
+    proposed_ingredients = _ingredients(proposed)
     for med in ctx.current_meds:
         if med.reference_id == proposed.reference_id:
             continue
-        rule = rules_by_pair.get(_interaction_key(proposed.reference_id, med.reference_id))
-        if rule is None:
-            continue
-        severity, hard = _INTERACTION_SEVERITY_MAP.get(rule.severity, ("warning", False))
-        flags.append(
-            SafetyFlag(
-                check_type="drug_interaction",
-                severity=severity,
-                is_hard_block=hard,
-                summary=(
-                    f"{rule.severity.capitalize()} interaction between "
-                    f"{proposed.generic_name} and {med.generic_name}: {rule.description}"
-                ),
-                details={
-                    "proposed_drug": proposed.generic_name,
-                    "interacting_drug": med.generic_name,
-                    "severity": rule.severity,
-                    "management": rule.management,
-                },
-                drug_interaction_id=rule.interaction_id,
-            )
-        )
+        seen: set[tuple[str, str]] = set()
+        for ing in proposed_ingredients:
+            for med_ing in _ingredients(med):
+                # An empty id belongs to an ingredient with no standalone vocabulary row; no
+                # curated rule can be keyed on one, and two of them are not the same molecule.
+                if not ing.drug.reference_id or ing.drug.reference_id == med_ing.drug.reference_id:
+                    continue
+                key = _interaction_key(ing.drug.reference_id, med_ing.drug.reference_id)
+                if key in seen:
+                    continue
+                rule = rules_by_pair.get(key)
+                if rule is None:
+                    continue
+                seen.add(key)
+                severity, hard = _INTERACTION_SEVERITY_MAP.get(rule.severity, ("warning", False))
+                flags.append(
+                    SafetyFlag(
+                        check_type="drug_interaction",
+                        severity=severity,
+                        is_hard_block=hard,
+                        summary=(
+                            f"{rule.severity.capitalize()} interaction between "
+                            f"{ing.label} and {med_ing.label}: {rule.description}"
+                        ),
+                        details={
+                            **ing.details(),
+                            "interacting_drug": med.generic_name,
+                            **(
+                                {"interacting_component": med_ing.drug.generic_name}
+                                if med_ing.is_component
+                                else {}
+                            ),
+                            "severity": rule.severity,
+                            "management": rule.management,
+                        },
+                        drug_interaction_id=rule.interaction_id,
+                    )
+                )
     return flags
 
 
@@ -722,7 +899,7 @@ def _match_condition(
 
 
 def _near_miss_flag(
-    proposed: DrugRef, rule: ContraindicationRule, match: _ConditionMatch
+    ing: _Ingredient, rule: ContraindicationRule, match: _ConditionMatch
 ) -> SafetyFlag:
     """Say that a contraindication rule was reached and not applied, and why.
 
@@ -742,7 +919,7 @@ def _near_miss_flag(
         is_hard_block=False,
         summary=(
             f"“{match.charted_name}” on this chart may be the {rule.condition_name} that "
-            f"{proposed.generic_name} is contraindicated in ({rule.description}), but the record "
+            f"{ing.label} is contraindicated in ({rule.description}), but the record "
             "does not establish it"
             + (
                 ", so the hard block was not applied. Confirm the diagnosis if it applies."
@@ -751,7 +928,7 @@ def _near_miss_flag(
             )
         ),
         details={
-            "proposed_drug": proposed.generic_name,
+            **ing.details(),
             "condition": rule.condition_name,
             "charted_condition": match.charted_name,
             "match_basis": match.basis,
@@ -764,85 +941,91 @@ def _near_miss_flag(
 
 
 def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Curated contraindications for the product and for every molecule it contains.
+
+    The ingredient loop is what makes a combination product reachable at all: the metformin
+    renal rules are keyed on metformin's reference id, and a chart prescribing Glycomet GP at an
+    eGFR of 20 matched none of them and came back with ``is_blocked: false``.
+    """
     flags: list[SafetyFlag] = []
-    for rule in ctx.contraindication_rules:
-        if rule.drug_reference_id != proposed.reference_id:
-            continue
+    for ing in _ingredients(proposed):
+        for rule in ctx.contraindication_rules:
+            if rule.drug_reference_id != ing.drug.reference_id:
+                continue
 
-        # --- Measured-threshold evaluation (works even if the named condition is absent,
-        #     because eGFR and the liver panel are measured values). ---
-        renal_flag = _evaluate_renal(proposed, rule, ctx)
-        if renal_flag is not None:
-            flags.append(renal_flag)
-            continue
+            # --- Measured-threshold evaluation (works even if the named condition is absent,
+            #     because eGFR and the liver panel are measured values). ---
+            renal_flag = _evaluate_renal(ing, rule, ctx)
+            if renal_flag is not None:
+                flags.append(renal_flag)
+                continue
 
-        hepatic_flag = _evaluate_hepatic(proposed, rule, ctx)
-        if hepatic_flag is not None:
-            flags.append(hepatic_flag)
-            continue
+            hepatic_flag = _evaluate_hepatic(ing, rule, ctx)
+            if hepatic_flag is not None:
+                flags.append(hepatic_flag)
+                continue
 
-        match = _match_condition(rule, ctx.conditions)
-        if match is None:
-            continue
+            match = _match_condition(rule, ctx.conditions)
+            if match is None:
+                continue
 
-        # Related, but not established as this patient's current problem — the chart is less
-        # specific than the rule ("Renal Impairment" against a rule for *Severe* renal
-        # impairment), or it is hedged or historical ("suspected", "h/o"). Applying the block
-        # would assert something the chart does not say; staying silent would hide the one
-        # condition on the chart that bears on this drug. See ``_near_miss_flag``.
-        if not match.is_present:
-            flags.append(_near_miss_flag(proposed, rule, match))
-            continue
+            # Related, but not established as this patient's current problem — the chart is less
+            # specific than the rule ("Renal Impairment" against a rule for *Severe* renal
+            # impairment), or it is hedged or historical ("suspected", "h/o"). Applying the block
+            # would assert something the chart does not say; staying silent would hide the one
+            # condition on the chart that bears on this drug. See ``_near_miss_flag``.
+            if not match.is_present:
+                flags.append(_near_miss_flag(ing, rule, match))
+                continue
 
-        if rule.is_absolute or rule.severity == "absolute":
-            flags.append(
-                SafetyFlag(
-                    check_type="contraindication",
-                    severity="hard_block",
-                    is_hard_block=True,
-                    summary=(
-                        f"{proposed.generic_name} is contraindicated in "
-                        f"{rule.condition_name}: {rule.description}. This is a hard block."
-                    ),
-                    details={
-                        "proposed_drug": proposed.generic_name,
-                        "condition": rule.condition_name,
-                        "is_absolute": True,
-                        # What the chart actually says, and why it was taken to be the rule's
-                        # condition. The two differ whenever the block fired on anything but a
-                        # verbatim wording, and a block is exactly the record that has to be
-                        # answerable months later.
-                        "charted_condition": match.charted_name,
-                        "match_basis": match.basis,
-                    },
-                    contraindication_id=rule.contraindication_id,
+            if rule.is_absolute or rule.severity == "absolute":
+                flags.append(
+                    SafetyFlag(
+                        check_type="contraindication",
+                        severity="hard_block",
+                        is_hard_block=True,
+                        summary=(
+                            f"{ing.label} is contraindicated in "
+                            f"{rule.condition_name}: {rule.description}. This is a hard block."
+                        ),
+                        details={
+                            **ing.details(),
+                            "condition": rule.condition_name,
+                            "is_absolute": True,
+                            # What the chart actually says, and why it was taken to be the
+                            # rule's condition. The two differ whenever the block fired on
+                            # anything but a verbatim wording, and a block is exactly the record
+                            # that has to be answerable months later.
+                            "charted_condition": match.charted_name,
+                            "match_basis": match.basis,
+                        },
+                        contraindication_id=rule.contraindication_id,
+                    )
                 )
-            )
-        else:
-            flags.append(
-                SafetyFlag(
-                    check_type="contraindication",
-                    severity="warning",
-                    is_hard_block=False,
-                    summary=(
-                        f"Caution: {proposed.generic_name} with {rule.condition_name}: "
-                        f"{rule.description}"
-                    ),
-                    details={
-                        "proposed_drug": proposed.generic_name,
-                        "condition": rule.condition_name,
-                        "severity": rule.severity,
-                        "charted_condition": match.charted_name,
-                        "match_basis": match.basis,
-                    },
-                    contraindication_id=rule.contraindication_id,
+            else:
+                flags.append(
+                    SafetyFlag(
+                        check_type="contraindication",
+                        severity="warning",
+                        is_hard_block=False,
+                        summary=(
+                            f"Caution: {ing.label} with {rule.condition_name}: {rule.description}"
+                        ),
+                        details={
+                            **ing.details(),
+                            "condition": rule.condition_name,
+                            "severity": rule.severity,
+                            "charted_condition": match.charted_name,
+                            "match_basis": match.basis,
+                        },
+                        contraindication_id=rule.contraindication_id,
+                    )
                 )
-            )
     return flags
 
 
 def _evaluate_renal(
-    proposed: DrugRef, rule: ContraindicationRule, ctx: SafetyContext
+    ing: _Ingredient, rule: ContraindicationRule, ctx: SafetyContext
 ) -> SafetyFlag | None:
     threshold = rule.renal_threshold
     if not threshold:
@@ -881,12 +1064,12 @@ def _evaluate_renal(
             severity="warning",
             is_hard_block=False,
             summary=(
-                f"Renal check not performed for {proposed.generic_name} "
+                f"Renal check not performed for {ing.label} "
                 f"({rule.condition_name}): no eGFR on this chart. Guidelines set a threshold of "
                 f"{below} mL/min (action: {action}); a current creatinine is needed to apply it."
             ),
             details={
-                "proposed_drug": proposed.generic_name,
+                **ing.details(),
                 "egfr": None,
                 "egfr_threshold": below,
                 "action": action,
@@ -909,10 +1092,10 @@ def _evaluate_renal(
         is_hard_block=is_hard,
         summary=(
             f"Renal alert: patient eGFR {ctx.egfr} mL/min is below {below} for "
-            f"{proposed.generic_name} ({rule.condition_name}). Recommended action: {action}."
+            f"{ing.label} ({rule.condition_name}). Recommended action: {action}."
         ),
         details={
-            "proposed_drug": proposed.generic_name,
+            **ing.details(),
             "egfr": ctx.egfr,
             "egfr_threshold": below,
             "action": action,
@@ -932,7 +1115,7 @@ _HEPATIC_MARKERS: tuple[tuple[str, str, str, str], ...] = (
 
 
 def _evaluate_hepatic(
-    proposed: DrugRef, rule: ContraindicationRule, ctx: SafetyContext
+    ing: _Ingredient, rule: ContraindicationRule, ctx: SafetyContext
 ) -> SafetyFlag | None:
     """Apply a curated hepatic dose-adjustment threshold to the chart's liver panel.
 
@@ -990,13 +1173,13 @@ def _evaluate_hepatic(
             severity="warning",
             is_hard_block=False,
             summary=(
-                f"Hepatic check not performed for {proposed.generic_name} "
+                f"Hepatic check not performed for {ing.label} "
                 f"({rule.condition_name}): no liver function tests on this chart. Guidelines "
                 f"set a threshold of {wanted} (action: {action}); a current {needed} is "
                 "needed to apply it."
             ),
             details={
-                "proposed_drug": proposed.generic_name,
+                **ing.details(),
                 "hepatic_thresholds": {key: threshold[key] for key, _f, _l, _u in stated},
                 "action": action,
                 "condition": rule.condition_name,
@@ -1025,11 +1208,11 @@ def _evaluate_hepatic(
         severity="hard_block" if is_hard else "warning",
         is_hard_block=is_hard,
         summary=(
-            f"Hepatic alert for {proposed.generic_name} ({rule.condition_name}): {measured}. "
+            f"Hepatic alert for {ing.label} ({rule.condition_name}): {measured}. "
             f"Recommended action: {action}."
         ),
         details={
-            "proposed_drug": proposed.generic_name,
+            **ing.details(),
             "breached": [
                 {"marker": label, "value": value, "threshold": limit, "unit": unit}
                 for label, value, limit, unit in breached
@@ -1047,10 +1230,15 @@ def check_duplicate_therapy(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
     None of these are "interactions" in the curated pairwise-rule sense, so they fall outside
     ``check_interactions`` entirely; without this check two brands of the same generic (or two
     drugs in the same class) can be prescribed side by side with zero flags raised.
+
+    Matched ingredient-by-ingredient, which is where the duplication a combination product
+    causes actually lives. Telma 40 alongside Telma H is a doubled telmisartan dose and one of
+    the commonest real prescribing errors here; comparing the two products' own names and
+    classes — "Telmisartan" against "Telmisartan + HCTZ", "ARB" against "ARB + Thiazide" — found
+    nothing in common and reported them as two unrelated drugs.
     """
     flags: list[SafetyFlag] = []
-    proposed_generic = _norm(proposed.generic_name)
-    proposed_class = _norm(proposed.drug_class) if proposed.drug_class else None
+    proposed_ingredients = _ingredients(proposed)
 
     for med in ctx.current_meds:
         if med.reference_id == proposed.reference_id:
@@ -1072,44 +1260,80 @@ def check_duplicate_therapy(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
             )
             continue
 
-        med_generic = _norm(med.generic_name)
-        if proposed_generic and med_generic == proposed_generic:
+        med_ingredients = _ingredients(med)
+        shared = next(
+            (
+                (ing, med_ing)
+                for ing in proposed_ingredients
+                for med_ing in med_ingredients
+                # The reference id must be truthy on both sides: an ingredient with no
+                # standalone vocabulary row carries an empty one, and two *different* such
+                # molecules (Augmentin's clavulanic acid, Septran's trimethoprim) would
+                # otherwise compare equal and be reported as the same active ingredient.
+                if (ing.drug.reference_id and ing.drug.reference_id == med_ing.drug.reference_id)
+                or (
+                    _norm(ing.drug.generic_name)
+                    and _norm(ing.drug.generic_name) == _norm(med_ing.drug.generic_name)
+                )
+            ),
+            None,
+        )
+        if shared is not None:
+            ing, med_ing = shared
             flags.append(
                 SafetyFlag(
                     check_type="duplicate_therapy",
                     severity="critical",
                     is_hard_block=False,
                     summary=(
-                        f"{proposed.generic_name} has the same active ingredient as a "
-                        f"different product the patient is already on ({med.generic_name}). "
-                        "Risk of unintentional double-dosing."
+                        f"{proposed.generic_name} has the same active ingredient "
+                        f"({ing.drug.generic_name}) as a different product the patient is "
+                        f"already on ({med.generic_name}). Risk of unintentional double-dosing."
                     ),
                     details={
                         "proposed_drug": proposed.generic_name,
                         "existing_drug": med.generic_name,
+                        "shared_ingredient": ing.drug.generic_name,
                         "match_type": "same_ingredient",
                     },
                 )
             )
             continue
 
-        med_class = _norm(med.drug_class) if med.drug_class else None
-        if proposed_class and med_class and med_class == proposed_class:
+        shared_class = next(
+            (
+                (ing, med_ing)
+                for ing in proposed_ingredients
+                for med_ing in med_ingredients
+                if ing.drug.drug_class
+                and med_ing.drug.drug_class
+                and _norm(ing.drug.drug_class) == _norm(med_ing.drug.drug_class)
+            ),
+            None,
+        )
+        if shared_class is not None:
+            ing, med_ing = shared_class
             flags.append(
                 SafetyFlag(
                     check_type="duplicate_therapy",
                     severity="warning",
                     is_hard_block=False,
                     summary=(
-                        f"Therapeutic duplication: {proposed.generic_name} is in the same "
-                        f"class ({proposed.drug_class}) as {med.generic_name}, which the "
+                        f"Therapeutic duplication: {ing.label} is in the same "
+                        f"class ({ing.drug.drug_class}) as {med_ing.label}, which the "
                         "patient is already on."
                     ),
                     details={
                         "proposed_drug": proposed.generic_name,
                         "existing_drug": med.generic_name,
-                        "drug_class": proposed.drug_class,
+                        "drug_class": ing.drug.drug_class,
                         "match_type": "same_class",
+                        **({"component": ing.drug.generic_name} if ing.is_component else {}),
+                        **(
+                            {"existing_component": med_ing.drug.generic_name}
+                            if med_ing.is_component
+                            else {}
+                        ),
                     },
                 )
             )

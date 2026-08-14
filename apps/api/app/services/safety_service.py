@@ -31,6 +31,7 @@ from app.core.safety import (
     check_unevaluated_medications,
     evaluate_drug_safety,
     has_hard_block,
+    ingredient_reference_ids,
 )
 from app.exceptions import NotFoundError, ValidationError
 from app.models.allergy import Allergy
@@ -43,7 +44,57 @@ from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 from app.services.audit_service import AuditService
-from app.services.drug_resolver import DrugResolver
+from app.services.drug_resolver import DrugResolver, ResolvedDrug
+
+
+def _components(raw: object) -> tuple[DrugRef, ...]:
+    """The curated ingredient list on a vocabulary row, as ``DrugRef``s.
+
+    Defensive about the payload's shape because this is on the deterministic safety path: a
+    malformed row must cost the engine that row's ingredients, not the whole check. An entry
+    with no ``generic_name`` is dropped — a nameless ingredient matches nothing and would only
+    put a blank into a flag's text.
+
+    A component with no ``reference_id`` of its own gets an empty one rather than being dropped.
+    Clavulanic acid and hydrochlorothiazide are real molecules with no standalone row in this
+    vocabulary; they match no reference-id-keyed rule either way, but they do match a documented
+    allergy by name or class, and dropping them would lose that.
+    """
+    if not isinstance(raw, list):
+        return ()
+    out: list[DrugRef] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("generic_name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        reference_id = entry.get("reference_id")
+        drug_class = entry.get("drug_class")
+        out.append(
+            DrugRef(
+                reference_id=reference_id if isinstance(reference_id, str) else "",
+                generic_name=name.strip(),
+                drug_class=drug_class if isinstance(drug_class, str) else None,
+            )
+        )
+    return tuple(out)
+
+
+def _drug_ref(row: DrugVocabulary | ResolvedDrug) -> DrugRef:
+    """A vocabulary row (however it was reached) as the safety engine's drug identity.
+
+    One place, because a ``DrugRef`` built without ``components`` silently un-does the whole
+    fixed-dose-combination pass: the checks would see Glycomet GP as one opaque product again
+    and match it against none of metformin's rules. Four call sites built this by hand.
+    """
+    return DrugRef(
+        reference_id=row.reference_id,
+        generic_name=row.generic_name,
+        drug_class=row.drug_class,
+        hepatotoxicity=row.hepatotoxicity,
+        components=_components(row.components),
+    )
 
 
 class SafetyService:
@@ -93,9 +144,15 @@ class SafetyService:
         # only fire between the proposal and a current medication, and contraindications only for
         # the proposal itself, so a full-table load is wasted I/O that grows with the corpus
         # rather than with the patient. Both predicates ride existing indexes.
-        reference_ids = {m.reference_id for m in facts.current_meds} | {
-            ref for ref in proposed_reference_ids if ref
-        }
+        #
+        # "The drugs in play" means every molecule, not every product: a combination is
+        # evaluated as the ingredients it contains, so scoping the query to the product's own
+        # reference id loads none of its ingredients' rules and the checks then find nothing to
+        # apply. The proposals are widened by the caller, which has the resolved rows; the
+        # current medications are widened here.
+        reference_ids = {
+            ref for med in facts.current_meds for ref in ingredient_reference_ids(med)
+        } | {ref for ref in proposed_reference_ids if ref}
 
         return replace(
             facts,
@@ -203,27 +260,13 @@ class SafetyService:
         for med in med_rows:
             vocab = vocab_by_id.get(med.drug_vocabulary_id) if med.drug_vocabulary_id else None
             if vocab is not None:
-                out.append(
-                    DrugRef(
-                        reference_id=vocab.reference_id,
-                        generic_name=vocab.generic_name,
-                        drug_class=vocab.drug_class,
-                        hepatotoxicity=vocab.hepatotoxicity,
-                    )
-                )
+                out.append(_drug_ref(vocab))
                 continue
             # Unlinked row (e.g. imported before the vocabulary knew the brand): fall back to
             # name resolution so the drug still participates in the safety evaluation.
             resolved = await self.resolver.resolve(med.generic_name)
             if resolved:
-                out.append(
-                    DrugRef(
-                        reference_id=resolved.reference_id,
-                        generic_name=resolved.generic_name,
-                        drug_class=resolved.drug_class,
-                        hepatotoxicity=resolved.hepatotoxicity,
-                    )
-                )
+                out.append(_drug_ref(resolved))
             elif med.generic_name and med.generic_name.strip():
                 unresolved.append(med.generic_name.strip())
         return out, unresolved
@@ -528,12 +571,9 @@ class SafetyService:
         # on it: check_duplicate_therapy needs to see it to detect "already an active order for
         # this exact product". check_interactions self-skips that pair, so nothing else in
         # evaluate_drug_safety is affected.
-        ctx = await self._build_context(patient_id, proposed_reference_ids=[vocab.reference_id])
-        proposed = DrugRef(
-            reference_id=vocab.reference_id,
-            generic_name=vocab.generic_name,
-            drug_class=vocab.drug_class,
-            hepatotoxicity=vocab.hepatotoxicity,
+        proposed = _drug_ref(vocab)
+        ctx = await self._build_context(
+            patient_id, proposed_reference_ids=ingredient_reference_ids(proposed)
         )
         # Appended, not folded into ``evaluate_drug_safety``: each is a statement about the chart
         # rather than about the proposed drug, so it must not be repeated once per drug by the
@@ -721,19 +761,20 @@ class SafetyService:
         named = await self.resolver.rows_named_in(text)
         if not named:
             return []
-        ctx = await self._build_context(patient_id, proposed_reference_ids=named)
+        # Every molecule of every named product, not just the products' own ids: a guideline
+        # sentence naming a combination brand still has to load its ingredients' rules.
+        ctx = await self._build_context(
+            patient_id,
+            proposed_reference_ids={
+                ref for row in named.values() for ref in ingredient_reference_ids(_drug_ref(row))
+            },
+        )
         flags: list[SafetyFlag] = []
         # Sorted so a run's output does not depend on dictionary insertion order, which follows
         # where in the sentence each drug happened to appear.
         for reference_id in sorted(named):
             row = named[reference_id]
-            proposed = DrugRef(
-                reference_id=row.reference_id,
-                generic_name=row.generic_name,
-                drug_class=row.drug_class,
-                hepatotoxicity=row.hepatotoxicity,
-            )
-            flags.extend(evaluate_drug_safety(proposed, ctx))
+            flags.extend(evaluate_drug_safety(_drug_ref(row), ctx))
         return flags
 
     async def active_flags(
@@ -764,13 +805,7 @@ class SafetyService:
             sub_ctx = replace(
                 ctx, current_meds=[m for m in ctx.current_meds if m.reference_id != ref]
             )
-            proposed = DrugRef(
-                reference_id=vocab.reference_id,
-                generic_name=vocab.generic_name,
-                drug_class=vocab.drug_class,
-                hepatotoxicity=vocab.hepatotoxicity,
-            )
-            flags = evaluate_drug_safety(proposed, sub_ctx)
+            flags = evaluate_drug_safety(_drug_ref(vocab), sub_ctx)
             if flags:
                 out.append((vocab, flags))
         return out

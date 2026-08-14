@@ -16,6 +16,20 @@
         "hepatotoxicity": {
           "description": "Curated potential for drug-induced liver injury, applied by app.core.safety.check_hepatotoxic_burden. 'dose_dependent' is intrinsic toxicity (predictable from exposure); 'established' is a well-documented idiosyncratic signal in the published DILI registries. ABSENT means 'not curated here', NOT 'safe for the liver' — the check counts an absent tier as contributing nothing rather than as a clean drug, and says so in its output.",
           "enum": ["dose_dependent", "established", null]
+        },
+        "components": {
+          "description": "The molecules a fixed-dose combination contains, applied by app.core.safety._ingredients. REQUIRED on every combination row: each curated rule here is keyed on a single molecule, so a combination carrying no component list matches no interaction, no contraindication and no allergy, and returns a clean check for a drug nothing was checked against. Curated, never split from the generic name on '+'. 'reference_id' is null for a molecule with no standalone row in this file — it still participates in allergy and duplicate-therapy matching, and matches no reference-id-keyed rule. 'drug_class' must be spelled exactly as the single-ingredient rows spell it, or class-keyed matching will not line up.",
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["generic_name"],
+            "properties": {
+              "reference_id": {"type": ["string", "null"]},
+              "generic_name": {"type": "string"},
+              "drug_class": {"type": ["string", "null"]}
+            },
+            "additionalProperties": false
+          }
         }
       }
     },

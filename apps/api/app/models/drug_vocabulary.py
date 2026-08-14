@@ -30,6 +30,18 @@ class DrugVocabulary(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # ``check_hepatotoxic_burden`` is written so that a NULL contributes nothing rather than
     # counting as a clean drug.
     hepatotoxicity: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # The molecules a fixed-dose combination contains, as a list of
+    # ``{reference_id, generic_name, drug_class}``. NULL/empty means single-ingredient.
+    #
+    # Every curated rule in this schema is keyed on one molecule — an interaction on a pair of
+    # reference ids, a contraindication on a reference id, an allergy on a generic name or a
+    # drug class — so a combination row matched against them by its own identity matched
+    # nothing, and returned a clean check for it. See app.core.safety._ingredients.
+    #
+    # ``reference_id`` may be null for a molecule with no standalone row here (clavulanic acid,
+    # hydrochlorothiazide): the ingredient still participates in allergy and duplicate-therapy
+    # matching, and simply matches no reference-id-keyed rule.
+    components: Mapped[list[dict] | None] = mapped_column(JSONBType, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
