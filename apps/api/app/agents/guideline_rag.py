@@ -48,6 +48,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     options: list[ManagementOption] = []
     insufficient = not retrieved
 
+    grounded_by_model = False
     if retrieved and ctx.llm_available():
         excerpts = "\n\n".join(
             f"[{c['section_id']}] {c.get('heading') or ''}: {c.get('content', '')}"
@@ -59,6 +60,7 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             f"Case: {_query(state)}\n\nRetrieved guideline excerpts:\n{excerpts}",
         )
         if result:
+            grounded_by_model = True
             insufficient = bool(result.get("insufficient_support", False))
             for opt in result.get("options", []):
                 text = (opt.get("text") or "").strip()
@@ -72,9 +74,14 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
                         sufficient_support=bool(opt.get("sufficient_support", bool(cited))),
                     )
                 )
-    elif retrieved:
+    # Gated on whether the model actually answered, not on whether a key exists: with a keyed
+    # provider that was down, the deterministic grounding below was skipped and the clinician
+    # got no management options at all, from a corpus that had already been retrieved. A model
+    # that *did* answer and deliberately offered nothing is left alone — overriding that with
+    # raw chunks would contradict its own insufficient-support finding.
+    if retrieved and not grounded_by_model:
         # Deterministic grounding: present each retrieved chunk as a cited option.
-        state.degraded = state.degraded or not ctx.llm_available()
+        state.degraded = True
         for c in retrieved:
             options.append(
                 ManagementOption(

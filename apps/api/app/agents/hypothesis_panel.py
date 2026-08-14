@@ -96,12 +96,18 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     summary = summarize_snapshot(state.patient_graph_snapshot)
     blob = text_blob(state.presenting_complaint, summary, state.intake_questions)
 
+    produced: list[Hypothesis] = []
     if ctx.llm_available():
         results = await asyncio.gather(
             *[_run_specialist(state, ctx, key, name, summary) for key, name in SPECIALISTS.items()]
         )
         produced = [h for sub in results for h in sub]
-    else:
+    # A provider that holds a key is not a provider that answers. This used to fall back only
+    # when no key was configured, so a live outage — the likeliest failure in production — left
+    # the differential *empty*: four specialists returned nothing, the deterministic panel that
+    # exists for exactly this was skipped, and the case was not marked degraded. The clinician
+    # saw no hypotheses and no sign that anything had failed.
+    if not produced:
         produced = _fallback(blob, state)
         state.degraded = True
 
