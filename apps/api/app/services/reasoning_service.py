@@ -436,7 +436,7 @@ class ReasoningService:
         if self._claim_is_live(session):
             raise ReasoningRunInProgressError()
 
-    async def _claim_for_run(self, session: ReasoningSession) -> None:
+    async def _claim_for_run(self, account_id: uuid.UUID, session: ReasoningSession) -> None:
         """Take exclusive hold of the session for one pipeline run, or refuse.
 
         Why a claim and not the rate limiter: the limiter counts requests per minute and cannot
@@ -457,16 +457,28 @@ class ReasoningService:
         READ COMMITTED, so an uncommitted claim would let both runs through — the claim has to be
         durable before the panel starts, which is also what leaves it behind for the lease to
         clean up if this run is killed.
+
+        That durability is also why the audit entry for the run belongs here and nowhere else.
+        It is the only commit a run makes before the panel starts, so it is the only one that
+        survives a run that is killed rather than finished — and being killed is the ordinary
+        case, not a rare one: the Reasoning Theatre streams over SSE and a closing tab cancels
+        the worker. Everything ``run`` writes afterwards, including
+        ``reasoning_session_completed``, is rolled back with that transaction. Audited from the
+        claim, an abandoned run is legible in the trail as a ``reasoning_run_started`` with
+        neither of its closing records ever arriving; audited any later it left no trace that a
+        clinician had run the panel on this patient and watched its output stream back.
         """
         if self._claim_is_live(session):
             raise ReasoningRunInProgressError()
-        if session.status == RUNNING:
+        took_over = session.status == RUNNING
+        if took_over:
             logger.warning(
                 "Reasoning session %s was left claimed by a run that did not finish; the lease "
                 "has expired and it is being taken over.",
                 session.id,
             )
 
+        previous_status = session.status
         claimed_at = datetime.now(UTC)
         # CursorResult, not Result: only the former carries ``rowcount``, and the win/lose answer
         # is exactly "did the WHERE clause still match". ``Session.execute`` is typed as the
@@ -488,9 +500,41 @@ class ReasoningService:
                 .execution_options(synchronize_session=False)
             ),
         )
-        await self.db.commit()
         if result.rowcount == 0:
+            # Ends the transaction rather than leaving it open on the way out. Nothing was
+            # written — the UPDATE matched no row — but on PostgreSQL the row lock it took while
+            # finding that out is held until the transaction ends, and the winner is mid-run.
+            await self.db.commit()
             raise ReasoningRunInProgressError()
+
+        # Inside the claim's transaction, after the swap has been won: an entry appended before
+        # it would describe a run that the swap then refused, and one appended after the commit
+        # would not be atomic with the claim it records. The audit append takes a
+        # transaction-scoped advisory lock on PostgreSQL, so it is placed immediately before the
+        # commit that releases it — the hold is this append rather than the whole panel.
+        await self.audit.record(
+            action="reasoning_run_started",
+            # The account that made *this* request, not ``session.account_id``. The two are the
+            # same while ``_session`` scopes a session to the account that opened it, and that
+            # is exactly why it must not be read off the row: "who ran the panel" is a fact
+            # about the caller, and sourcing it from the session would keep looking right on
+            # the day sessions become shareable across a practice.
+            account_id=account_id,
+            patient_id=session.patient_id,
+            entity_type="reasoning_session",
+            entity_id=session.id,
+            # Which clinician ran it is ``account_id``; when is ``created_at``. These two say
+            # what the run started from, which is what distinguishes a first run from a re-run
+            # after the chart changed, a retry after a failure, and a takeover of a run that
+            # died. ``took_over_abandoned_run`` is derivable from ``previous_status`` only by
+            # someone who knows the lease rule, and it is the fact a reviewer scans for: it
+            # means an earlier run of this case was started and never came back.
+            payload={
+                "previous_status": previous_status,
+                "took_over_abandoned_run": took_over,
+            },
+        )
+        await self.db.commit()
         session.status = RUNNING
         session.run_claimed_at = claimed_at
 
@@ -502,7 +546,7 @@ class ReasoningService:
         # Exclusive from here: nothing else may run this session until the claim is released or
         # its lease expires. Taken before the snapshot is assembled so a losing caller spends one
         # UPDATE rather than a chart read.
-        await self._claim_for_run(session)
+        await self._claim_for_run(account_id, session)
         # When the LLM is unavailable the pipeline still runs deterministically (degraded mode):
         # it marks the case degraded, escalates to flag-for-review, and attaches an explicit
         # caveat rather than silently producing confident output.

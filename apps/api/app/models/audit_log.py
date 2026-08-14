@@ -15,7 +15,7 @@ from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
 # to), and so are the ``*_viewed`` reads: under the DPDP Act the question asked of this trail
 # months later is "who saw this patient's data", which a write-only trail cannot answer.
 #
-# Held to the code by ``tests/test_audit_actions.py``, in both directions. A missing entry
+# Held to the code by ``tests/test_audit_phi_reads.py``, in both directions. A missing entry
 # means an action nobody can look up; a spare one describes disclosure the system never makes.
 AUDIT_ACTIONS = (
     "auth_signup",
@@ -43,6 +43,12 @@ AUDIT_ACTIONS = (
     "drug_safety_hard_block_overridden",
     "reasoning_session_started",
     "reasoning_intake_answered",
+    # The opening bookend of one *run* of the panel, distinct from the session being opened:
+    # a session is opened once and can be run several times, by clinicians other than the one
+    # who opened it. Written in the claim's own transaction, which is the only commit that
+    # survives a run killed mid-flight — so this is what says an analysis happened at all when
+    # neither of the two records below ever arrives. See ``ReasoningService._claim_for_run``.
+    "reasoning_run_started",
     "reasoning_session_completed",
     "reasoning_session_failed",
     "clinical_suggestion_created",

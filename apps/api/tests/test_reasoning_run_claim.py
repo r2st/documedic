@@ -11,10 +11,13 @@ own mechanics, which are the part that can go wrong quietly:
 * the claim must be released by every path out of a run, not only the happy one.
 * the SSE route has to answer with a status code rather than an in-stream error, because an
   ``EventSource`` reconnects through the second and stops on the first.
+* the claim is also where a run is written into the medical record, because it is the only
+  commit a run makes before the panel starts.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -23,6 +26,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.exceptions import ReasoningRunInProgressError
+from app.models.audit_log import AuditLog
 from app.models.clinical_suggestion import ClinicalSuggestion
 from app.models.reasoning_session import ReasoningSession
 from app.services import reasoning_service
@@ -53,6 +57,16 @@ async def _plant_claim(db, session_id: str, *, age: timedelta) -> None:
     row.status = RUNNING
     row.run_claimed_at = datetime.now(UTC) - age
     await db.commit()
+
+
+async def _audit(db, session_id: str) -> list[AuditLog]:
+    """Every audit entry filed against this session, oldest first."""
+    result = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.entity_id == uuid.UUID(session_id))
+        .order_by(AuditLog.sequence)
+    )
+    return list(result.scalars().all())
 
 
 # --- Refusing -----------------------------------------------------------------------------
@@ -233,6 +247,122 @@ async def test_the_stream_still_opens_when_no_run_holds_the_session(auth_client)
     assert "text/event-stream" in resp.headers["content-type"]
 
 
+# --- What the medical record ends up saying ---------------------------------------------------
+
+
+async def test_running_the_panel_is_written_into_the_trail_with_who_and_when(auth_client, db):
+    """Opening a session and running the panel are different events and need different records.
+
+    ``reasoning_session_started`` is written when the session is *opened*. The panel can be run
+    from it later, more than once. Without its own record the trail could not say an analysis
+    was ever performed, only that a case had been created.
+    """
+    session_id = await _session_id(auth_client)
+    before = datetime.now(UTC)
+
+    assert (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 200
+
+    entries = [e for e in await _audit(db, session_id) if e.action == "reasoning_run_started"]
+    assert len(entries) == 1, "the run left no record of itself in the trail"
+    entry = entries[0]
+    assert entry.account_id is not None, "the trail cannot say who ran the panel"
+    assert entry.patient_id is not None, "the run is invisible from the patient's own trail"
+    created = entry.created_at
+    assert before <= (created if created.tzinfo else created.replace(tzinfo=UTC))
+
+
+async def test_each_run_of_one_session_gets_its_own_record(auth_client, db):
+    """Re-running after the chart changed is a second clinical act, not a repeat of the first."""
+    session_id = await _session_id(auth_client)
+
+    for _ in range(2):
+        assert (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 200
+
+    entries = [e for e in await _audit(db, session_id) if e.action == "reasoning_run_started"]
+    assert len(entries) == 2, f"two runs left {len(entries)} records"
+
+
+async def test_a_refused_run_is_not_recorded_as_one(auth_client, db):
+    """The loser never ran the panel, and a trail that says it did overstates the disclosure."""
+    session_id = await _session_id(auth_client)
+    await _plant_claim(db, session_id, age=timedelta(seconds=5))
+
+    assert (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 409
+
+    assert [e for e in await _audit(db, session_id) if e.action == "reasoning_run_started"] == []
+
+
+async def test_an_abandoned_run_still_leaves_a_record_it_happened(auth_client, db, monkeypatch):
+    """The case this record exists for, and the one nothing else in ``run`` can cover.
+
+    A Reasoning Theatre tab closing cancels the worker with a ``CancelledError``. It is not an
+    error path — ``run``'s ``except Exception`` never sees it — so no ``reasoning_session_failed``
+    is written, no ``reasoning_session_completed`` is written, and everything the run had
+    flushed is rolled back with its transaction. Before the claim carried this entry the trail
+    showed a session being opened and then nothing at all, while the clinician had in fact
+    watched the panel's hypotheses and hard blocks stream back over SSE. An unrecorded
+    disclosure of a patient's clinical picture is the exact question the DPDP trail is asked
+    months later.
+
+    The claim's commit is what survives, so the record survives with it. An abandoned run is
+    legible as this entry with neither closing record following it.
+    """
+    session_id = await _session_id(auth_client)
+    in_the_graph = asyncio.Event()
+
+    async def never_returns(state, ctx):
+        in_the_graph.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(reasoning_service.graph, "run_reasoning", never_returns)
+
+    service = ReasoningService(db)
+    row = await _row(db, session_id)
+    stream = service.stream(row.account_id, uuid.UUID(session_id))
+    watcher = asyncio.create_task(stream.__anext__())
+    await asyncio.wait_for(in_the_graph.wait(), timeout=10)
+    # The clinician closes the tab.
+    watcher.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await watcher
+    await stream.aclose()
+
+    actions = [e.action for e in await _audit(db, session_id)]
+    assert "reasoning_run_started" in actions, (
+        f"a run streamed clinical output to a clinician and left no trace: {actions}"
+    )
+    assert "reasoning_session_completed" not in actions
+    assert "reasoning_session_failed" not in actions
+
+
+async def test_taking_over_a_dead_run_says_so_in_the_trail(auth_client, db):
+    """A reviewer reading the trail needs the takeover to be visible, not inferred.
+
+    Two runs of one case, the first with no closing record, is otherwise indistinguishable from
+    a clinician who simply ran it twice.
+    """
+    session_id = await _session_id(auth_client)
+    await _plant_claim(
+        db, session_id, age=timedelta(minutes=settings.reasoning_run_lease_minutes + 1)
+    )
+
+    assert (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 200
+
+    entry = [e for e in await _audit(db, session_id) if e.action == "reasoning_run_started"][-1]
+    assert entry.payload["took_over_abandoned_run"] is True
+    assert entry.payload["previous_status"] == RUNNING
+
+
+async def test_an_ordinary_first_run_is_not_flagged_as_a_takeover(auth_client, db):
+    session_id = await _session_id(auth_client)
+
+    assert (await auth_client.post(f"/api/v1/reasoning/{session_id}/run")).status_code == 200
+
+    entry = [e for e in await _audit(db, session_id) if e.action == "reasoning_run_started"][-1]
+    assert entry.payload["took_over_abandoned_run"] is False
+    assert entry.payload["previous_status"] != RUNNING
+
+
 # --- The claim primitive ----------------------------------------------------------------------
 
 
@@ -253,7 +383,7 @@ async def test_the_swap_loses_when_the_row_moved_under_it(auth_client, db):
     stale.run_claimed_at = None
 
     with pytest.raises(ReasoningRunInProgressError):
-        await ReasoningService(db)._claim_for_run(stale)
+        await ReasoningService(db)._claim_for_run(stale.account_id, stale)
 
 
 async def test_a_successful_claim_records_when_it_was_taken(auth_client, db):
@@ -262,7 +392,8 @@ async def test_a_successful_claim_records_when_it_was_taken(auth_client, db):
     before = datetime.now(UTC)
 
     service = ReasoningService(db)
-    await service._claim_for_run(await _row(db, session_id))
+    fresh = await _row(db, session_id)
+    await service._claim_for_run(fresh.account_id, fresh)
 
     db.expire_all()
     row = await _row(db, session_id)
@@ -287,7 +418,7 @@ async def test_taking_over_an_abandoned_claim_moves_the_timestamp(auth_client, d
     abandoned = (await _row(db, session_id)).run_claimed_at
 
     stale_view = await _row(db, session_id)
-    await ReasoningService(db)._claim_for_run(stale_view)
+    await ReasoningService(db)._claim_for_run(stale_view.account_id, stale_view)
 
     db.expire_all()
     assert (await _row(db, session_id)).run_claimed_at != abandoned
@@ -295,7 +426,7 @@ async def test_taking_over_an_abandoned_claim_moves_the_timestamp(auth_client, d
     stale_view.run_claimed_at = abandoned
     stale_view.status = RUNNING
     with pytest.raises(ReasoningRunInProgressError):
-        await ReasoningService(db)._claim_for_run(stale_view)
+        await ReasoningService(db)._claim_for_run(stale_view.account_id, stale_view)
 
 
 async def test_the_claim_clears_a_previous_runs_error_detail(auth_client, db, monkeypatch):

@@ -515,6 +515,10 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # --- reasoning. complaint_chars/reason_recorded are the fixes this file exists for.
     "reasoning_session_started": {"online", "complaint_chars"},
     "reasoning_intake_answered": {"answered", "intake_complete"},
+    # Both are enum-ish facts about the claim, not clinical content: a session status and a
+    # boolean. Nothing about the case itself is copied here — the complaint stays on the
+    # session row that ``entity_id`` points at.
+    "reasoning_run_started": {"previous_status", "took_over_abandoned_run"},
     "reasoning_session_failed": {"error"},
     "reasoning_session_completed": {
         "autonomy_tier",
