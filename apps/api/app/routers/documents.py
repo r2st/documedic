@@ -233,6 +233,14 @@ async def approve_extraction(
     `rejected_entity_indexes` drop entities entirely. Everything else is merged, deduplicated
     against what the chart already holds. Returns the per-entity-type counts actually written.
 
+    A correction naming an entity index or a field the extraction does not have is a 422
+    (`correction_not_applicable`) and nothing is approved — the client is working from a stale
+    view, and silently dropping the amendment would merge the value the clinician just
+    overruled. Re-fetch `../extraction` and post the correction against it.
+
+    Safe to repeat. Approving twice merges nothing the second time rather than duplicating the
+    document's entities, so a retry after a timeout — or a double-clicked button — is harmless.
+
     Merging labs re-runs the deterministic critical-value check, so a panic value in an
     approved report raises its flag here rather than waiting for someone to open the chart.
     """

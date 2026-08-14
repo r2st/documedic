@@ -209,6 +209,23 @@ class FileTooLargeError(ValidationError):
     code = "file_too_large"
 
 
+class CorrectionNotApplicableError(ValidationError):
+    """A correction could not be applied to the extracted item it names, so nothing was
+    approved. Reload the extraction and make the change again.
+
+    Raised rather than skipped because skipping is silent and wrong in the same breath: the
+    approval answers 200, the clinician reads that as "my amendment is in the chart", and what
+    merged was the *original* extracted value. A correction is a clinician overruling the
+    extractor — most often on a dose or a lab value, which are exactly what the deterministic
+    safety checks then read — so losing one quietly is worse than refusing the approval.
+
+    Reachable when the client posts against an extraction it no longer has: a field name the
+    entity does not carry, or an entity index past the end of the list.
+    """
+
+    code = "correction_not_applicable"
+
+
 class HardBlockError(AetherError):
     """A safety hard block prevents this action. It can only be passed by an explicit
     clinician override with documented reasoning — it is never bypassed silently."""

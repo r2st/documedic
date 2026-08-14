@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.exceptions import (
+    CorrectionNotApplicableError,
     DocumentNotFoundError,
     FileTooLargeError,
     UnsupportedFileTypeError,
@@ -23,6 +24,7 @@ from app.schemas.document import (
     ExtractionApproval,
     ExtractionField,
     ExtractionResult,
+    FieldCorrection,
 )
 from app.services.audit_service import AuditDraft, AuditService
 from app.services.extraction import ExtractionPipeline
@@ -380,19 +382,48 @@ class DocumentService:
         meta = dict(document.extraction_metadata or {})
         raw_entities = meta.get("entities", [])
 
+        # Resolve every correction to the field it names *before* applying any of them. A
+        # correction that matched nothing used to be dropped and the approval still answered
+        # 200, so a clinician who retyped a dose the extractor had misread saw "approved" while
+        # the original value merged into the chart — and a dose is one of the inputs the
+        # deterministic safety checks read. Resolving first also makes the refusal all-or-
+        # nothing: no half-corrected extraction is left behind for the retry to build on.
+        targets: list[tuple[FieldCorrection, dict]] = []
+        unapplicable: list[str] = []
+        for corr in approval.corrections:
+            entity = (
+                raw_entities[corr.entity_index]
+                if 0 <= corr.entity_index < len(raw_entities)
+                else None
+            )
+            field = (
+                next(
+                    (f for f in entity.get("fields", []) if f["name"] == corr.field_name),
+                    None,
+                )
+                if entity is not None
+                else None
+            )
+            if field is None:
+                unapplicable.append(f"{corr.entity_index}.{corr.field_name}")
+            else:
+                targets.append((corr, field))
+
+        if unapplicable:
+            raise CorrectionNotApplicableError(
+                # Field *names* and positions, never the values: this message is rendered to
+                # the clinician and also logged, and the value is the clinical datum.
+                detail=f"no extracted field for {', '.join(unapplicable)}"
+            )
+
         # Apply clinician corrections to the stored extraction (audited per field).
         corrected_fields: list[dict] = []
-        for corr in approval.corrections:
-            if 0 <= corr.entity_index < len(raw_entities):
-                for f in raw_entities[corr.entity_index]["fields"]:
-                    if f["name"] == corr.field_name:
-                        f["value"] = corr.value
-                        f["confidence"] = 1.0
-                        f["confidence_band"] = "high"
-                        f["needs_confirmation"] = False
-                        corrected_fields.append(
-                            {"entity_index": corr.entity_index, "field": corr.field_name}
-                        )
+        for corr, field in targets:
+            field["value"] = corr.value
+            field["confidence"] = 1.0
+            field["confidence_band"] = "high"
+            field["needs_confirmation"] = False
+            corrected_fields.append({"entity_index": corr.entity_index, "field": corr.field_name})
 
         # Build the merge payload, skipping rejected entities.
         rejected = set(approval.rejected_entity_indexes)
