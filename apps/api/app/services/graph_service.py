@@ -555,18 +555,30 @@ class GraphService:
                 )
             except ValueError:
                 continue
+            egfr = _to_decimal(result.value)
+            # eGFR is strictly positive, so a value that rounds away to zero is arithmetic on a
+            # creatinine no assay produces (above roughly 4000 mg/dL — a misread decimal point,
+            # not a reading). ``_to_decimal`` cannot see that: ``result.value`` is already
+            # rounded to 2dp, so the underflow it drops for extracted values arrives here as a
+            # true zero. Recording it would put a precise number in the chart that the formula
+            # never supported, and flag it abnormal on the strength of the misread.
+            if egfr is None or egfr == 0:
+                continue
             marker = DerivedMarker(
-                patient_id=patient.id,
-                source_lab_result_id=lab.id,
-                marker_name="eGFR",
-                value_numeric=Decimal(str(result.value)),
-                unit="mL/min/1.73m2",
-                formula_name=result.formula_name,
-                formula_version=result.formula_version,
-                input_values=result.inputs,
-                reference_range_low=Decimal("90"),
-                is_abnormal=egfr_reference_abnormal(result.value),
-                computed_at=datetime.now(UTC),
+                **_fitted(
+                    DerivedMarker,
+                    patient_id=patient.id,
+                    source_lab_result_id=lab.id,
+                    marker_name="eGFR",
+                    value_numeric=egfr,
+                    unit="mL/min/1.73m2",
+                    formula_name=result.formula_name,
+                    formula_version=result.formula_version,
+                    input_values=result.inputs,
+                    reference_range_low=Decimal("90"),
+                    is_abnormal=egfr_reference_abnormal(result.value),
+                    computed_at=datetime.now(UTC),
+                )
             )
             self.db.add(marker)
 
