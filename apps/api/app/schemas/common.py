@@ -5,18 +5,18 @@ Enums here must stay in sync with packages/shared-types/src/enums.ts.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class AutonomyTier(str, Enum):
+class AutonomyTier(StrEnum):
     informational = "informational"
     suggestive = "suggestive"
     flag_for_review = "flag_for_review"
 
 
-class ProbabilityBand(str, Enum):
+class ProbabilityBand(StrEnum):
     high = "high"
     moderate = "moderate"
     low = "low"
@@ -24,20 +24,20 @@ class ProbabilityBand(str, Enum):
     insufficient_data = "insufficient_data"
 
 
-class ExtractionConfidence(str, Enum):
+class ExtractionConfidence(StrEnum):
     high = "high"  # >= 0.85
     medium = "medium"  # 0.50 - 0.84
     low = "low"  # < 0.50
 
 
-class SafetySeverity(str, Enum):
+class SafetySeverity(StrEnum):
     info = "info"
     warning = "warning"
     critical = "critical"
     hard_block = "hard_block"
 
 
-class ReasoningStatus(str, Enum):
+class ReasoningStatus(StrEnum):
     """Lifecycle of a reasoning session."""
 
     created = "created"
@@ -50,7 +50,7 @@ class ReasoningStatus(str, Enum):
     offline_paused = "offline_paused"
 
 
-class ClinicalOutputType(str, Enum):
+class ClinicalOutputType(StrEnum):
     """Kinds of immutable ClinicalSuggestion records."""
 
     differential = "differential"
@@ -61,7 +61,7 @@ class ClinicalOutputType(str, Enum):
     summary = "summary"
 
 
-class IntakeQuestionType(str, Enum):
+class IntakeQuestionType(StrEnum):
     red_flag = "red_flag"
     relevant_negative = "relevant_negative"
     clarifying = "clarifying"
@@ -69,7 +69,7 @@ class IntakeQuestionType(str, Enum):
     exam = "exam"
 
 
-class SpecialistRole(str, Enum):
+class SpecialistRole(StrEnum):
     internal_medicine = "internal_medicine"
     cardiology = "cardiology"
     infectious_disease = "infectious_disease"
@@ -77,7 +77,7 @@ class SpecialistRole(str, Enum):
     sentinel = "sentinel"
 
 
-class VerifierStatus(str, Enum):
+class VerifierStatus(StrEnum):
     """Outcome of the gatekeeper Verifier agent."""
 
     agree = "agree"
@@ -85,7 +85,7 @@ class VerifierStatus(str, Enum):
     major_disagreement = "major_disagreement"
 
 
-class AvailabilityTier(str, Enum):
+class AvailabilityTier(StrEnum):
     """Indian primary-care facility tier where an investigation is obtainable."""
 
     phc = "phc"
@@ -94,14 +94,14 @@ class AvailabilityTier(str, Enum):
     referral = "referral"
 
 
-class ClinicianDecision(str, Enum):
+class ClinicianDecision(StrEnum):
     acknowledged = "acknowledged"
     accepted = "accepted"
     dismissed = "dismissed"
     overridden = "overridden"
 
 
-class GuidelineSource(str, Enum):
+class GuidelineSource(StrEnum):
     icmr = "icmr"
     who = "who"
     nice = "nice"

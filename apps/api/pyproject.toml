@@ -25,6 +25,10 @@ known-first-party = ["app", "tests"]
 "app/agents/hypothesis_panel.py" = ["E501"]
 # Simulated DEMO MODE clinical sample data — long illustrative sentences read better inline.
 "app/agents/demo_data.py" = ["E501"]
+# ASYNC240 flags blocking pathlib calls inside an async def. Worth enforcing in app/, where a
+# blocking unlink() stalls the event loop for every other in-flight request; in tests it only
+# ever fires on arrange/assert steps that poke the storage dir directly, with nothing to stall.
+"tests/*" = ["ASYNC240"]
 
 [tool.mypy]
 python_version = "3.12"
