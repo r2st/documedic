@@ -343,6 +343,37 @@ def _detect_section(line: str) -> str | None:
     return _SECTION_ALIASES.get(key)
 
 
+# A dose and its unit left *behind* in the tail of a medication line -- "5mg" in ",5mg OD", "000mg"
+# in " 000mg BD". Finding one means the number this parser captured is not the whole dose; see
+# ``_dose_is_truncated``.
+_STRANDED_DOSE_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu|units?|%)\b", re.IGNORECASE)
+
+
+def _dose_is_truncated(unit: str, rest: str) -> bool:
+    """Whether the dose grammar stopped early and left the real dose in the remainder.
+
+    ``_MED_RE`` reads a dose as an unbroken run of digits with an optional decimal point, and any
+    character that is not one ends it. A scan that puts something else in the middle of the number
+    therefore does not fail -- it *succeeds on the prefix*. The rest of the number stays in
+    ``rest``, which nothing but the frequency scan ever looks at, and the fragment is emitted at
+    the same 0.86 confidence a cleanly-read dose gets. 0.86 is above
+    ``confirmation_confidence_threshold``, so the field is banded "high" and the clinician is never
+    asked about it.
+
+    The failures are not exotic. A comma decimal separator is how much of the world writes 2.5, and
+    a scanner that reads the decimal point of "0.25" as a comma yields "Digoxin 0,25mg OD" ->
+    a dose of **0**. A space that creeps into a thousands position yields "Metformin 1 000mg BD" ->
+    a dose of **1**. Both are silent, both are off by orders of magnitude, and both describe a real
+    drug the patient is really taking, so nothing downstream has cause to doubt them.
+
+    The tell is specific enough to act on: the unit did not attach to the captured number, and a
+    number *with* a unit is sitting in the remainder. That is the dose the page actually carries.
+    It deliberately does not fire on an Indian dosing schedule -- "Crocin 500 1-0-1" also leaves
+    digits in the remainder, but they carry no unit and the 500 is a complete reading.
+    """
+    return not unit and bool(_STRANDED_DOSE_RE.search(rest))
+
+
 def _parse_medication(line: str) -> ParsedEntity | None:
     m = _MED_RE.match(line.strip())
     if not m:
@@ -359,12 +390,17 @@ def _parse_medication(line: str) -> ParsedEntity | None:
         if re.search(rf"\b{re.escape(tok)}\b", lowered):
             frequency = tok.upper() if len(tok) <= 4 else tok
             break
+    # Banded "low" rather than dropped: the drug, the frequency and the line itself are still worth
+    # showing, and what the clinician needs is to be *asked* about the number. Low is what routes
+    # the field into the review queue -- see ``DocumentService._band``, where anything short of
+    # "high" sets ``needs_confirmation`` and holds the document at ``needs_confirmation``.
+    truncated = _dose_is_truncated(unit, rest)
     return ParsedEntity(
         entity_type="medication",
         fields=[
             ParsedField("brand_name_raw", name, 0.88),
-            ParsedField("dose", dose, 0.86),
-            ParsedField("dose_unit", unit or None, 0.80 if unit else 0.4),
+            ParsedField("dose", dose, 0.3 if truncated else 0.86),
+            ParsedField("dose_unit", unit or None, 0.80 if unit else (0.3 if truncated else 0.4)),
             ParsedField("frequency", frequency or None, 0.7 if frequency else 0.45),
             ParsedField("event_type", "continue", 0.6),
         ],

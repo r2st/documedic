@@ -356,3 +356,102 @@ def test_a_well_formed_document_date_is_still_inherited():
     )
 
     assert _fields(entities, "lab_result")["sample_date"] == "2026-03-12"
+
+
+# --- a dose the scan broke in the middle -----------------------------------------------------
+#
+# A third failure class, and the one that produces confidently wrong data rather than absence.
+#
+# ``_MED_RE`` reads a dose as an unbroken run of digits. Anything else ends it -- so a scan that
+# drops a character into the middle of the number does not fail the line, it succeeds on the
+# prefix. "Digoxin 0,25mg OD" (a comma read for the decimal point, which is how much of the world
+# writes the separator anyway) recorded a dose of 0. "Metformin 1 000mg BD" recorded 1. The
+# remainder of the number stayed in the part of the line only the frequency scan reads, and the
+# fragment was emitted at the same 0.86 confidence a clean reading gets -- above
+# ``confirmation_confidence_threshold``, so banded "high" and never queued for review.
+#
+# Nothing downstream can catch this. The drug is real, the number is a plausible dose, and the
+# safety engine has no way to know the page said something else.
+
+
+def _confidence(entities, entity_type: str) -> dict:
+    for entity in entities:
+        if entity.entity_type == entity_type:
+            return {f.name: f.confidence for f in entity.fields}
+    raise AssertionError(f"no {entity_type} entity was extracted")
+
+
+@pytest.mark.parametrize(
+    ("line", "captured", "printed_on_the_page"),
+    [
+        ("Digoxin 0,25mg OD", "0", "0.25 mg"),
+        ("Warfarin 2,5mg OD", "2", "2.5 mg"),
+        ("Metformin 1 000mg BD", "1", "1000 mg"),
+        ("Levothyroxine 12,5mcg OD", "12", "12.5 mcg"),
+    ],
+)
+def test_a_dose_broken_mid_number_is_not_reported_as_a_confident_reading(
+    line, captured, printed_on_the_page
+):
+    """The fragment is still shown -- but banded low, so the clinician is asked about it.
+
+    Asserting the captured value too, because that is the point: the parser has not become able to
+    read these, and pretending otherwise would be a different bug. What changed is that it no
+    longer claims to have.
+    """
+    entities = parse_text(f"MEDICATIONS\n{line}")
+
+    assert _fields(entities, "medication")["dose"] == captured, (
+        f"{line!r} is still parsed to its prefix; the page reads {printed_on_the_page}"
+    )
+    assert _confidence(entities, "medication")["dose"] < 0.5, (
+        f"{line!r} yielded a dose of {captured} at a confidence that skips confirmation, while "
+        f"the page reads {printed_on_the_page}"
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Glycomet 500mg BD",  # unit attached: nothing was left behind
+        "Amlodipine 5 mg OD",  # unit after a space
+        "Insulin 10 units BD",
+        "Crocin 500 1-0-1",  # Indian dosing schedule: digits in the tail, but no stranded unit
+        "Thyronorm 50 OD",  # unit implied by the drug, absent from the page
+        "Ecosprin 75 OD",
+    ],
+)
+def test_a_cleanly_read_dose_still_needs_no_confirmation(line):
+    """The guard must not put every unitless or schedule-carrying line into the review queue.
+
+    "Crocin 500 1-0-1" is the case that makes the tell specific rather than "digits in the tail":
+    a morning-noon-night schedule leaves digits behind on a line whose 500 is complete.
+    """
+    assert _confidence(parse_text(f"MEDICATIONS\n{line}"), "medication")["dose"] > 0.85
+
+
+def test_a_broken_dose_holds_the_document_for_review():
+    """The band is only worth having if it reaches the clinician; this is the path that does it.
+
+    ``DocumentService._band`` turns anything short of "high" into ``needs_confirmation`` on the
+    field and holds the whole document in that state, which is what stops the extraction being
+    merged into the chart unexamined.
+    """
+    from app.services.document_service import _band
+
+    entities = parse_text("MEDICATIONS\nDigoxin 0,25mg OD")
+    bands = {f.name: _band(f.confidence) for f in entities[0].fields}
+
+    assert bands["dose"] == "low"
+    assert any(band != "high" for band in bands.values())
+
+
+def test_a_lab_value_broken_the_same_way_yields_no_reading_at_all():
+    """The lab grammar fails closed where the medication grammar failed open, and pinning why.
+
+    ``_LAB_RE`` is anchored to the end of the line, so a comma in the middle of the value leaves a
+    remainder nothing can match and the line yields no entity. That is a different outcome from a
+    truncated dose -- a missing result rather than a wrong one -- and it is the safer of the two,
+    but it is a property of the anchor rather than a decision. Anchoring is load-bearing here.
+    """
+    assert parse_text("LABS\nPotassium: 6,2 mmol/L (3.5-5.1)") == []
