@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 
 from sqlalchemy import select
@@ -191,7 +192,15 @@ async def ingest(
         ).all()
     }
     records = load_corpus(path)
-    embeddings = _maybe_embed([r["content"] for r in records]) if push_qdrant else None
+    # Both of these are synchronous and slow -- SentenceTransformer.encode is CPU-bound over the
+    # whole corpus, and the Qdrant push is blocking HTTP -- and ``ingest`` runs from the seeding
+    # path and from the admin endpoint, on the event loop that is also serving every other
+    # request. Off-loaded to a worker thread so an ingestion cannot stall the API.
+    embeddings = (
+        await asyncio.to_thread(_maybe_embed, [r["content"] for r in records])
+        if push_qdrant
+        else None
+    )
 
     added = 0
     for idx, rec in enumerate(records):
@@ -209,7 +218,7 @@ async def ingest(
     await db.flush()
 
     if push_qdrant and embeddings:
-        _push_qdrant(version, records, embeddings)
+        await asyncio.to_thread(_push_qdrant, version, records, embeddings)
     return added
 
 
@@ -223,8 +232,43 @@ def _maybe_embed(texts: list[str]) -> list[list[float]] | None:
     return [v.tolist() for v in model.encode(texts)]
 
 
+def _point_id(version: str, record: dict) -> str:
+    """A stable point id for a chunk: same corpus coordinates -> same point, every run.
+
+    The index used to be dropped and rebuilt on every push, so a point's id could be its
+    position in ``records`` and nothing depended on it surviving. Upserting into a live
+    collection does depend on it: a positional id re-points an existing vector at whatever
+    chunk happens to sit at that offset in the next run, so a corpus that gained or lost a
+    section would silently re-label every point after it. Deriving the id from the citation
+    coordinates instead makes a re-push of the same chunk overwrite *that* chunk.
+    """
+    key = f"{version}:{record.get('source')}:{record.get('section_id')}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+
+
+def _collection_exists(client: object, collection: str) -> bool:
+    """Whether the collection is already present, across qdrant-client versions."""
+    exists = getattr(client, "collection_exists", None)
+    if callable(exists):
+        return bool(exists(collection))
+    try:  # older clients: no collection_exists, raises for a missing collection
+        client.get_collection(collection)  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    return True
+
+
 def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]]) -> None:
-    """Index chunks into Qdrant if the client is available (best-effort)."""
+    """Index chunks into Qdrant if the client is available (best-effort).
+
+    Creates the versioned collection only when it is missing, then upserts. This used to call
+    ``recreate_collection``, which *drops* the collection before repopulating it: any failure
+    between the drop and the end of the upsert -- a network blip, a dimension mismatch, the
+    process being killed mid-ingest -- left the deployment with no vector index at all, and
+    retrieval silently degraded to the lexical fallback until someone re-ran the ingest. An
+    upsert into an existing collection is idempotent (see ``_point_id``) and never leaves the
+    index emptier than it found it.
+    """
     try:
         from qdrant_client import QdrantClient
         from qdrant_client.models import Distance, PointStruct, VectorParams
@@ -233,14 +277,22 @@ def _push_qdrant(version: str, records: list[dict], embeddings: list[list[float]
     client = QdrantClient(url=settings.qdrant_url)
     collection = f"{settings.qdrant_collection}_{version}".replace(".", "_")
     dim = len(embeddings[0])
-    client.recreate_collection(
-        collection_name=collection,
-        vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
-    )
+    if not _collection_exists(client, collection):
+        try:
+            client.create_collection(
+                collection_name=collection,
+                vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+            )
+        except Exception as exc:
+            # A concurrent ingest may have created it between the check and here. That is fine
+            # -- the upsert below is what actually has to succeed, and it will raise if the
+            # collection genuinely is not there.
+            logger.warning("Could not create Qdrant collection %s: %s", collection, exc)
     client.upsert(
         collection_name=collection,
         points=[
-            PointStruct(id=i, vector=embeddings[i], payload=records[i]) for i in range(len(records))
+            PointStruct(id=_point_id(version, records[i]), vector=embeddings[i], payload=records[i])
+            for i in range(len(records))
         ],
     )
 

@@ -529,7 +529,11 @@ def test_qdrant_push_is_skipped_when_the_client_package_is_absent(monkeypatch):
 
 
 def test_qdrant_push_creates_the_versioned_collection_and_upserts_every_record(monkeypatch):
-    """Corpus version must be namespaced into the collection so versions cannot collide."""
+    """Corpus version must be namespaced into the collection so versions cannot collide.
+
+    The collection is *created* when missing, never recreated — see
+    ``tests/test_guideline_ingest.py`` for why dropping a live index is not an option.
+    """
     monkeypatch.setattr(settings, "qdrant_collection", "guidelines")
     monkeypatch.setattr(settings, "qdrant_url", "http://qdrant:6333")
     calls: dict = {}
@@ -538,7 +542,10 @@ def test_qdrant_push_creates_the_versioned_collection_and_upserts_every_record(m
         def __init__(self, url):
             calls["url"] = url
 
-        def recreate_collection(self, collection_name, vectors_config):
+        def collection_exists(self, collection_name):
+            return False
+
+        def create_collection(self, collection_name, vectors_config):
             calls["collection"] = collection_name
             calls["size"] = vectors_config.size
 
