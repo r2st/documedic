@@ -11,6 +11,22 @@ from app.agents.util import as_float, as_text, call_llm, objects, text_blob
 
 AGENT = "triage_intake"
 
+# The closed set the prompt asks for (see ``prompts.TRIAGE_INTAKE``). Normalising to it is not
+# only tidiness: ``IntakeQuestion.question_type`` is ``String(30)``, and this value is written
+# straight from the model's answer. "red_flag_screening_question_for_acs" is 35 characters and
+# an entirely plausible thing for a model to say — on PostgreSQL that is "value too long for
+# type character varying(30)" at the flush inside ``ReasoningService.start``, so the clinician
+# cannot open the case at all. The in-memory SQLite the suite runs on enforces no VARCHAR
+# length, which is why this class of bug reaches production green (see tests/column_fit.py).
+_QUESTION_TYPES = frozenset({"red_flag", "relevant_negative", "clarifying", "history", "exam"})
+_DEFAULT_QUESTION_TYPE = "clarifying"
+
+
+def _question_type(value: object) -> str:
+    """The model's question type if the UI knows it, else the neutral default."""
+    kind = as_text(value).strip().lower()
+    return kind if kind in _QUESTION_TYPES else _DEFAULT_QUESTION_TYPE
+
 
 async def run(state: CaseState, ctx: ReasoningContext) -> None:
     await ctx.emit("agent_start", {"agent": AGENT, "label": "Triage / Intake"})
@@ -77,7 +93,7 @@ def _apply(state: CaseState, result: dict) -> None:
         state.intake_questions.append(
             IntakeQuestionState(
                 text=text,
-                question_type=as_text(q.get("question_type")) or "clarifying",
+                question_type=_question_type(q.get("question_type")),
                 rationale=as_text(q.get("rationale")) or None,
                 info_gain_score=as_float(q.get("info_gain_score"), 0.5),
             )
