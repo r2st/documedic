@@ -371,6 +371,30 @@ def _parse_medication(line: str) -> ParsedEntity | None:
     )
 
 
+def _finite(token: str) -> float | None:
+    """The token as a float, or ``None`` when it is too large for one to represent.
+
+    The value grammars match ``\\d+(?:\\.\\d+)?`` with no length bound, which is right -- a bound
+    would silently truncate a reading -- but ``float()`` of a long enough digit run is ``inf``,
+    not an error. A smudged decimal point or a scanner that repeats a digit down a column is all
+    it takes, and ~309 digits is the threshold.
+
+    ``inf`` is not merely a wrong number here, it is one that cannot leave the process. Extracted
+    entities are returned to the clinician for approval and stored in the document's JSON meta
+    column *before* anything numeric-aware sees them, and infinity has no JSON representation:
+    the approval response raised ``ValueError: Out of range float values are not JSON compliant``
+    and 500'd the upload, and ``json.dumps`` wrote the non-standard token ``Infinity`` into meta,
+    which PostgreSQL's jsonb and any strict reader both reject. The database layer already
+    refuses non-finite values (``graph_service._to_decimal``), but that guard sits downstream of
+    the serialisation that fails.
+    """
+    try:
+        value = float(token)
+    except (TypeError, ValueError):  # pragma: no cover — the grammars only match digits
+        return None
+    return value if value == value and value not in (float("inf"), float("-inf")) else None
+
+
 def _parse_lab(line: str) -> ParsedEntity | None:
     m = _LAB_RE.match(line.strip()) or _LAB_COLUMNAR_RE.match(line.strip())
     if not m:
@@ -378,14 +402,25 @@ def _parse_lab(line: str) -> ParsedEntity | None:
     marker = m.group("marker").strip()
     if not marker or marker.lower() in _SECTION_ALIASES:
         return None
+    # An unrepresentable value keeps the digits the document actually printed rather than being
+    # dropped. ``GraphService._merge_lab`` files a value it cannot store as a number into
+    # ``value_text``, which makes the row qualitative -- the correct handling for a reading
+    # nobody can interpret -- and the clinician still sees what was on the page and can correct
+    # it. Dropping the field would show them a marker with no value at all.
+    value = m.group("value")
+    numeric = _finite(value)
     fields = [
         ParsedField("marker_name", marker, 0.9),
-        ParsedField("value_numeric", float(m.group("value")), 0.85),
+        ParsedField("value_numeric", numeric if numeric is not None else value, 0.85),
         ParsedField("unit", (m.group("unit") or None), 0.75 if m.group("unit") else 0.4),
     ]
-    if m.group("low") and m.group("high"):
-        fields.append(ParsedField("reference_range_low", float(m.group("low")), 0.8))
-        fields.append(ParsedField("reference_range_high", float(m.group("high")), 0.8))
+    low = _finite(m.group("low")) if m.group("low") else None
+    high = _finite(m.group("high")) if m.group("high") else None
+    # Both bounds or neither: a range with one unrepresentable end is not a narrower range, and
+    # ``_merge_lab`` reads a lone bound as a real one when it screens the value as abnormal.
+    if low is not None and high is not None:
+        fields.append(ParsedField("reference_range_low", low, 0.8))
+        fields.append(ParsedField("reference_range_high", high, 0.8))
     return ParsedEntity(entity_type="lab_result", fields=fields)
 
 

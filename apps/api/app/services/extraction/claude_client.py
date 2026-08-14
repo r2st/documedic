@@ -87,21 +87,60 @@ def demo_extract() -> tuple[list[ParsedEntity], str | None]:
     return _to_entities(demo_data.extraction_payload())
 
 
-def _to_entities(payload: dict) -> tuple[list[ParsedEntity], str | None]:
+def _usable(value: object) -> bool:
+    """Whether a model-supplied field value is one that can be carried onwards.
+
+    Rejects ``None`` (the prompt asks for illegible fields to be omitted, and some models send
+    an explicit null instead) and non-finite numbers. ``json.loads`` turns ``1e999`` into ``inf``
+    and the literal ``NaN`` into a float without complaining, and neither can be serialised
+    back: the approval response 500s with "Out of range float values are not JSON compliant"
+    and the document's JSON meta column gets the non-standard token ``Infinity``. Unlike the
+    deterministic parser, there is no source token to fall back to here -- the raw text was
+    consumed by the model -- so the field is dropped. See ``text_parser._finite``.
+    """
+    if value is None:
+        return False
+    if isinstance(value, float):
+        return value == value and value not in (float("inf"), float("-inf"))
+    return True
+
+
+def _to_entities(payload: object) -> tuple[list[ParsedEntity], str | None]:
+    """Build entities from a model response, keeping only the parts that are shaped as asked.
+
+    Every level is checked rather than trusted. A model that returns ``"entities"`` as a list of
+    bare strings, or ``"fields"`` as a string, made ``.get``/``.items`` an AttributeError that
+    aborted the whole extraction -- ``extract`` caught it and moved to the next provider, so a
+    single malformed entity cost the document every *other* entity that had extracted perfectly
+    well, and usually the vision path entirely. Dropping the unusable entries leaves the rest.
+    """
+    if not isinstance(payload, dict):
+        return [], None
     entities: list[ParsedEntity] = []
-    for raw in payload.get("entities", []):
+    raw_entities = payload.get("entities")
+    for raw in raw_entities if isinstance(raw_entities, (list | tuple)) else []:
+        if not isinstance(raw, dict):
+            continue
         etype = raw.get("entity_type")
-        fields_map = raw.get("fields", {})
-        conf_map = raw.get("confidence", {})
+        if not isinstance(etype, str) or not etype.strip():
+            # Nothing downstream can route an entity with no type: GraphService dispatches on
+            # it, so an untyped entity is silently merged nowhere while still being shown to
+            # the clinician for approval — which reads as "recorded".
+            continue
+        fields_map = raw.get("fields")
+        conf_map = raw.get("confidence")
+        if not isinstance(conf_map, dict):
+            conf_map = {}
         fields = [
             ParsedField(name=k, value=v, confidence=_confidence(conf_map.get(k)))
-            for k, v in fields_map.items()
-            if v is not None
+            for k, v in (fields_map.items() if isinstance(fields_map, dict) else [])
+            if isinstance(k, str) and _usable(v)
         ]
         if fields:
-            entities.append(ParsedEntity(entity_type=etype, fields=fields))
+            entities.append(ParsedEntity(entity_type=etype.strip(), fields=fields))
     _inherit_document_date(entities, payload.get("document_date"))
-    return entities, payload.get("document_type")
+    doc_type = payload.get("document_type")
+    return entities, doc_type.strip() if isinstance(doc_type, str) and doc_type.strip() else None
 
 
 def _confidence(raw: object) -> float:
