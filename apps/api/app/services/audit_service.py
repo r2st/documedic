@@ -34,6 +34,11 @@ _AUDIT_LOCK_KEY = 4823701
 # turn a pathological livelock into a loud failure rather than a hung request.
 _MAX_SEQUENCE_ATTEMPTS = 5
 
+# How many audit rows a chain verification reads and hashes between awaits. Large enough that
+# the per-batch round trip is amortised over real work, small enough that the event loop is
+# never held for more than a few milliseconds at a time.
+_VERIFY_BATCH_SIZE = 500
+
 
 def _iso_utc(dt: datetime) -> str:
     """Stable UTC ISO timestamp. SQLite drops tzinfo on round-trip; PG keeps it. Coercing
@@ -43,8 +48,14 @@ def _iso_utc(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat()
 
 
-def _canonical_for(row: AuditLog) -> str:
-    """Canonical hashed representation of a stored row, matching what append() hashed."""
+def _canonical_for(row: Any) -> str:
+    """Canonical hashed representation of a stored row, matching what append() hashed.
+
+    ``row`` is anything carrying the hashed columns: an ``AuditLog`` entity, or a ``Row`` from
+    the columns-only select :meth:`AuditService.verify_patient_chain` uses. Deliberately one
+    function for both — the value it produces has to be byte-identical to what ``append``
+    hashed, and a second implementation of it is a chain that silently stops verifying.
+    """
     return canonical_payload(
         sequence=row.sequence,
         action=row.action,
@@ -296,19 +307,64 @@ class AuditService:
         return list(result.scalars().all()), int(total or 0)
 
     async def verify_patient_chain(self, patient_id: uuid.UUID) -> tuple[int, bool]:
-        """Recompute the hash chain for a patient's entries in global sequence order."""
-        result = await self.db.execute(
-            select(AuditLog)
-            .where(AuditLog.patient_id == patient_id)
-            .order_by(AuditLog.sequence.asc())
+        """Recompute the hash chain for a patient's entries, in batches, in sequence order.
+
+        Per-patient slice: validate each record's own hash recomputes; chain linkage is
+        validated globally (:meth:`verify_full_chain`). Here we recompute each record's hash
+        from its stored prev_hash.
+
+        This used to read the patient's whole trail in one statement, hydrate every row into an
+        ORM instance, and hash the lot in a single expression. ``audit_logs`` is append-only and
+        never pruned, and this table records every PHI read as well as every write — so the trail
+        of a patient under long-term follow-up is tens of thousands of rows, and all of it landed
+        in memory at once and was then hashed with the event loop held for the whole pass. That
+        is the same shape of defect as the bcrypt and blob-I/O off-loads: unbounded work on the
+        one thread this worker serves everybody from.
+
+        Batching by a ``sequence`` cursor fixes both halves. Peak resident rows are one batch
+        rather than one patient's history, and the ``await`` between batches hands the loop back,
+        so hashing a long trail interleaves with everyone else's requests instead of freezing
+        them. The cursor walks ``ix_audit_logs_patient_sequence`` forwards, so each batch is an
+        index range scan rather than an offset that re-walks what has already been read.
+
+        Columns rather than entities, for the same reason :meth:`list_for_patient` selects
+        narrowly: nothing here needs a mapped object, and each one costs an instrumented instance
+        and an identity-map entry per row for a value that is read once and thrown away.
+
+        Every row is still counted and checked — no early exit on the first bad hash. The count
+        is what the endpoint reports as ``entries_checked``, and tamper evidence that stops at
+        the first discrepancy tells an operator less than one that covers the whole trail.
+        """
+        columns = (
+            AuditLog.sequence,
+            AuditLog.action,
+            AuditLog.account_id,
+            AuditLog.patient_id,
+            AuditLog.entity_type,
+            AuditLog.entity_id,
+            AuditLog.payload,
+            AuditLog.created_at,
+            AuditLog.prev_hash,
+            AuditLog.record_hash,
         )
-        rows = list(result.scalars().all())
-        # Per-patient slice: validate each record's own hash recomputes; chain linkage is
-        # validated globally. Here we recompute each record's hash from its stored prev_hash.
-        valid = all(
-            compute_record_hash(r.prev_hash, _canonical_for(r)) == r.record_hash for r in rows
-        )
-        return len(rows), valid
+        checked = 0
+        valid = True
+        after = -1
+        while True:
+            result = await self.db.execute(
+                select(*columns)
+                .where(AuditLog.patient_id == patient_id, AuditLog.sequence > after)
+                .order_by(AuditLog.sequence.asc())
+                .limit(_VERIFY_BATCH_SIZE)
+            )
+            rows = result.all()
+            if not rows:
+                return checked, valid
+            checked += len(rows)
+            after = rows[-1].sequence
+            for row in rows:
+                if compute_record_hash(row.prev_hash, _canonical_for(row)) != row.record_hash:
+                    valid = False
 
     async def verify_full_chain(self) -> tuple[int, bool]:
         """Verify the entire global chain is unbroken (genesis -> latest)."""
