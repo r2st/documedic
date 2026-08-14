@@ -8,10 +8,12 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.exceptions import (
+    ConcurrentApprovalError,
     CorrectionNotApplicableError,
     DocumentNotFoundError,
     FileTooLargeError,
@@ -39,6 +41,26 @@ logger = logging.getLogger(__name__)
 MAX_FILE_NAME_CHARS = 255
 
 _BYTES_PER_MB = 1024 * 1024
+
+# The one constraint an approval is expected to be able to lose a race to. Two spellings because
+# the drivers do not agree on what to name in the message: asyncpg quotes the index
+# ('duplicate key value violates unique constraint "uq_lab_results_observation"') while SQLite
+# names the columns instead ('UNIQUE constraint failed: lab_results.patient_id,
+# lab_results.dedup_key') even for a partial index. Matching either keeps the translation
+# working on the test backend and the production one; test_a_duplicate_observation_is_a_409
+# pins the SQLite form against the live driver so a wording change fails a test rather than
+# silently turning a race into a 500.
+#
+# Deliberately narrow: any *other* constraint violated during a merge is a bug, not a race, and
+# must keep propagating so it is logged with its traceback rather than reported to the clinician
+# as a benign collision.
+_OBSERVATION_CONFLICT_MARKERS = ("uq_lab_results_observation", "lab_results.dedup_key")
+
+
+def _is_observation_conflict(exc: IntegrityError) -> bool:
+    """Whether this integrity error is the duplicate-observation constraint firing."""
+    message = str(exc.orig)
+    return any(marker in message for marker in _OBSERVATION_CONFLICT_MARKERS)
 
 
 def file_too_large_message(limit_bytes: int, actual_bytes: int | None = None) -> str:
@@ -452,9 +474,19 @@ class DocumentService:
                 payload={"corrections": corrected_fields},
             )
 
-        counts = await GraphService(self.db).merge_entities(
-            patient=patient, document=document, entities=merge_payload
-        )
+        try:
+            counts = await GraphService(self.db).merge_entities(
+                patient=patient, document=document, entities=merge_payload
+            )
+        except IntegrityError as exc:
+            # uq_lab_results_observation: another approval of this document inserted the same
+            # observation between this one's dedup read and its flush. The lock in `get` closes
+            # that window on PostgreSQL and is a no-op on SQLite, so the constraint is what
+            # actually holds here. See the index on LabResult for the whole argument.
+            if _is_observation_conflict(exc):
+                await self.db.rollback()
+                raise ConcurrentApprovalError(detail=str(exc.orig)) from exc
+            raise
 
         if counts.get("lab_results"):
             # Deterministic, offline critical/panic-value backstop — runs regardless of what

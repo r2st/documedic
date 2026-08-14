@@ -40,7 +40,9 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
     409: (
         "The request conflicts with current state. `code` is `hard_block` when a deterministic "
         "drug-safety rule blocks the action (overridable only with documented reasoning), "
-        "`email_exists` on duplicate signup, `conflict` otherwise."
+        "`email_exists` on duplicate signup, `concurrent_approval` when another approval of the "
+        "same document merged first and this one was rolled back untouched (safe to retry), "
+        "`conflict` otherwise."
     ),
     429: (
         "Rate limited. `code` is `rate_limited` when a per-account ceiling on work that costs "

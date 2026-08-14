@@ -163,6 +163,25 @@ class ConflictError(AetherError):
     code = "conflict"
 
 
+class ConcurrentApprovalError(ConflictError):
+    """Someone approved this document at the same moment, so nothing was merged twice. Reload
+    the chart — if the report is not on it, approve again.
+
+    Raised when the merge's INSERT is refused by ``uq_lab_results_observation``, which is the
+    database refusing to record one blood draw as two. That only happens when two approvals of
+    the same document overlap in the read-then-insert window that ``GraphService`` deduplicates
+    in; the loser's whole transaction rolls back, so the record is left exactly as the winner
+    wrote it and a retry is safe.
+
+    409 rather than a silent 200 because the two are not the same answer. The caller asked for a
+    merge and did not get one, and while the winning approval almost always merged the identical
+    payload, it need not have: the loser may have carried a correction the winner did not.
+    Saying so lets a client that retries do it against the current chart.
+    """
+
+    code = "concurrent_approval"
+
+
 class EmailAlreadyExistsError(ConflictError):
     """An account with this email already exists. Sign in instead, or use another address."""
 

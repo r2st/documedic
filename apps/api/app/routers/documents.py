@@ -218,7 +218,7 @@ async def get_extraction(
 @router.post(
     "/{doc_id}/approve",
     summary="Merge a reviewed extraction into the patient graph",
-    responses=PATIENT_ERRORS,
+    responses=PATIENT_ERRORS | errors(409),
 )
 async def approve_extraction(
     patient_id: uuid.UUID,
@@ -240,6 +240,10 @@ async def approve_extraction(
 
     Safe to repeat. Approving twice merges nothing the second time rather than duplicating the
     document's entities, so a retry after a timeout — or a double-clicked button — is harmless.
+    Two approvals that genuinely overlap are a 409 (`concurrent_approval`) for whichever one
+    loses: the database refuses the duplicate observation and that approval is rolled back whole,
+    leaving the chart as the winner wrote it. Retrying it is safe and is the way to confirm a
+    correction it was carrying actually landed.
 
     Merging labs re-runs the deterministic critical-value check, so a panic value in an
     approved report raises its flag here rather than waiting for someone to open the chart.

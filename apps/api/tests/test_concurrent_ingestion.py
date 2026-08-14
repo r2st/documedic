@@ -333,3 +333,69 @@ async def test_no_lab_result_is_written_twice_under_concurrency(clinicians, file
 
     duplicated = {marker: n for marker, n in rows if n > 1}
     assert not duplicated, f"markers written more than once: {duplicated}"
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_approvals_of_one_document_record_one_blood_draw(
+    clinicians, file_sessionmaker
+):
+    """Two clinicians hitting Approve on the same report at the same moment.
+
+    This is the race ``uq_lab_results_observation`` exists for. Both approvals read a chart
+    without the observation on it, both decide to insert, and before the constraint existed both
+    did — leaving one blood draw on the chart as two rows. That reads as two independent
+    measurements agreeing rather than one counted twice, and the derived eGFR (the input the renal
+    contraindication rules go on to read) was recomputed and stored per copy.
+
+    What is asserted is the invariant rather than a particular pair of status codes, because
+    which approval wins and how the loser fails are both genuinely nondeterministic here: SQLite
+    takes a database-wide write lock, so depending on where the two transactions interleave the
+    second one may dedup normally (200), lose the constraint race (409), or find the database
+    locked. All three are acceptable answers. Two creatinines on the chart is not, and neither is
+    a 500 — the whole point of translating the constraint violation is that a lost race is a
+    conflict the clinician can act on and not a system fault.
+    """
+    first, second = clinicians
+    patient_id = await _create_patient(first, "Double Approve")
+
+    upload = await first.post(
+        f"/api/v1/patients/{patient_id}/documents",
+        files={"file": ("renal.pdf", _lab_document("Creatinine", 1.4), "application/pdf")},
+    )
+    assert upload.status_code == 201, upload.text
+    doc_id = upload.json()["id"]
+    body = {"corrections": [], "rejected_entity_indexes": []}
+
+    responses = await asyncio.gather(
+        *(
+            (first if i % 2 == 0 else second).post(
+                f"/api/v1/patients/{patient_id}/documents/{doc_id}/approve", json=body
+            )
+            for i in range(4)
+        ),
+        return_exceptions=True,
+    )
+
+    statuses = [r if isinstance(r, BaseException) else r.status_code for r in responses]
+    assert 200 in statuses, f"no approval succeeded at all: {statuses}"
+    assert 500 not in statuses, (
+        f"a lost approval race surfaced as a server error rather than a conflict: {statuses}"
+    )
+
+    async with file_sessionmaker() as db:
+        markers = (
+            (
+                await db.execute(
+                    select(LabResult.marker_name).where(
+                        LabResult.patient_id == uuid.UUID(patient_id),
+                        LabResult.is_deleted.is_(False),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert list(markers) == ["Creatinine"], (
+        f"one blood draw was recorded as {len(markers)} lab results: {sorted(markers)}"
+    )

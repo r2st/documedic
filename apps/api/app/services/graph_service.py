@@ -25,7 +25,7 @@ from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
 from app.models.document import Document
-from app.models.lab_result import LabResult
+from app.models.lab_result import LabResult, lab_observation_key
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 from app.services.drug_resolver import DrugResolver
@@ -82,28 +82,6 @@ def _to_decimal(value: object) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
-
-
-def _lab_key(
-    marker: str | None, value: Decimal | None, sample_date: datetime | None
-) -> tuple[str, Decimal | None, str | None]:
-    """Dedup key identifying one lab *observation* within a source document.
-
-    The timestamp is reduced to a UTC ISO string rather than compared as a ``datetime`` because
-    the two sides of the comparison come from different places: one was just parsed by
-    ``_parse_datetime`` (always tz-aware) and the other was read back out of the database, which
-    on SQLite drops the tzinfo on the round trip. As ``datetime`` objects those two are unequal
-    and hash differently, so the key would never match and the dedup would silently do nothing.
-    """
-    return (
-        (marker or "").strip().lower(),
-        value,
-        None
-        if sample_date is None
-        else sample_date.replace(tzinfo=UTC).astimezone(UTC).isoformat()
-        if sample_date.tzinfo is None
-        else sample_date.astimezone(UTC).isoformat(),
-    )
 
 
 class GraphService:
@@ -191,11 +169,7 @@ class GraphService:
         ``ix_lab_results_patient_sample_date`` exists because it reaches thousands of rows.
         """
         labs = await self.db.execute(
-            select(
-                LabResult.marker_name,
-                LabResult.value_numeric,
-                LabResult.sample_date,
-            ).where(
+            select(LabResult.dedup_key).where(
                 LabResult.patient_id == patient.id,
                 LabResult.source_document_id == source_doc_id
                 if source_doc_id is not None
@@ -226,9 +200,10 @@ class GraphService:
             "medications": {((generic or "").lower(), dose or "") for generic, dose in meds.all()},
             "conditions": {name.lower() for (name,) in conditions.all() if name},
             "allergies": {name.lower() for (name,) in allergies.all() if name},
-            "lab_results": {
-                _lab_key(marker, value, sample_date) for marker, value, sample_date in labs.all()
-            },
+            # Read back as stored rather than recomputed from the row's columns: the digest is
+            # what the unique index constrains, so comparing against anything else could let the
+            # in-memory check pass an insert the database then rejects.
+            "lab_results": set(labs.scalars().all()),
         }
 
     async def _merge_medication(
@@ -303,7 +278,7 @@ class GraphService:
         # the chart. Two *different* values for one marker in one report (a pre- and post-dialysis
         # creatinine) differ in the key and are both kept, as is the same marker arriving from a
         # later report. See _existing_keys for why this is scoped to the document.
-        key = _lab_key(marker, value_numeric, sample_date)
+        key = lab_observation_key(source_doc_id, marker, value_numeric, sample_date)
         if key in seen:
             return None
         seen.add(key)
@@ -311,6 +286,7 @@ class GraphService:
         lab = LabResult(
             patient_id=patient.id,
             source_document_id=source_doc_id,
+            dedup_key=key,
             marker_name=marker,
             value_numeric=value_numeric,
             value_text=str(fields.get("value_numeric"))
