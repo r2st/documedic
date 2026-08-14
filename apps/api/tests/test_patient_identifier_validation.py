@@ -277,3 +277,33 @@ async def test_an_update_that_blanks_the_name_leaves_the_chart_intact(auth_clien
 
     unchanged = await auth_client.get(f"/api/v1/patients/{patient['id']}")
     assert unchanged.json()["full_name"] == "Ramesh Kumar"
+
+
+# ------------------------------------------------- explicitly clearing an optional field
+
+
+def test_an_update_may_leave_a_name_alone_by_sending_null():
+    """``None`` means "not editing this field", which is not the same as sending a blank one.
+
+    A PATCH body that carries ``full_name: null`` is how a client says "no change here" while
+    editing something else. Cleaning would make it "", and "" is the unidentifiable chart the
+    blank-name rule exists to refuse — so the whole edit would 422 over a field the clinician
+    never touched.
+    """
+    update = PatientUpdate(full_name=None, phone="9876543210")
+
+    assert update.full_name is None
+    assert update.phone == "9876543210"
+
+
+def test_free_text_left_null_stays_null_rather_than_becoming_empty_text():
+    """The same distinction on the free-text fields, where it decides what is stored.
+
+    ``None`` is "this patient has no recorded address"; ``""`` is "an address was recorded and
+    it is empty". Only the first is true of a PATCH that did not mention the field, and the
+    control-character strip must not turn one into the other.
+    """
+    update = PatientUpdate(address_text=None, notes=None)
+
+    assert update.address_text is None
+    assert update.notes is None

@@ -16,11 +16,40 @@ from app.agents.state import (
     more_conservative_tier,
 )
 from app.agents.tools import summarize_snapshot
-from app.agents.util import call_llm
+from app.agents.util import as_text, call_llm
 
 AGENT = "verifier"
 _VALID_STATUS = {"agree", "partial_disagreement", "major_disagreement"}
 _VALID_TIER = {"informational", "suggestive", "flag_for_review"}
+
+
+def _recognised(value: object, allowed: set[str], default: str | None) -> str | None:
+    """Return `value` only if it is a string the gate recognises, else `default`.
+
+    The isinstance check is not belt-and-braces: ``allowed`` is a set, so a bare ``value in
+    allowed`` hashes the left operand and raises TypeError on the list or dict a
+    non-conforming model returns where a string was asked for. That exception would escape
+    ``run`` -- and the verifier is the one node the graph has no edge around, so a model
+    answering ``{"status": ["agree"]}`` would fail the whole case rather than fall back.
+    Everything unrecognised is treated as *no answer*, which leaves the deterministic floor
+    standing; that is the safe direction, because the floor can only be escalated from.
+    """
+    return value if isinstance(value, str) and value in allowed else default
+
+
+def _caveat_list(value: object) -> list[str]:
+    """Coerce a model-supplied caveats field to a list of non-empty strings.
+
+    A bare string is one caveat, not a list of characters -- which is what ``list("...")``
+    would have made of it. Null entries are dropped: they reach the Reasoning Theatre as list
+    items and the frontend already defends against them, so they are real, not hypothetical.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list | tuple)):
+        return []
+    return [text for text in (as_text(v) for v in value) if text]
 
 
 async def run(state: CaseState, ctx: ReasoningContext) -> None:
@@ -46,23 +75,25 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
         verifier=True,
     )
     if result:
-        status = result.get("status", "agree")
-        status = status if status in _VALID_STATUS else "agree"
-        llm_tier = result.get("autonomy_tier", "suggestive")
-        if llm_tier in _VALID_TIER:
+        status = _recognised(result.get("status"), _VALID_STATUS, "agree") or "agree"
+        llm_tier = _recognised(result.get("autonomy_tier"), _VALID_TIER, None)
+        if llm_tier:
             tier = more_conservative_tier(tier, llm_tier)  # conservative wins
-        for v in result.get("verdicts", []):
+        raw_verdicts = result.get("verdicts")
+        for v in raw_verdicts if isinstance(raw_verdicts, (list | tuple)) else []:
+            # A verdict that is not an object carries no target to attach it to, so there is
+            # nothing to keep -- and calling .get() on it would raise inside the ungated node.
+            if not isinstance(v, dict):
+                continue
             verdicts.append(
                 VerifierVerdict(
-                    target=v.get("target", ""),
-                    status=v.get("status", "agree")
-                    if v.get("status") in _VALID_STATUS
-                    else "agree",
-                    rationale=v.get("rationale", ""),
-                    caveats=list(v.get("caveats", [])),
+                    target=as_text(v.get("target")),
+                    status=_recognised(v.get("status"), _VALID_STATUS, "agree") or "agree",
+                    rationale=as_text(v.get("rationale")),
+                    caveats=_caveat_list(v.get("caveats")),
                 )
             )
-        case_caveats.extend(result.get("case_caveats", []))
+        case_caveats.extend(_caveat_list(result.get("case_caveats")))
     else:
         state.degraded = state.degraded or not ctx.llm_available()
 

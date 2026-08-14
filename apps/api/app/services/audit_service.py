@@ -229,7 +229,14 @@ class AuditService:
                 continue
             return entries
 
-        raise AssertionError("unreachable: the loop returns or raises on the final attempt")
+        # Structurally unreachable, and kept anyway: every iteration returns, re-raises on the
+        # final attempt, or continues, so no input gets here. It exists so that a future edit
+        # which does let the loop fall through fails loudly rather than returning None into a
+        # caller that iterates it. Excluded from coverage because the only "test" for it would
+        # be a lie about what the loop can do.
+        raise AssertionError(  # pragma: no cover
+            "unreachable: the loop returns or raises on the final attempt"
+        )
 
     async def list_for_patient(
         self,
