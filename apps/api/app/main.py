@@ -15,7 +15,11 @@ from fastapi.responses import JSONResponse
 from app.config import assert_production_config, settings
 from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
-from app.middleware import RequestContextMiddleware
+from app.middleware import (
+    RequestContextMiddleware,
+    apply_security_headers,
+    internal_error_response,
+)
 from app.openapi import TAGS_METADATA
 from app.routers import (
     audit,
@@ -205,41 +209,26 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        """Last-resort handler for anything not already an AetherError/RequestValidationError.
+        """Backstop for a failure that ``RequestContextMiddleware`` could not catch.
 
-        Without this, Starlette's default 500 path is plain text (inconsistent with every
-        other error response's {code, message} JSON shape) and the exception is only ever
-        visible in process stderr with no request correlation. This logs it against the
-        request id (already on every response via RequestContextMiddleware) and never leaks
-        internal exception text to the client -- an unhandled exception can easily be
-        carrying patient data in its message/args (e.g. a DB constraint error), which must
-        never reach the response body.
+        Almost every unhandled exception is turned into this same 500 by the middleware,
+        which sits inside CORSMiddleware and so produces a response the browser can actually
+        read. What is left for here is the narrow band the middleware cannot see: a failure
+        raised by CORSMiddleware itself, or by the middleware's own dispatch. Those still
+        have to answer in the ``{code, message}`` JSON shape rather than Starlette's default
+        plain text, and still have to carry the security headers — nothing about a server
+        error makes ``nosniff`` optional — so both are applied here by hand.
+
+        ``request.state.request_id`` is usually set even on this path, because the middleware
+        assigns it before doing anything that can fail.
         """
         request_id = getattr(request.state, "request_id", None)
         logger.exception("Unhandled exception (request_id=%s)", request_id)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "code": "internal_error",
-                # The request id is the only thing that connects the clinician's report to the
-                # log line above, so it goes in the body and not just the X-Request-Id header —
-                # nobody opens devtools mid-consultation. "Try again" is kept but qualified:
-                # get_db rolls the request's transaction back, so a retry is safe and no
-                # half-written clinical record is left behind, which is the clinician's real
-                # question here.
-                "message": (
-                    "This action did not complete and nothing was saved to the chart. Retrying "
-                    "is safe. If it keeps happening, report reference "
-                    f"{request_id or 'unknown'} to your administrator."
-                ),
-                "request_id": request_id,
-            },
-            # Set explicitly: RequestContextMiddleware adds this header on the way out, but an
-            # unhandled exception is caught by Starlette's ServerErrorMiddleware, which sits
-            # *outside* it — so the one response where correlation matters most was the only
-            # one shipping without the header.
-            headers={"X-Request-Id": request_id} if request_id else None,
-        )
+        response = internal_error_response(request_id)
+        if request_id:
+            response.headers["X-Request-Id"] = request_id
+        apply_security_headers(response)
+        return response
 
     app.include_router(health.router)
     for module in (

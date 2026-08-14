@@ -12,7 +12,7 @@ from fastapi import APIRouter
 
 from app.config import settings
 from app.exceptions import ValidationError
-from app.middleware import SECURITY_HEADERS
+from app.middleware import HSTS_VALUE, SECURITY_HEADERS
 
 # --- Health probes ---------------------------------------------------------------------
 
@@ -180,11 +180,14 @@ async def test_a_custom_validator_error_is_serialisable(auth_client):
     assert resp.json()["detail"]
 
 
-@pytest.mark.asyncio
-async def test_unhandled_exception_handler_returns_a_generic_500(app):
-    """The exception message here stands in for one carrying patient data — a DB constraint
-    error, say. None of it may reach the response body."""
-    from starlette.testclient import TestClient
+@pytest.fixture
+def boom_client(app, client):
+    """``client``, with a route mounted at /api/v1/_test_boom that raises.
+
+    The exception message stands in for one carrying patient data — a DB constraint error
+    quoting the offending row is the realistic case — so every test below can assert that
+    none of it escaped.
+    """
 
     router = APIRouter()
 
@@ -193,9 +196,12 @@ async def test_unhandled_exception_handler_returns_a_generic_500(app):
         raise RuntimeError("patient Ramesh Kumar failed constraint uq_patients_phone")
 
     app.include_router(router)
+    return client
 
-    with TestClient(app, raise_server_exceptions=False) as tc:
-        resp = tc.get("/api/v1/_test_boom")
+
+@pytest.mark.asyncio
+async def test_unhandled_exception_handler_returns_a_generic_500(boom_client):
+    resp = await boom_client.get("/api/v1/_test_boom")
 
     assert resp.status_code == 500
     body = resp.json()
@@ -207,6 +213,113 @@ async def test_unhandled_exception_handler_returns_a_generic_500(app):
     assert "nothing was saved" in body["message"]
     assert body["request_id"] == resp.headers["X-Request-Id"]
     assert body["request_id"] in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_500_still_carries_the_security_headers(boom_client):
+    """A server error is not an excuse to ship a response without ``nosniff``.
+
+    It regressed for a structural reason rather than an oversight: Starlette installs
+    ``ServerErrorMiddleware`` outside every user middleware, so a 500 built there never
+    passed back through ``RequestContextMiddleware`` and picked up none of its headers. The
+    error body is still a body a browser will content-sniff and still a page an attacker
+    would like to frame.
+    """
+    resp = await boom_client.get("/api/v1/_test_boom")
+
+    assert resp.status_code == 500
+    for header, value in SECURITY_HEADERS.items():
+        assert resp.headers[header] == value, header
+
+
+@pytest.mark.asyncio
+async def test_a_500_carries_hsts_in_production(boom_client, monkeypatch):
+    monkeypatch.setattr(settings, "app_env", "production")
+    resp = await boom_client.get("/api/v1/_test_boom")
+
+    assert resp.status_code == 500
+    assert resp.headers["Strict-Transport-Security"] == HSTS_VALUE
+
+
+@pytest.mark.asyncio
+async def test_a_500_echoes_a_supplied_request_id(boom_client):
+    """The reference in the body is the one the caller's own tracing already knows."""
+    resp = await boom_client.get("/api/v1/_test_boom", headers={"X-Request-Id": "trace-boom-1"})
+
+    assert resp.headers["X-Request-Id"] == "trace-boom-1"
+    assert resp.json()["request_id"] == "trace-boom-1"
+    assert "trace-boom-1" in resp.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_500_is_readable_from_the_dashboard_origin(boom_client):
+    """Without ``Access-Control-Allow-Origin`` the 500 body may as well not exist.
+
+    ``CORSMiddleware`` is also inside ``ServerErrorMiddleware``, so a 500 produced there was
+    unreadable cross-origin: the dashboard's ``fetch`` rejected before it could parse
+    ``{code, message, request_id}``, and the clinician was told the server could not be
+    reached rather than being handed the reference id the body exists to give them.
+    """
+    origin = settings.cors_origin_list[0]
+    resp = await boom_client.get("/api/v1/_test_boom", headers={"Origin": origin})
+
+    assert resp.status_code == 500
+    assert resp.headers["access-control-allow-origin"] == origin
+    # The frontend reads the correlation id off the header too, which needs it exposed.
+    assert "X-Request-Id" in resp.headers["access-control-expose-headers"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_request_is_not_reported_as_a_server_error():
+    """``CancelledError`` must pass straight through the middleware's ``except Exception``.
+
+    A clinician navigating away mid-request cancels the ASGI task, which surfaces as
+    ``CancelledError`` out of ``call_next``. Swallowing that into a 500 would log a server
+    error for every abandoned page load and bury the real ones among them.
+
+    Driven through ``dispatch`` directly rather than a route, because a route that *raises*
+    ``CancelledError`` is a different thing: ``BaseHTTPMiddleware`` turns that into
+    ``RuntimeError("No response returned.")`` before this middleware ever sees it, and it
+    genuinely is a 500.
+    """
+    import asyncio
+
+    from starlette.requests import Request
+
+    from app.middleware import RequestContextMiddleware
+
+    middleware = RequestContextMiddleware(app=None)  # type: ignore[arg-type]
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+
+    async def cancelled_call_next(_request):
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await middleware.dispatch(request, cancelled_call_next)
+
+
+@pytest.mark.asyncio
+async def test_the_outermost_backstop_handler_matches_the_middleware_contract(app):
+    """The handler in ``main`` covers what the middleware cannot see (a CORSMiddleware
+    failure, or one in dispatch itself). It is unreachable through a normal request, so it is
+    called directly — what matters is that it answers in the same shape rather than dropping
+    to Starlette's plain-text 500."""
+    from starlette.requests import Request
+
+    handler = app.exception_handlers[Exception]
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+    request.state.request_id = "trace-backstop-1"
+
+    try:
+        raise RuntimeError("patient Ramesh Kumar failed constraint uq_patients_phone")
+    except RuntimeError as exc:
+        response = await handler(request, exc)
+
+    assert response.status_code == 500
+    assert b"Ramesh" not in response.body
+    assert response.headers["X-Request-Id"] == "trace-backstop-1"
+    for header, value in SECURITY_HEADERS.items():
+        assert response.headers[header] == value, header
 
 
 def test_domain_exceptions_carry_their_own_status_and_code():

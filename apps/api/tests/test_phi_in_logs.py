@@ -69,8 +69,8 @@ def captured_logs():
 def assert_no_phi(records: list[logging.LogRecord], *, expect_traceback: bool = False) -> None:
     """Assert no sentinel appears in what the application logged.
 
-    ``expect_traceback`` covers the one deliberate exception. ``unhandled_error_handler`` calls
-    ``logger.exception`` on a genuine 500, and a traceback carries the exception's own message;
+    ``expect_traceback`` covers the one deliberate exception. The 500 path calls
+    ``logger.exception``, and a traceback carries the exception's own message;
     that is the only diagnostic an operator has for a crash, and suppressing it would trade a
     debuggable outage for an undebuggable one. The formatted messages are still swept — the
     point of this file is the *deliberate* writes (log arguments, audit payloads, the SSE
@@ -254,11 +254,13 @@ async def test_a_failed_reasoning_run_writes_only_the_exception_type_to_the_audi
     monkeypatch.setattr(rs.graph, "run_reasoning", _boom)
 
     session_id = start.json()["session"]["id"]
-    # The transport re-raises rather than returning the handler's 500; that the *body* stays
-    # clean is pinned in test_health_and_errors. What matters here is what was written on the
-    # way past — the audit row and the session's error_detail are committed before the re-raise.
-    with pytest.raises(RuntimeError):
-        await auth_client.post(f"/api/v1/reasoning/{session_id}/run")
+    # That the *body* stays clean is pinned in test_health_and_errors; it is re-checked here
+    # only because this failure is the realistic one, carrying a name in its message. What
+    # this test is actually about is what was written on the way past — the audit row and the
+    # session's error_detail, both committed before the exception reached the middleware.
+    resp = await auth_client.post(f"/api/v1/reasoning/{session_id}/run")
+    assert resp.status_code == 500
+    assert SENTINEL_NAME not in resp.text
 
     rows = (
         (await db.execute(select(AuditLog).where(AuditLog.action == "reasoning_session_failed")))

@@ -85,11 +85,17 @@ async def test_unrelated_integrity_error_is_not_reported_as_a_concurrent_approva
         "INSERT ...", {}, Exception("null value in column violates not-null")
     )
     with patch("app.services.document_service.GraphService.merge_entities", side_effect=unrelated):
-        with pytest.raises(IntegrityError):
-            await auth_client.post(
-                f"/api/v1/patients/{patient['id']}/documents/{document_id}/approve",
-                json={"corrections": [], "rejected_entity_indexes": []},
-            )
+        resp = await auth_client.post(
+            f"/api/v1/patients/{patient['id']}/documents/{document_id}/approve",
+            json={"corrections": [], "rejected_entity_indexes": []},
+        )
+
+    # A generic 500 is the honest answer: the server does not know what went wrong, and saying
+    # so beats inventing a diagnosis the clinician would act on.
+    assert resp.status_code == 500
+    assert resp.json()["code"] == "internal_error"
+    # And none of the constraint text reaches the clinician — this one names a column.
+    assert "not-null" not in resp.text
 
 
 # --------------------------------------------------------------------------------------
