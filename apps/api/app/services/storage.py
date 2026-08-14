@@ -6,6 +6,7 @@ a path and deduplication is trivial. Storage paths are never public URLs.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -24,6 +25,16 @@ _SAFE_SUFFIX = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
 
 def compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+async def compute_sha256_async(data: bytes) -> str:
+    """``compute_sha256`` off the event loop. Use this from any async caller.
+
+    Uploads are capped at ``settings.max_upload_bytes`` (20 MB), and hashing that much is tens
+    of milliseconds of pure CPU. ``hashlib`` releases the GIL for buffers over a few kilobytes,
+    so a worker thread genuinely runs it in parallel.
+    """
+    return await asyncio.to_thread(compute_sha256, data)
 
 
 def safe_suffix(file_name: str) -> str:
@@ -106,6 +117,30 @@ class LocalStorage:
             return self._confined(storage_path).exists()
         except DocumentNotFoundError:
             return False
+
+    # Every method above blocks: they stat, resolve, create directories, and move up to
+    # ``settings.max_upload_bytes`` (20 MB) of bytes to and from a disk that in production is a
+    # network volume. Called straight from an ``async def`` — which is where both of the real
+    # callers live, the upload endpoint and the original-scan download — that stops the event
+    # loop for the whole of the transfer, and the download endpoint is the one a clinician hits
+    # repeatedly while reading a chart. It is the same defect the bcrypt off-load fixed in
+    # ``core.security``, with I/O in place of CPU: one worker, one loop, one slow call holding
+    # everybody else's requests, including the SSE reasoning streams and ``/health/ready``.
+    #
+    # The sync methods stay: they are the primitives, and the ingestion scripts and tests that
+    # call them have no loop to protect. Async callers use these.
+
+    async def write_async(self, patient_id: str, sha256: str, file_name: str, data: bytes) -> str:
+        """``write`` off the event loop. Use this from any async caller."""
+        return await asyncio.to_thread(self.write, patient_id, sha256, file_name, data)
+
+    async def read_async(self, storage_path: str) -> bytes:
+        """``read`` off the event loop. Use this from any async caller."""
+        return await asyncio.to_thread(self.read, storage_path)
+
+    async def exists_async(self, storage_path: str) -> bool:
+        """``exists`` off the event loop. Use this from any async caller."""
+        return await asyncio.to_thread(self.exists, storage_path)
 
 
 def get_storage() -> LocalStorage:

@@ -284,7 +284,7 @@ async def download_file(
     """
     service = DocumentService(db)
     document = await service.get(account.id, patient_id, doc_id)
-    data = service.storage.read(document.storage_path)
+    data = await service.storage.read_async(document.storage_path)
     # Images may render inline (they are inert, and the type is magic-byte verified). A
     # user-uploaded PDF is not: the browser's PDF viewer executes embedded JavaScript, and
     # rendering it inline would run that script against this API's own origin, where the

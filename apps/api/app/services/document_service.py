@@ -33,7 +33,7 @@ from app.services.extraction import ExtractionPipeline
 from app.services.filetype import describe_unsupported, sniff_file_type
 from app.services.graph_service import GraphService
 from app.services.lab_safety_service import LabSafetyService
-from app.services.storage import compute_sha256, get_storage
+from app.services.storage import compute_sha256_async, get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,7 @@ class DocumentService:
             )
         file_type = sniff_file_type(data)
         if file_type is None:
+            digest = await compute_sha256_async(data)
             raise UnsupportedFileTypeError(
                 f"{UnsupportedFileTypeError().message} {describe_unsupported(data)}",
                 # ``detail`` is logged. It used to carry ``data[:12]!r`` — the leading bytes of
@@ -133,12 +134,10 @@ class DocumentService:
                 # the file's first twelve characters of clinical text. Length and a hash prefix
                 # identify the upload for support without reproducing any of it, and
                 # describe_unsupported already names the format for the clinician.
-                detail=(
-                    f"unrecognised magic bytes, {len(data)}B, sha256={compute_sha256(data)[:12]}"
-                ),
+                detail=f"unrecognised magic bytes, {len(data)}B, sha256={digest[:12]}",
             )
 
-        sha256 = compute_sha256(data)
+        sha256 = await compute_sha256_async(data)
 
         # Deduplicate: same bytes already uploaded for this patient.
         existing = await self.db.execute(
@@ -152,7 +151,7 @@ class DocumentService:
         if dup is not None:
             return dup
 
-        storage_path = self.storage.write(str(patient_id), sha256, file_name, data)
+        storage_path = await self.storage.write_async(str(patient_id), sha256, file_name, data)
         document = Document(
             patient_id=patient_id,
             account_id=account_id,
