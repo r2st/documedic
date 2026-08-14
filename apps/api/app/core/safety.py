@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Literal
 
+from app.core.hepatic import HepaticSeverity, assess_hepatic_severity
+
 Severity = Literal["info", "warning", "critical", "hard_block"]
 CheckType = Literal[
     "drug_interaction",
@@ -51,6 +53,7 @@ CheckType = Literal[
     "guideline_deviation",
     "unevaluated_medication",
     "unevaluated_allergy",
+    "hepatic_severity",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -173,19 +176,37 @@ class ContraindicationRule:
 class HepaticPanel:
     """The measured liver function a hepatic dose-adjustment rule can be applied to.
 
-    Two markers, in the canonical units ``app.core.lab_safety`` normalises to: total bilirubin
-    in mg/dL and ALT in U/L. Deliberately not a Child-Pugh class, which is what the hepatic
-    dosing literature is actually written against — Child-Pugh needs ascites and encephalopathy
-    graded by a clinician, neither of which is in this record as structured data, and inferring
-    a class from labs alone would be exactly the confident-wrong number this engine refuses
-    elsewhere. What is here is what the chart measures.
+    Markers only, in the canonical units ``app.core.lab_safety`` normalises to — never a class.
+    Child-Pugh, which is what the hepatic dosing literature is actually written against, needs
+    ascites and encephalopathy graded by a clinician, and neither is in this record as structured
+    data; a class asserted from labs alone would be the confident-wrong number this engine
+    refuses elsewhere. What ``app.core.hepatic`` does instead is bound the class from these
+    values and name the letters the bedside grading could still move it between.
+
+    Bilirubin and ALT drive the curated dose-adjustment thresholds. Albumin, INR and the serum
+    creatinine are the further inputs Child-Pugh and MELD need; they are carried here rather than
+    fetched separately so the whole hepatic picture comes from one read of the chart, at one
+    moment, and cannot disagree with itself.
     """
 
     bilirubin_mg_dl: float | None = None
     alt_u_l: float | None = None
+    albumin_g_dl: float | None = None
+    inr: float | None = None
+    creatinine_mg_dl: float | None = None
 
     def __bool__(self) -> bool:
-        return self.bilirubin_mg_dl is not None or self.alt_u_l is not None
+        """True when the chart measures this liver at all.
+
+        The creatinine is deliberately excluded: it is a MELD input, not a liver function test,
+        and letting it make the panel truthy would turn "no LFTs on this chart" into "LFTs
+        available" for every patient who has ever had a renal panel — which is the exact
+        false-reassurance this whole axis exists to prevent.
+        """
+        return any(
+            value is not None
+            for value in (self.bilirubin_mg_dl, self.alt_u_l, self.albumin_g_dl, self.inr)
+        )
 
 
 @dataclass(frozen=True)
@@ -864,13 +885,26 @@ def _evaluate_hepatic(
 
     action = threshold.get("action", "review")
 
-    if not ctx.hepatic:
-        # No liver panel at all. Same judgement as the renal branch: unevaluated is not the
-        # same as fine, and a warning is the honest answer where a block would be an
-        # unclearable alert on every chart without an LFT.
+    # Not "is the panel empty" but "does the chart measure anything *this rule* is written on".
+    # The panel carries five values now (the two dose-adjustment markers plus the Child-Pugh and
+    # MELD inputs), so a chart with an albumin and an INR and no bilirubin is a non-empty panel
+    # against which a bilirubin-keyed rule still cannot be evaluated — and the loop below would
+    # find nothing breached and return silence, which is this file's recurring bug rather than
+    # an answer. Asking the narrower question makes the unevaluated branch exact.
+    applicable = [
+        (key, field_name, label, unit)
+        for key, field_name, label, unit in stated
+        if getattr(ctx.hepatic, field_name) is not None
+    ]
+
+    if not applicable:
+        # Same judgement as the renal branch: unevaluated is not the same as fine, and a warning
+        # is the honest answer where a block would be an unclearable alert on every chart
+        # without an LFT.
         wanted = ", ".join(
             f"{label} above {threshold[key]} {unit}" for key, _f, label, unit in stated
         )
+        needed = " or ".join(label for _k, _f, label, _u in stated)
         return SafetyFlag(
             check_type="hepatic_dose",
             severity="warning",
@@ -878,7 +912,7 @@ def _evaluate_hepatic(
             summary=(
                 f"Hepatic check not performed for {proposed.generic_name} "
                 f"({rule.condition_name}): no liver function tests on this chart. Guidelines "
-                f"set a threshold of {wanted} (action: {action}); a current bilirubin or ALT is "
+                f"set a threshold of {wanted} (action: {action}); a current {needed} is "
                 "needed to apply it."
             ),
             details={
@@ -896,9 +930,8 @@ def _evaluate_hepatic(
     # conditions to be met together — and a marker the chart does not carry cannot breach.
     breached = [
         (label, getattr(ctx.hepatic, field_name), threshold[key], unit)
-        for key, field_name, label, unit in stated
-        if getattr(ctx.hepatic, field_name) is not None
-        and getattr(ctx.hepatic, field_name) > threshold[key]
+        for key, field_name, label, unit in applicable
+        if getattr(ctx.hepatic, field_name) > threshold[key]
     ]
     if not breached:
         return None
@@ -1105,6 +1138,99 @@ def check_unevaluated_allergies(ctx: SafetyContext) -> list[SafetyFlag]:
             details={
                 "unresolved_allergies": names,
                 "evaluated": False,
+            },
+        )
+    ]
+
+
+def hepatic_severity(ctx: SafetyContext) -> HepaticSeverity:
+    """The Child-Pugh window and MELD this chart's liver panel supports. Never raises."""
+    return assess_hepatic_severity(
+        bilirubin_mg_dl=ctx.hepatic.bilirubin_mg_dl,
+        albumin_g_dl=ctx.hepatic.albumin_g_dl,
+        inr=ctx.hepatic.inr,
+        creatinine_mg_dl=ctx.hepatic.creatinine_mg_dl,
+    )
+
+
+def check_hepatic_severity(ctx: SafetyContext) -> list[SafetyFlag]:
+    """State how severe this chart's liver disease is, when the chart establishes it.
+
+    A statement about the patient rather than about any one proposed drug, so it belongs with the
+    other chart-level flags rather than repeated under every medication.
+
+    Two things make this worth a flag at all rather than a number on a screen somewhere. The
+    first is that the curated ``hepatic_threshold`` rules cover six drugs; a chart showing a
+    decompensated liver bears on every drug that liver has to clear, including the forty-odd in
+    this vocabulary that carry no hepatic rule and therefore produce no hepatic flag. The second
+    is that "Child-Pugh B or C" is the phrase the dosing guidance for those drugs is written in,
+    and a clinician who has that phrase can look the drug up; a clinician who has a bilirubin and
+    an albumin has to do the arithmetic themselves, on a scoring system whose two remaining
+    components they are the only one who can supply.
+
+    Severity is graded by what the labs *establish*, not by the worst case they permit:
+
+    * a determinate Child-Pugh C is a ``critical`` — every point of the ungraded bedside
+      components still leaves this patient in the most impaired class;
+    * anything else computable is ``info``. It is real information and it is shown, but a
+      warning on every chart whose labs merely *permit* class C would fire on a mildly abnormal
+      panel, which is how a clinician learns to dismiss the class-C ones.
+
+    Never a hard block, in any case. A liver score is not a contraindication; the contraindication
+    rules are, and they run on the same panel.
+    """
+    severity = hepatic_severity(ctx)
+    if not severity:
+        return []
+
+    child_pugh = severity.child_pugh
+    if child_pugh is not None and child_pugh.child_pugh_class == "C":
+        summary = (
+            f"This chart's liver panel scores {child_pugh.lab_points} of the 9 available "
+            "Child-Pugh laboratory points, which places the patient in class C "
+            f"({child_pugh.min_total}–{child_pugh.max_total} of 15) whatever the ascites and "
+            "encephalopathy grading turns out to be. Guidelines for most hepatically cleared "
+            "drugs treat class C as a reason to reduce the dose or avoid the drug — worth "
+            "checking for anything prescribed here, including drugs this engine holds no "
+            "hepatic rule for."
+        )
+        flag_severity: Severity = "critical"
+    elif child_pugh is not None:
+        summary = (
+            f"This chart's liver panel scores {child_pugh.lab_points} of the 9 available "
+            f"Child-Pugh laboratory points: Child-Pugh {child_pugh.min_class} to "
+            f"{child_pugh.max_class} ({child_pugh.min_total}–{child_pugh.max_total} of 15), "
+            "narrowing to one class only once ascites and encephalopathy are graded. This "
+            "record holds neither, so the class is not asserted."
+        )
+        flag_severity = "info"
+    else:
+        missing = ", ".join(severity.missing_child_pugh)
+        summary = (
+            f"No Child-Pugh score could be computed for this chart — it carries no {missing}. "
+        )
+        flag_severity = "info"
+
+    if severity.meld is not None:
+        summary += (
+            f" MELD is {severity.meld.score}, a severity and referral index rather than a "
+            "dosing one."
+        )
+
+    return [
+        SafetyFlag(
+            check_type="hepatic_severity",
+            severity=flag_severity,
+            is_hard_block=False,
+            summary=summary.strip(),
+            details={
+                **severity.as_details(),
+                "measured": {
+                    "bilirubin_mg_dl": ctx.hepatic.bilirubin_mg_dl,
+                    "albumin_g_dl": ctx.hepatic.albumin_g_dl,
+                    "inr": ctx.hepatic.inr,
+                    "creatinine_mg_dl": ctx.hepatic.creatinine_mg_dl,
+                },
             },
         )
     ]

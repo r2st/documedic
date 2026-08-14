@@ -20,7 +20,8 @@ export type SafetyCheckType =
   | 'duplicate_therapy'
   | 'guideline_deviation'
   | 'unevaluated_medication'
-  | 'unevaluated_allergy';
+  | 'unevaluated_allergy'
+  | 'hepatic_severity';
 
 export type ReasoningStatus =
   | 'created'

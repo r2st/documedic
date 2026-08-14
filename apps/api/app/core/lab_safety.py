@@ -77,6 +77,11 @@ _RANGES: dict[str, CriticalRange] = {
     # in ``app.core.safety``, which need "this row is an ALT, in U/L" and nothing more.
     "alt": CriticalRange(unit="u/l"),
     "ast": CriticalRange(unit="u/l"),
+    # Likewise registered for its unit and not for a threshold. A low albumin is a finding over
+    # weeks, not a value anyone is telephoned about, so there is no panic band to state. What the
+    # entry buys is "this row is a serum albumin, in g/dL" for the Child-Pugh score in
+    # ``app.core.hepatic``, which cannot be computed without it.
+    "albumin": CriticalRange(unit="g/dl"),
 }
 
 # Free-text marker names (as extracted from prescriptions/lab reports) -> canonical key.
@@ -134,6 +139,16 @@ _ALIASES: dict[str, str] = {
     "sgot ast": "ast",
     "aspartate aminotransferase": "ast",
     "aspartate transaminase": "ast",
+    # Serum albumin, and only serum albumin. The lookup is exact against this table rather than
+    # a substring, which is what keeps "Urine Albumin", "Microalbumin" and "Albumin/Creatinine
+    # Ratio" out — three different analytes on three different scales, and the urine ones are
+    # the R44 trap ("a urine creatinine was computed into an eGFR") wearing a different name.
+    # Nothing is added here for them on purpose: an unrecognised marker is skipped, which is the
+    # answer, and the unit check below is a second guard rather than the only one.
+    "albumin": "albumin",
+    "serum albumin": "albumin",
+    "s albumin": "albumin",
+    "alb": "albumin",
 }
 
 # Unit conversion factors to the canonical unit in CriticalRange.unit, keyed by canonical marker.
@@ -151,6 +166,9 @@ _UNIT_CONVERSIONS: dict[str, dict[str, float]] = {
     "wbc": {"/cumm": 0.001, "cells/cumm": 0.001, "/mm3": 0.001, "cells/mm3": 0.001},
     # µmol/L -> mg/dL. ASCII key only, as for creatinine above.
     "bilirubin": {"umol/l": 1 / 17.104},
+    # g/L -> g/dL. Indian biochemistry panels print albumin in g/dL far more often, but the SI
+    # form turns up on machine-generated reports and is a plain factor of ten.
+    "albumin": {"g/l": 0.1},
 }
 
 # Spellings that mean the marker's canonical unit exactly, keyed by canonical marker. These
@@ -173,6 +191,8 @@ _UNIT_SYNONYMS: dict[str, frozenset[str]] = {
     # "U/mL" is deliberately absent: that is a thousandfold different, not a spelling.
     "alt": frozenset({"iu/l", "units/l"}),
     "ast": frozenset({"iu/l", "units/l"}),
+    # Same g/dL spellings as haemoglobin, which is printed by the same analyser on the same page.
+    "albumin": frozenset({"gm/dl", "gms/dl", "gm%", "g%"}),
 }
 
 
@@ -232,6 +252,10 @@ _UNITLESS_BANDS: dict[str, _UnitlessBands] = {
     # U/L is effectively the only scale these are printed in.
     "alt": _UnitlessBands(canonical=(1.0, 20000.0)),
     "ast": _UnitlessBands(canonical=(1.0, 20000.0)),
+    # g/dL vs g/L (x10), exactly as for haemoglobin. The two spans do not overlap, so a bare
+    # albumin is readable either way — but a bare *urine* albumin in mg/L lands squarely in the
+    # g/L span, which is a second reason the marker table above admits no urine spelling.
+    "albumin": _UnitlessBands(canonical=(0.5, 7.0), others=((10.0, 80.0),)),
 }
 
 

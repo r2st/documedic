@@ -14,6 +14,7 @@ from dataclasses import replace
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.clinical import serum_creatinine_mg_dl
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
     ContraindicationRule,
@@ -24,6 +25,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     SafetyFlag,
+    check_hepatic_severity,
     check_unevaluated_allergies,
     check_unevaluated_medications,
     evaluate_drug_safety,
@@ -346,6 +348,14 @@ class SafetyService:
                     name.like("%sgot%"),
                     name.like("%transaminase%"),
                     name.like("%aminotransferase%"),
+                    # The further Child-Pugh and MELD inputs. Loose for the same reason as the
+                    # rest: these bring in urine albumins and creatinine clearances too, and the
+                    # normalisers below are what refuse them.
+                    name.like("%albumin%"),
+                    name.like("%alb%"),
+                    name.like("%inr%"),
+                    name.like("%creatinin%"),
+                    name.like("%creat%"),
                 ),
             )
             .order_by(
@@ -355,13 +365,26 @@ class SafetyService:
             )
         )
         latest: dict[str, float] = {}
+        creatinine: float | None = None
         for marker_name, value_numeric, unit in result.all():
+            # The creatinine goes through the *serum* predicate, not the general normaliser. A
+            # urine creatinine and a creatinine clearance are different analytes on different
+            # scales, and feeding either into MELD is R44's bug ("a urine creatinine was computed
+            # into an eGFR") in a second place. First row wins here too.
+            if creatinine is None:
+                creatinine = serum_creatinine_mg_dl(marker_name, value_numeric, unit)
             canonical = canonical_lab_value(marker_name, float(value_numeric), unit)
             # First row wins: the query is already newest-first, so a later row for the same
             # marker is an older draw.
             if canonical is not None and canonical[0] not in latest:
                 latest[canonical[0]] = canonical[1]
-        return HepaticPanel(bilirubin_mg_dl=latest.get("bilirubin"), alt_u_l=latest.get("alt"))
+        return HepaticPanel(
+            bilirubin_mg_dl=latest.get("bilirubin"),
+            alt_u_l=latest.get("alt"),
+            albumin_g_dl=latest.get("albumin"),
+            inr=latest.get("inr"),
+            creatinine_mg_dl=creatinine,
+        )
 
     async def _load_interactions(self, reference_ids: set[str]) -> list[InteractionRule]:
         """Interaction rules whose *both* endpoints are drugs in play.
@@ -520,16 +543,25 @@ class SafetyService:
         return vocab, ctx, flags, check_ids
 
     async def chart_completeness_flags(self, patient_id: uuid.UUID) -> list[SafetyFlag]:
-        """The chart-level "this much of the record could not be read" flags, or nothing.
+        """The chart-level flags: what could not be read, and how impaired this liver is.
 
         Statements about the chart rather than about any one proposed drug — an unreadable
-        medication line, an allergen the vocabulary cannot identify — so ``GET ../flags`` wants
-        them once for the whole chart rather than repeated under every drug. Served from the
-        same memoised patient facts the surrounding call already built, so they cost no
-        additional query.
+        medication line, an allergen the vocabulary cannot identify, a Child-Pugh window — so
+        ``GET ../flags`` wants them once for the whole chart rather than repeated under every
+        drug. Served from the same memoised patient facts the surrounding call already built, so
+        they cost no additional query.
+
+        The hepatic severity sits here rather than in ``evaluate_drug_safety`` for that reason
+        and one more: it bears on every hepatically cleared drug, including the forty-odd in this
+        vocabulary carrying no curated hepatic rule, so attaching it to a particular drug would
+        misstate what it is about.
         """
         facts = await self._patient_facts(patient_id)
-        return check_unevaluated_medications(facts) + check_unevaluated_allergies(facts)
+        return (
+            check_unevaluated_medications(facts)
+            + check_unevaluated_allergies(facts)
+            + check_hepatic_severity(facts)
+        )
 
     async def _persist(
         self,
