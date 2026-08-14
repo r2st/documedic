@@ -390,12 +390,17 @@ def lexical_score(
         return []
     cut = settings.guideline_retrieval_threshold if threshold is None else threshold
 
+    # Chunks with no overlap at all are dropped here rather than carried through both passes:
+    # zero cannot clear the threshold, and it cannot be promoted either (``_intent_weight``
+    # requires existing evidence), so nothing downstream would ever look at them. On a corpus the
+    # size of the full ICMR spine that is most of it, on most queries.
     topical = [
-        (
-            chunk,
-            _keyword_weight(q_tokens, chunk.keyword_phrases) + len(q_tokens & chunk.body_tokens),
-        )
+        (chunk, raw)
         for chunk in chunks
+        if (
+            raw := _keyword_weight(q_tokens, chunk.keyword_phrases)
+            + len(q_tokens & chunk.body_tokens)
+        )
     ]
     confirmed = frozenset(_document_key(c) for c, raw in topical if _normalise(raw) >= cut)
 
