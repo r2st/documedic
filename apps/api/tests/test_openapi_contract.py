@@ -170,6 +170,47 @@ def test_error_helper_refuses_to_overwrite_the_generated_422():
         errors(422)
 
 
+def test_every_query_parameter_is_described(schema):
+    """A query parameter's name and type are rarely the part a caller gets wrong.
+
+    `limit` on the longitudinal record is per *section* rather than a total; `offset` on that
+    same route is applied to five collections independently; `action` on the audit trail is an
+    exact match and not a prefix. None of that is inferable from `limit: integer`, and a
+    parameter's `description` is the only place in the schema where it can be said — path and
+    body fields at least arrive with the endpoint's own prose around them.
+
+    Path parameters are deliberately excluded: they are positional and named for the resource
+    they identify (`patient_id`, `session_id`), so a description on each would be noise.
+    """
+    undescribed = [
+        f"{method.upper()} {path} ?{param['name']}"
+        for path, method, operation in _operations(schema)
+        for param in operation.get("parameters", [])
+        if param.get("in") == "query" and not param.get("description", "").strip()
+    ]
+    assert undescribed == [], undescribed
+
+
+def test_every_paginated_route_publishes_its_ceiling(schema):
+    """An unbounded `limit` is the unbounded read wearing a query parameter.
+
+    Every paging control on this API exists to stop a response scaling with how much history a
+    patient has accumulated, and a `limit` with no `maximum` hands that straight back to the
+    caller — including the caller who passes 100000 to avoid writing a paging loop. The schema
+    is where a client discovers the ceiling, so the ceiling has to be in the schema and not
+    only in the handler's signature.
+    """
+    unbounded = [
+        f"{method.upper()} {path} ?{param['name']}"
+        for path, method, operation in _operations(schema)
+        for param in operation.get("parameters", [])
+        if param.get("in") == "query"
+        and param["name"] == "limit"
+        and "maximum" not in param.get("schema", {})
+    ]
+    assert unbounded == [], unbounded
+
+
 def test_every_tag_in_use_is_described(schema):
     """A tag with no `openapi_tags` entry renders as a bare heading with no explanation of what
     the group is for."""

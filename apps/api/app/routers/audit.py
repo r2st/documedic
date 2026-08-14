@@ -32,8 +32,17 @@ async def patient_audit(
         max_length=100,
         description="Exact action name to filter by, e.g. `document_downloaded`.",
     ),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Query(
+        default=50, ge=1, le=200, description="Entries to return. Newest (highest sequence) first."
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description=(
+            "Entries to skip. The trail is append-only and `sequence` is unique per patient, "
+            "so paging never re-partitions entries already written."
+        ),
+    ),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[AuditEntryResponse]:

@@ -67,8 +67,10 @@ async def create_patient(
 )
 async def list_patients(
     request: Request,
-    limit: int = Query(default=25, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Query(
+        default=25, ge=1, le=100, description="Patients to return. Newest-updated first."
+    ),
+    offset: int = Query(default=0, ge=0, description="Patients to skip."),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[PatientSummary]:
