@@ -541,9 +541,12 @@ async def test_a_chart_built_from_many_documents_reads_back_whole_across_pages(a
     for visit in range(6):
         markers = [f"Marker{visit}{i}" for i in range(3)]
         expected.update(markers)
-        body = b"%PDF-1.4\nLABS:\n" + "".join(
-            f"{name}: {10 + i}.5 mg/dL (1.0-9.0)\n" for i, name in enumerate(markers)
-        ).encode()
+        body = (
+            b"%PDF-1.4\nLABS:\n"
+            + "".join(
+                f"{name}: {10 + i}.5 mg/dL (1.0-9.0)\n" for i, name in enumerate(markers)
+            ).encode()
+        )
         doc = (await _upload(auth_client, pid, content=body, name=f"visit{visit}.pdf")).json()
         approve = await auth_client.post(
             f"/api/v1/patients/{pid}/documents/{doc['id']}/approve",
