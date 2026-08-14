@@ -126,7 +126,9 @@ describe('SafetyPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('omits the eGFR note when renal function is unknown', async () => {
+  it('names the missing eGFR when renal function is unknown', async () => {
+    // This note used to be omitted entirely when there was no eGFR, which left the screen
+    // saying nothing where it needed to say that renal thresholds had not been applied.
     vi.mocked(api.checkDrugSafety).mockResolvedValue(
       result({
         checked_against: {
@@ -141,6 +143,7 @@ describe('SafetyPage', () => {
 
     expect(await screen.findByText(/0 current/)).toBeInTheDocument();
     expect(screen.queryByText(/eGFR available/)).not.toBeInTheDocument();
+    expect(screen.getByText(/renal thresholds were not applied/)).toBeInTheDocument();
   });
 
   it('shows the server message and no stale result when the check fails', async () => {
@@ -263,6 +266,81 @@ describe('SafetyPage retries', () => {
 
     await screen.findByRole('alert');
     expect(screen.queryByText('Ibuprofen')).not.toBeInTheDocument();
+  });
+});
+
+describe('SafetyPage coverage footnote', () => {
+  beforeEach(() => {
+    vi.mocked(api.checkDrugSafety).mockReset().mockResolvedValue(result());
+  });
+
+  it('says a missing eGFR was missing instead of showing nothing', async () => {
+    // The footnote used to render " eGFR available." when there was one and the empty string
+    // when there was not, so "renal thresholds could not be applied to this patient" and
+    // "everything was checked" looked identical on screen — an absence read as nothing at all.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        checked_against: {
+          current_medications: 3,
+          allergies: 1,
+          conditions: 2,
+          egfr_available: false,
+        },
+      }),
+    );
+    await runCheck();
+
+    expect(await screen.findByText(/No eGFR on this chart/)).toBeInTheDocument();
+    expect(screen.queryByText(/eGFR available/)).not.toBeInTheDocument();
+  });
+
+  it('does not claim a missing eGFR when one was used', async () => {
+    await runCheck();
+
+    expect(await screen.findByText(/eGFR available/)).toBeInTheDocument();
+    expect(screen.queryByText(/No eGFR on this chart/)).not.toBeInTheDocument();
+  });
+
+  it('reports medications the resolver could not read rather than shrinking the count', async () => {
+    // `current_medications` counts only what resolved, so a chart losing a line to the resolver
+    // showed a smaller number with nothing saying why. The API reports the gap separately; not
+    // rendering it put the screen back where the API was before it did.
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({
+        checked_against: {
+          current_medications: 2,
+          allergies: 0,
+          conditions: 1,
+          egfr_available: true,
+          unresolved_medications: 2,
+        },
+      }),
+    );
+    await runCheck();
+
+    expect(
+      await screen.findByText(/2 further medication\(s\).*could not be matched to a known drug/),
+    ).toBeInTheDocument();
+  });
+
+  it('stays quiet when every medication on the chart was read', async () => {
+    await runCheck();
+    await screen.findByText('Ibuprofen');
+
+    expect(screen.queryByText(/could not be matched to a known drug/)).not.toBeInTheDocument();
+  });
+
+  it('treats a missing or malformed tally as zero rather than rendering it', async () => {
+    vi.mocked(api.checkDrugSafety).mockResolvedValue(
+      result({ checked_against: { egfr_available: true, unresolved_medications: null } }),
+    );
+    await runCheck();
+
+    expect(
+      await screen.findByText(/Checked against 0 current medication\(s\)/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/undefined|null|NaN/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be matched to a known drug/)).not.toBeInTheDocument();
   });
 });
 

@@ -8,6 +8,17 @@ import type { SafetyCheckResponse } from '@/lib/types';
 import { Button, Card, ErrorBanner, LoadingBlock, Skeleton } from '@aether/ui';
 import { SafetyFlagCard } from '@/components/ui';
 
+/**
+ * One of the API's `checked_against` tallies as a number.
+ *
+ * The field is typed `Record<string, unknown>` because it is an open bag the API adds to, so a
+ * count that is absent or of an unexpected shape reads as zero rather than rendering "undefined"
+ * into a sentence about what the safety check covered.
+ */
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 export default function SafetyPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const [drug, setDrug] = useState('');
@@ -207,11 +218,25 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
               </div>
             )}
 
+            {/*
+              What the check actually ran against. Every part of this that can be *missing* has
+              to say so in words: the absence of a footnote reads as nothing at all, and the one
+              thing this screen must never imply is that a check it could not complete came back
+              clean. The API reports each gap explicitly for the same reason.
+            */}
             <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-100">
               Checked against {String(result.checked_against.current_medications ?? 0)} current
               medication(s), {String(result.checked_against.allergies ?? 0)} allergy(ies),{' '}
-              {String(result.checked_against.conditions ?? 0)} condition(s).
-              {result.checked_against.egfr_available ? ' eGFR available.' : ''}
+              {String(result.checked_against.conditions ?? 0)} condition(s).{' '}
+              {result.checked_against.egfr_available
+                ? 'eGFR available.'
+                : 'No eGFR on this chart, so renal thresholds were not applied.'}
+              {count(result.checked_against.unresolved_medications) > 0 ? (
+                <span className="mt-1 block font-medium text-amber-700">
+                  {count(result.checked_against.unresolved_medications)} further medication(s) on
+                  this chart could not be matched to a known drug and were not checked against.
+                </span>
+              ) : null}
             </div>
           </Card>
         )}
