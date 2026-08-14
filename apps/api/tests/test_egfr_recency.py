@@ -134,7 +134,9 @@ async def test_a_marker_with_no_sample_date_falls_back_to_when_it_was_computed(d
     _, patient = await _patient(db)
     now = datetime.now(UTC)
 
-    await _egfr(db, patient, value=STALE_EGFR, sample_date=None, computed_at=now - timedelta(days=2))
+    await _egfr(
+        db, patient, value=STALE_EGFR, sample_date=None, computed_at=now - timedelta(days=2)
+    )
     await _egfr(db, patient, value=CURRENT_EGFR, sample_date=None, computed_at=now)
 
     assert await SafetyService(db)._latest_egfr(patient.id) == pytest.approx(CURRENT_EGFR)
@@ -158,7 +160,9 @@ async def test_a_dated_sample_outranks_an_undated_one_computed_later(db):
         computed_at=now - timedelta(days=1),
     )
     # No sample date, and computed *before* the dated row above, so it must not win.
-    await _egfr(db, patient, value=STALE_EGFR, sample_date=None, computed_at=now - timedelta(days=3))
+    await _egfr(
+        db, patient, value=STALE_EGFR, sample_date=None, computed_at=now - timedelta(days=3)
+    )
 
     assert await SafetyService(db)._latest_egfr(patient.id) == pytest.approx(CURRENT_EGFR)
 
