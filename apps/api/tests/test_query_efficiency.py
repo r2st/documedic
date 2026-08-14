@@ -743,3 +743,72 @@ async def test_rules_are_loaded_for_every_proposed_drug_not_just_one(db):
         "the second proposed drug's contraindication rules were never loaded, so its hard "
         "blocks could not fire"
     )
+
+
+async def _screen_select_count(db, engine, patient, texts: list[str]) -> int:
+    """SELECT count for screening ``texts`` against one patient, production-shaped."""
+    with counting_queries(engine) as counter:
+        service = SafetyService(db)
+        db.expunge_all()
+        counter["statements"].clear()
+        for text in texts:
+            await service.screen_text(patient.id, text)
+        return len([s for s in counter["statements"] if s.lstrip().upper().startswith("SELECT")])
+
+
+async def test_screening_more_management_options_does_not_re_read_the_chart(db, engine):
+    """The patient half of the safety context is the same for every option screened.
+
+    ``drug_safety_check`` screens each management option the run produced, and each screen went
+    through a fresh ``_build_context`` — re-reading the current medications, the active
+    allergies, their vocabulary rows, the conditions and the latest eGFR every time, for a
+    patient whose chart cannot have changed between two options of the same run. Only the two
+    reference-rule loads legitimately depend on which drugs the option names.
+
+    This runs on the path that streams to a waiting clinician, so the growth is in front of a
+    progress spinner rather than in a batch job.
+    """
+    _account, patient = await _account_and_patient(db)
+    await _add_current_med(db, patient, "Warfarin")
+    await _add_allergy(db, patient, "Ibuprofen")
+    await _add_condition(db, patient, "Chronic Kidney Disease")
+
+    one = await _screen_select_count(db, engine, patient, ["Consider Metformin."])
+    four = await _screen_select_count(
+        db,
+        engine,
+        patient,
+        [
+            "Consider Metformin.",
+            "Consider Aspirin.",
+            "Consider Paracetamol.",
+            "Consider Enalapril.",
+        ],
+    )
+
+    # An extra option costs exactly its two reference-rule loads (interactions and
+    # contraindications for the drugs it names) and nothing else. Five reads per option of a
+    # chart that cannot have changed is the regression this pins.
+    assert four - one <= 3 * 2, (
+        f"screening 4 options cost {four} selects vs {one} for a single option — the "
+        "patient-scoped half of the safety context is being re-read per option"
+    )
+
+
+async def test_a_fresh_safety_service_sees_a_changed_chart(db, engine):
+    """The patient-facts memo lasts one unit of work, not one process.
+
+    ``_patient_facts`` caches on the service instance, which is what makes screening several
+    management options cheap. That is only sound because every construction site builds a fresh
+    service per request or per reasoning run — so a medication added after a check must be
+    visible to the next one. Pins the lifetime that assumption rests on.
+    """
+    _account, patient = await _account_and_patient(db)
+    await _add_current_med(db, patient, "Warfarin")
+
+    before = await SafetyService(db)._build_context(patient.id)
+    await _add_current_med(db, patient, "Aspirin")
+    after = await SafetyService(db)._build_context(patient.id)
+
+    assert {m.generic_name for m in before.current_meds} == {"Warfarin"}
+    assert {m.generic_name for m in after.current_meds} == {"Warfarin", "Aspirin"}

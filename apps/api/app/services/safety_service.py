@@ -44,6 +44,10 @@ class SafetyService:
         self.db = db
         self.audit = AuditService(db)
         self.resolver = DrugResolver(db)
+        # The patient-scoped half of a safety context, per patient, for this instance's
+        # lifetime. Same "one unit of work" contract as the DrugResolver above, and for the
+        # same reason -- see ``_patient_facts``.
+        self._facts: dict[uuid.UUID, SafetyContext] = {}
 
     async def _patient(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
         """Fetch a patient the caller owns, or raise PatientNotFoundError.
@@ -76,29 +80,52 @@ class SafetyService:
         a rule for a drug outside this set is a rule that cannot fire, which is how a
         contraindication for a proposed drug would go silently unloaded.
         """
-        med_rows = await self._current_medication_rows(patient_id)
-        allergy_rows = await self._active_allergy_rows(patient_id)
-        vocab_by_id = await self._vocabulary_by_id(med_rows, allergy_rows)
-
-        current_meds = await self._current_meds(med_rows, vocab_by_id)
-        allergies = await self._allergies(allergy_rows, vocab_by_id)
+        facts = await self._patient_facts(patient_id)
 
         # Reference data, scoped to the drugs this evaluation can possibly involve. Interactions
         # only fire between the proposal and a current medication, and contraindications only for
         # the proposal itself, so a full-table load is wasted I/O that grows with the corpus
         # rather than with the patient. Both predicates ride existing indexes.
-        reference_ids = {m.reference_id for m in current_meds} | {
+        reference_ids = {m.reference_id for m in facts.current_meds} | {
             ref for ref in proposed_reference_ids if ref
         }
 
-        return SafetyContext(
-            current_meds=current_meds,
-            allergies=allergies,
-            conditions=await self._conditions(patient_id),
-            egfr=await self._latest_egfr(patient_id),
+        return replace(
+            facts,
             interaction_rules=await self._load_interactions(reference_ids),
             contraindication_rules=await self._load_contraindications(reference_ids),
         )
+
+    async def _patient_facts(self, patient_id: uuid.UUID) -> SafetyContext:
+        """The patient half of a safety context: meds, allergies, conditions, eGFR.
+
+        A ``SafetyContext`` with the two rule lists left empty, memoised per patient for this
+        service instance's lifetime; :meth:`_build_context` ``replace``s the rules onto a copy.
+
+        Split out because these five reads do not depend on the drug being evaluated, while
+        ``screen_text`` is called once per management option a run produced. Every option was
+        re-reading the same current medications, active allergies, their vocabulary rows, the
+        conditions and the latest eGFR — for a chart that cannot change between two options of
+        the same run — which put five avoidable round-trips per option in front of a clinician
+        watching a progress spinner.
+
+        Memoising on the instance rather than passing the facts down is what keeps the seam:
+        every caller still asks for a whole context and cannot accidentally evaluate against a
+        half-built one. The lifetime is a request or a reasoning run (every construction site
+        builds a fresh service), which is the same contract the embedded ``DrugResolver``
+        already documents for its own caches.
+        """
+        if patient_id not in self._facts:
+            med_rows = await self._current_medication_rows(patient_id)
+            allergy_rows = await self._active_allergy_rows(patient_id)
+            vocab_by_id = await self._vocabulary_by_id(med_rows, allergy_rows)
+            self._facts[patient_id] = SafetyContext(
+                current_meds=await self._current_meds(med_rows, vocab_by_id),
+                allergies=await self._allergies(allergy_rows, vocab_by_id),
+                conditions=await self._conditions(patient_id),
+                egfr=await self._latest_egfr(patient_id),
+            )
+        return self._facts[patient_id]
 
     async def _current_medication_rows(self, patient_id: uuid.UUID) -> list[MedicationEvent]:
         result = await self.db.execute(
