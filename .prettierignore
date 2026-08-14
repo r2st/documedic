@@ -1,0 +1,20 @@
+# Build output, dependencies and generated reports — not source.
+node_modules/
+**/node_modules/
+**/.next/
+**/.turbo/
+**/coverage/
+**/dist/
+**/*.tsbuildinfo
+apps/web/next-env.d.ts
+apps/web/public/
+storage/
+data/
+keys/
+*.patch
+
+# Prose. Prettier reflows Markdown tables and paragraph wrapping, which fights the hand
+# alignment these were written with — a large diff that changes no meaning. The formatter is
+# here for code.
+*.md
+**/*.md

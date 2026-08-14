@@ -6,11 +6,11 @@ services:
       POSTGRES_PASSWORD: aether
       POSTGRES_DB: aether_clinician
     ports:
-      - "5432:5432"
+      - '5432:5432'
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aether -d aether_clinician"]
+      test: ['CMD-SHELL', 'pg_isready -U aether -d aether_clinician']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -18,9 +18,9 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - '6379:6379'
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -28,7 +28,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.9.0
     ports:
-      - "6333:6333"
+      - '6333:6333'
     volumes:
       - qdrant_data:/qdrant/storage
 
@@ -39,8 +39,8 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - '9000:9000'
+      - '9001:9001'
     volumes:
       - minio_data:/data
 
@@ -55,9 +55,9 @@ services:
       S3_ENDPOINT_URL: http://minio:9000
       APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-insecure-secret-change-me}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      DEMO_MODE: "true"
+      DEMO_MODE: 'true'
     ports:
-      - "8000:8000"
+      - '8000:8000'
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,9 +70,9 @@ services:
       dockerfile: apps/web/Dockerfile
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
-      NEXT_PUBLIC_DEMO_MODE: "true"
+      NEXT_PUBLIC_DEMO_MODE: 'true'
     ports:
-      - "3000:3000"
+      - '3000:3000'
     depends_on:
       - api
 

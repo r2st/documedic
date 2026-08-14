@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const APP_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(APP_ROOT, '../..');
 
 describe('prettier configuration', () => {
   it('resolves a source file to the shared config rather than Prettier defaults', async () => {
@@ -23,6 +24,23 @@ describe('prettier configuration', () => {
     const resolved = await prettier.resolveConfig(path.join(APP_ROOT, 'src/lib/api.ts'));
 
     expect(resolved).toEqual(shared);
+  });
+
+  it('covers workspaces that have no config of their own', async () => {
+    // The root config is what reaches packages/config and packages/shared-types — neither has
+    // a `.prettierrc`, and neither has a `format` script for turbo to run, so a per-workspace
+    // arrangement would leave exactly the two workspaces that had already drifted uncovered.
+    const prettier = require('prettier');
+    const shared = require('@aether/config/prettier');
+
+    for (const relative of [
+      'packages/shared-types/src/enums.ts',
+      'packages/config/eslint/index.js',
+      'packages/ui/src/index.ts',
+    ]) {
+      const resolved = await prettier.resolveConfig(path.join(REPO_ROOT, relative));
+      expect(resolved, `${relative} should resolve the shared config`).toEqual(shared);
+    }
   });
 
   it('pins the settings the tree is formatted to', () => {
