@@ -56,6 +56,16 @@ def chunk_text(text: str, max_tokens: int = _MAX_CHUNK_TOKENS) -> list[str]:
     return chunks
 
 
+def _text(value: object) -> str:
+    """A trimmed string, or ``""`` for anything that is not one.
+
+    The corpus is hand-curated JSON, so every field is as likely to be the wrong *type* as to
+    be missing — ``"content"`` written as a list of paragraphs is the obvious one — and
+    ``(value or "").strip()`` raises on all of those rather than rejecting them.
+    """
+    return value.strip() if isinstance(value, str) else ""
+
+
 def load_corpus(path: Path | None = None) -> list[dict]:
     """Flatten the curated corpus into chunk records (without corpus_version).
 
@@ -63,6 +73,14 @@ def load_corpus(path: Path | None = None) -> list[dict]:
     CHECK constraint, and a typo'd source in a hand-curated JSON file would otherwise abort
     the whole ingest with an opaque IntegrityError halfway through. Malformed documents and
     sections are skipped with a warning so one bad entry cannot block the rest of the corpus.
+
+    That last guarantee is enforced by *type*, not only by presence. This walks a hand-edited
+    JSON file, and only two shapes used to be checked: a file whose top level was an object
+    rather than an array iterated its keys and made ``doc.get`` an AttributeError, and a section
+    whose ``content`` was written as a list of paragraphs made ``.strip()`` one. Neither is
+    caught by the ``json.JSONDecodeError`` handler above -- the file parses fine, it is simply
+    shaped differently -- and ``ingest`` runs from ``app.db.seed``, so a single mis-shaped
+    corpus file failed startup seeding rather than one document.
     """
     chunks: list[dict] = []
     files = [path] if path else sorted(GUIDELINES_DIR.glob("*.json"))
@@ -74,7 +92,21 @@ def load_corpus(path: Path | None = None) -> list[dict]:
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Skipping unreadable guideline file %s: %s", file.name, exc)
             continue
+        if not isinstance(docs, list):
+            logger.warning(
+                "Skipping guideline file %s: expected a list of documents, found %s",
+                file.name,
+                type(docs).__name__,
+            )
+            continue
         for doc in docs:
+            if not isinstance(doc, dict):
+                logger.warning(
+                    "Skipping entry in %s: expected a document object, found %s",
+                    file.name,
+                    type(doc).__name__,
+                )
+                continue
             source = doc.get("source")
             if source not in ALLOWED_SOURCES:
                 logger.warning(
@@ -85,33 +117,54 @@ def load_corpus(path: Path | None = None) -> list[dict]:
                     ", ".join(sorted(ALLOWED_SOURCES)),
                 )
                 continue
-            if not doc.get("document_title"):
+            title = _text(doc.get("document_title"))
+            if not title:
                 logger.warning("Skipping guideline document in %s: no document_title", file.name)
                 continue
-            for section in doc.get("sections", []):
-                if not section.get("section_id") or not (section.get("content") or "").strip():
+            sections = doc.get("sections")
+            for section in sections if isinstance(sections, list) else []:
+                if not isinstance(section, dict):
+                    logger.warning(
+                        "Skipping section in %s (%r): expected an object, found %s",
+                        file.name,
+                        title,
+                        type(section).__name__,
+                    )
+                    continue
+                # ``section_id`` is the citation. A non-string one reached a String column and,
+                # worse, is what every management option cites back — so it has to be a string
+                # here rather than whatever ``f"{...}"`` would make of it downstream.
+                base_id = _text(section.get("section_id"))
+                content = _text(section.get("content"))
+                if not base_id or not content:
                     logger.warning(
                         "Skipping section %r in %s: section_id and content are both required",
                         section.get("section_id"),
                         file.name,
                     )
                     continue
-                pieces = chunk_text(section["content"])
+                keywords = section.get("keywords")
+                # A bare string here is one keyword, not a list of letters -- which is what
+                # iterating it downstream in ``RetrievableChunk.of`` would have made of it,
+                # silently degrading every lexical match against this section.
+                if isinstance(keywords, str):
+                    keywords = [keywords]
+                elif isinstance(keywords, (list | tuple)):
+                    keywords = [k.strip() for k in keywords if isinstance(k, str) and k.strip()]
+                else:
+                    keywords = []
+                pieces = chunk_text(content)
                 for i, piece in enumerate(pieces):
-                    section_id = (
-                        section["section_id"]
-                        if len(pieces) == 1
-                        else f"{section['section_id']}-{i + 1}"
-                    )
+                    section_id = base_id if len(pieces) == 1 else f"{base_id}-{i + 1}"
                     chunks.append(
                         {
-                            "source": doc["source"],
-                            "document_title": doc["document_title"],
-                            "page_range": doc.get("page_range"),
+                            "source": source,
+                            "document_title": title,
+                            "page_range": _text(doc.get("page_range")) or None,
                             "section_id": section_id,
-                            "heading": section.get("heading"),
+                            "heading": _text(section.get("heading")) or None,
                             "content": piece,
-                            "keywords": section.get("keywords", []),
+                            "keywords": keywords,
                             "token_estimate": _token_estimate(piece),
                         }
                     )
