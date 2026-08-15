@@ -111,7 +111,7 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-class StderrHandler(logging.StreamHandler):
+class StderrHandler(logging.StreamHandler[TextIO]):
     """A stream handler that resolves ``sys.stderr`` when it writes, not when it is built.
 
     ``logging.StreamHandler(sys.stderr)`` captures the stream object, which is wrong wherever
@@ -120,18 +120,23 @@ class StderrHandler(logging.StreamHandler):
     a capture buffer that has since been closed, which logging reports as a handler error on a
     line that has nothing to do with the test that failed. Late binding is what the standard
     library's own last-resort handler does, for the same reason.
+
+    The rebinding happens in :meth:`emit` rather than through a ``stream`` property, because
+    ``StreamHandler.stream`` is a plain attribute that ``setStream`` assigns to: shadowing it
+    with a read-only property is a Liskov violation both mypy and pyright reject, and one that
+    would silently do nothing on any call the standard library makes to ``setStream``. Setting
+    the real attribute immediately before the base class reads it gets the same late binding
+    with the class's own contract intact.
     """
 
     def __init__(self) -> None:
-        logging.Handler.__init__(self)
+        super().__init__(sys.stderr)
 
-    @property
-    def stream(self) -> TextIO:
-        return sys.stderr
-
-    @stream.setter
-    def stream(self, value: TextIO) -> None:
-        """Ignored. ``StreamHandler.__init__`` and ``setStream`` both assign here."""
+    def emit(self, record: logging.LogRecord) -> None:
+        # Under the handler lock that ``Handler.handle`` already holds, so this cannot race a
+        # concurrent emit through the same handler.
+        self.stream = sys.stderr
+        super().emit(record)
 
 
 def build_handler(log_format: str) -> logging.Handler:
