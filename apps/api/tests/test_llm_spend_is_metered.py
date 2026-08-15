@@ -75,6 +75,15 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("PATCH", "/api/v1/patients/{patient_id}"): DETERMINISTIC,
     ("DELETE", "/api/v1/patients/{patient_id}"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/record"): DETERMINISTIC,
+    # --- encounters. Chart writes and paged chart reads: a row read, a row written, no model
+    # in the path. Deliberately unmetered like the rest of the chart — a clinician must always
+    # be able to open a visit and sign the note they just wrote.
+    ("GET", "/api/v1/patients/{patient_id}/encounters"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/encounters"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/encounters/{encounter_id}"): DETERMINISTIC,
+    ("PATCH", "/api/v1/patients/{patient_id}/encounters/{encounter_id}"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/sign"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/amend"): DETERMINISTIC,
     # The FHIR export reads the graph and nothing else — no LLM, so it works offline like every
     # other chart read. It is metered all the same: it is the one read that is deliberately
     # unpaged, so it is both the most expensive and the bulk-disclosure surface.

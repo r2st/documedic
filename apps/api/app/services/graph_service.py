@@ -810,6 +810,16 @@ class GraphService:
                     clinician_notes=fields.get("clinician_notes"),
                     extraction_region=region,
                     extraction_confidence=confidence,
+                    # ``draft``, stated rather than left to the column default, because the
+                    # alternative is tempting and wrong. Approving an extraction *is* a
+                    # deliberate clinician act, so it looks as though the visit it charts
+                    # arrives already attested to — but what the clinician approved is that the
+                    # scan was transcribed correctly, not that they were present at the
+                    # consultation and stand behind the note. Recording the two as one act
+                    # would put a signature on the chart that nobody gave, and freeze the row
+                    # (see ``trg_encounters_signed_frozen``) so the transcription could never
+                    # be corrected in place afterwards.
+                    status="draft",
                 )
             )
         )

@@ -541,6 +541,19 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
         "truncated_sections",
         "characters_dropped",
     },
+    # --- encounters. ``status`` is one of four lifecycle words from a closed vocabulary
+    # (ck_encounters_status); ``fields`` is the *names* of the columns an edit touched, never
+    # what they now say. The two id keys are the amendment link, which is the fact the trail has
+    # to carry: which visit stopped being current, and which encounter replaced it. The
+    # amendment's *reason* is deliberately absent — it is clinician-written prose about the
+    # patient, and it lives on the encounter row, which is where a reader of the chart finds it.
+    "encounter_created": {"status"},
+    "encounter_updated": {"status", "fields"},
+    "encounter_signed": {"status", "amends_encounter_id"},
+    "encounter_amendment_opened": {"status", "amends_encounter_id"},
+    "encounter_amended": {"status", "amended_by_encounter_id"},
+    "encounter_viewed": set(),
+    "encounter_list_viewed": {"returned", "total"},
     # --- documents. No file_name anywhere: uploads are named after the patient.
     "document_uploaded": {"file_type", "sha256"},
     "document_list_viewed": {"document_count"},

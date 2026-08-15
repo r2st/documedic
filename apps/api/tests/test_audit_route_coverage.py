@@ -64,6 +64,19 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
     # or an access log; it reads rather than writes, and the disclosure it makes is of the
     # matching charts.
     ("POST", "/api/v1/patients/search"): ("patient_viewed",),
+    # --- Encounters. Signing is the entry that has to exist: it is the moment a clinician
+    # attested to a visit note, after which the row can never change. ``sign`` also writes
+    # ``encounter_amended`` against the *superseded* encounter when what was signed is an
+    # amendment, which is why that route declares two.
+    ("POST", "/api/v1/patients/{patient_id}/encounters"): ("encounter_created",),
+    ("PATCH", "/api/v1/patients/{patient_id}/encounters/{encounter_id}"): ("encounter_updated",),
+    ("POST", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/sign"): (
+        "encounter_signed",
+        "encounter_amended",
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/amend"): (
+        "encounter_amendment_opened",
+    ),
     # --- Documents.
     ("POST", "/api/v1/patients/{patient_id}/documents"): ("document_uploaded",),
     ("POST", "/api/v1/patients/{patient_id}/documents/{doc_id}/extraction/retry"): (

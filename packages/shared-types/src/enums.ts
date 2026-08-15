@@ -8,6 +8,11 @@ export type ExtractionConfidence = 'high' | 'medium' | 'low';
 
 export type SafetySeverity = 'info' | 'warning' | 'critical' | 'hard_block';
 
+// Lifecycle of a clinical encounter. 'amended' is not a fourth kind of edit: it is what a
+// *signed* encounter becomes once a signed amendment supersedes it. Neither row's content
+// changes — the correction is a new encounter carrying amendsEncounterId and a reason.
+export type EncounterStatus = 'draft' | 'in_progress' | 'signed' | 'amended';
+
 // Mirrors app.core.safety.CheckType. The last two are not conflicts the engine found but
 // statements that part of the chart could not be evaluated at all — an unreadable medication
 // line, an allergen the vocabulary cannot identify — which must never render as a clean check.

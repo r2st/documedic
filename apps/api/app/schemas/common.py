@@ -30,6 +30,19 @@ class ExtractionConfidence(StrEnum):
     low = "low"  # < 0.50
 
 
+class EncounterStatus(StrEnum):
+    """Lifecycle of a clinical encounter. See app/models/encounter.py for what each state means.
+
+    ``amended`` is not a fifth kind of edit: it is what a *signed* encounter becomes once a
+    signed amendment supersedes it. The content of both rows stays exactly as attested.
+    """
+
+    draft = "draft"
+    in_progress = "in_progress"
+    signed = "signed"
+    amended = "amended"
+
+
 class SafetySeverity(StrEnum):
     info = "info"
     warning = "warning"

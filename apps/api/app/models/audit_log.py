@@ -53,6 +53,19 @@ AUDIT_ACTIONS = (
     "patient_created",
     "patient_updated",
     "patient_deleted",
+    # The encounter lifecycle. ``encounter_signed`` is the one that matters most: it is the
+    # moment a clinician attested to a visit note, and from then on the row's content cannot
+    # change. ``encounter_amended`` is written against the *superseded* encounter — the original
+    # — so a reader walking one visit's trail sees that it stopped being current and which
+    # encounter replaced it, without having to scan the whole chart for a row pointing back.
+    # ``encounter_amendment_opened`` is separate from both because drafting a correction and
+    # publishing it are different acts, days apart, and a draft that is never signed changes
+    # nothing about the record.
+    "encounter_created",
+    "encounter_updated",
+    "encounter_signed",
+    "encounter_amendment_opened",
+    "encounter_amended",
     "document_uploaded",
     "extraction_completed",
     "extraction_failed",
@@ -87,6 +100,10 @@ AUDIT_ACTIONS = (
     # records one of these, so the trail answers "who saw this" and not only "who changed it".
     "patient_viewed",
     "patient_record_viewed",
+    # The encounter reads. Both return presenting complaints and consultation notes, which is
+    # clinical content, so both are disclosures in the sense this list means.
+    "encounter_viewed",
+    "encounter_list_viewed",
     # The widest disclosure this API performs: the whole chart, in one file, leaving the system.
     "patient_record_exported",
     "document_downloaded",

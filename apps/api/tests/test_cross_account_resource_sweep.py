@@ -160,6 +160,66 @@ async def test_the_stolen_document_id_is_not_merely_unroutable(auth_client):
     )
 
 
+# --- Encounters --------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_encounter_route_reaches_another_accounts_visit_through_your_own_chart(
+    app, auth_client, second_auth_client
+):
+    """The document attack, on the resource that holds the consultation note itself.
+
+    An encounter carries the presenting complaint and the clinician's notes. If the
+    ``{encounter_id}`` lookup were filtered by the encounter's own id alone, an account with any
+    chart of its own could read — and, worse, *sign or amend* — a visit on somebody else's.
+    Writing is the sharper half here: a stolen encounter id on a POST would attest to another
+    clinician's note under this account's name, and the signature is permanent.
+    """
+    victim = await create_patient(auth_client)
+    opened = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/encounters",
+        json={"encounter_date": "2026-08-14", "clinician_notes": "Victim's consultation note"},
+    )
+    assert opened.status_code == 201, opened.text
+    stolen_encounter_id = opened.json()["id"]
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{encounter_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{patient_id}", attacker["id"]).replace(
+            "{encounter_id}", stolen_encounter_id
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the encounter sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's encounter was reachable: " + "; ".join(leaked)
+
+
+@pytest.mark.asyncio
+async def test_the_stolen_encounter_id_is_not_merely_unroutable(auth_client):
+    """Guard the guard, as for the document sweep above."""
+    patient = await create_patient(auth_client)
+    opened = await auth_client.post(
+        f"/api/v1/patients/{patient['id']}/encounters",
+        json={"encounter_date": "2026-08-14"},
+    )
+    assert opened.status_code == 201, opened.text
+
+    owner_view = await auth_client.get(
+        f"/api/v1/patients/{patient['id']}/encounters/{opened.json()['id']}"
+    )
+    assert owner_view.status_code == 200, (
+        "the owner cannot read the encounter the sweep tries to steal, so the sweep was asking "
+        f"for something unreadable: {owner_view.text}"
+    )
+
+
 # --- Reasoning sessions ------------------------------------------------------------------------
 
 
@@ -322,7 +382,7 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
     So the parameters are enumerated from the routes and checked against what is claimed here.
     A new one fails this test, and the fix is a sweep for it rather than an entry in the list.
     """
-    swept = {"patient_id", "doc_id", "session_id", "suggestion_id", "run_id"}
+    swept = {"patient_id", "doc_id", "encounter_id", "session_id", "suggestion_id", "run_id"}
     # Not a resource id: the pathway routes take a condition *name*, which is a lookup into the
     # shared guideline corpus and is not scoped to an account at all.
     not_a_resource = {"condition_name"}

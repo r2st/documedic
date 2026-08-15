@@ -69,6 +69,12 @@ class DocumentNotFoundError(NotFoundError):
     code = "document_not_found"
 
 
+class EncounterNotFoundError(NotFoundError):
+    """That visit is not on this chart. Open the encounter list to see what is."""
+
+    code = "encounter_not_found"
+
+
 class PathwayNotFoundError(NotFoundError):
     """No curated clinical pathway covers this condition yet — the guideline corpus has none
     for it. The differential and drug-safety checks are unaffected."""
@@ -473,6 +479,59 @@ class EntityNotMergeableError(ValidationError):
     """
 
     code = "entity_not_mergeable"
+
+
+class EncounterSignedError(ConflictError):
+    """This visit has been signed, so its content can no longer be edited. Record an amendment
+    instead — it keeps the signed note and adds your correction alongside it, with your reason.
+
+    The signature is the point at which a clinician attested to what the note says, and a record
+    that can be rewritten silently afterwards cannot support the question an amendment exists to
+    answer: what did the chart say at the time the decision was made. So the edit is refused
+    here, in ``EncounterService``, *and* by ``trg_encounters_signed_frozen`` on the encounter
+    table (migration 0031) — the same belt-and-braces the immutable ``clinical_suggestions`` and
+    ``drug_safety_overrides`` tables get, and for the same reason: a future writer that has not
+    read this docstring must not be able to do it either.
+
+    Not a 403. The caller is entitled to this chart; the record is in a state that does not
+    admit the change, which is what 409 means.
+    """
+
+    code = "encounter_signed"
+
+
+class EncounterTransitionError(ConflictError):
+    """That is not a step this visit can take from where it is. Reload the encounter to see its
+    current state.
+
+    The lifecycle runs draft -> in_progress -> signed, and a signed encounter is superseded by
+    an amendment rather than moved backwards. Every refused step is one of:
+
+    * signing an encounter that is already signed — the second signature would either overwrite
+      the first attestation's timestamp and signer, or record two people attesting to one note
+      with no way to tell which the chart means;
+    * moving a signed or amended encounter back to a draft state, which would take a clinical
+      statement that has been attested to and quietly make it editable again;
+    * amending an encounter nobody has signed. There is nothing to preserve, so the correction
+      belongs in the draft itself — an amendment chain over unsigned drafts is a second history
+      that says nothing the first does not.
+    """
+
+    code = "encounter_transition"
+
+
+class EncounterAlreadyAmendedError(ConflictError):
+    """Another amendment to this visit was signed first, so this one was not recorded. Reload
+    the chart and amend the current version of the note.
+
+    Raised when ``uq_encounters_one_signed_amendment`` refuses the second signed amendment of
+    one encounter. Two clinicians may both open an amendment — that is ordinary, and drafts are
+    deliberately unconstrained — but only one can become the successor, because "the current
+    version of this visit" has to be a question the chart can answer. The losing amendment's
+    text is still there as a draft; nothing the clinician typed is destroyed.
+    """
+
+    code = "encounter_already_amended"
 
 
 class HardBlockError(AetherError):

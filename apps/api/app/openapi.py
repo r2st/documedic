@@ -141,6 +141,17 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "encounters",
+        "description": (
+            "The visit lifecycle: draft, in progress, signed, amended. Signing freezes a "
+            "visit's content permanently — it is refused by the database as well as by the "
+            "API — so a correction to a signed note is a new encounter that names the one it "
+            "supersedes and records why. Visits charted from an approved document arrive as "
+            "drafts: approving an extraction confirms a transcription, it is not a clinician "
+            "attesting to the consultation."
+        ),
+    },
+    {
         "name": "records",
         "description": (
             "The assembled longitudinal record and the deterministic critical-lab check. Both "
