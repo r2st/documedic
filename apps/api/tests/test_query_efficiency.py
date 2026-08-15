@@ -300,6 +300,17 @@ _SCALING_ENDPOINTS = [
     ("drug_safety_overrides", "/api/v1/patients/{pid}/drug-safety/overrides"),
     ("pathways", "/api/v1/patients/{pid}/pathways"),
     ("audit", "/api/v1/patients/{pid}/audit"),
+    # The FHIR export. Absent from this matrix until now, and the one read here with no page
+    # limit at all: it assembles every section of the chart into one bundle by design (a short
+    # export that does not admit it is worse than no export). A per-row query on this path would
+    # therefore be unbounded rather than bounded by a page, which makes it the endpoint where an
+    # N+1 costs the most and the one that had no guard.
+    ("fhir_export", "/api/v1/patients/{pid}/export"),
+    # The deterministic panic-value screen. Offline by construction (Critical Safety Rule #8),
+    # runs on every call with no caching, and reads the patient's latest labs — so a per-lab
+    # query here would put the growth on the safety path that must stay fast when everything
+    # else is degraded.
+    ("critical_lab_flags", "/api/v1/patients/{pid}/labs/critical-flags"),
 ]
 
 
@@ -812,3 +823,250 @@ async def test_a_fresh_safety_service_sees_a_changed_chart(db, engine):
 
     assert {m.generic_name for m in before.current_meds} == {"Warfarin"}
     assert {m.generic_name for m in after.current_meds} == {"Warfarin", "Aspirin"}
+
+
+# ------------------------------------------------------------------------------------------
+# Collection-size flatness.
+#
+# Everything above scales one patient's *record* and holds the collection at one row. That is
+# the growth an individual chart drives, and it is not the growth a list endpoint has. A list
+# read whose per-item cost is a query looks perfectly flat under the matrix above — the patient
+# whose record grew is still one row in it — and degrades with how long the deployment has been
+# in service instead. These measure the other axis: same record, more rows in the list.
+# ------------------------------------------------------------------------------------------
+
+
+async def _account_id(db) -> uuid.UUID:
+    from sqlalchemy import select as _select
+
+    return (await db.execute(_select(Account.id))).scalars().first()
+
+
+async def test_patient_list_query_count_is_flat_in_the_number_of_patients(db, auth_client, engine):
+    """A clinician's panel grows for years; the list read must not grow with it.
+
+    The record-size matrix cannot see this: it pages one patient's rows and leaves the account
+    holding a handful of charts, so a per-patient query in the list would have been measured as
+    flat throughout.
+    """
+    counts = []
+    for target in (2, 12):
+        while len((await auth_client.get("/api/v1/patients?limit=100")).json()["items"]) < target:
+            await create_patient(auth_client, full_name=f"panel-{uuid.uuid4().hex[:8]}")
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get("/api/v1/patients?limit=100")
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()["items"]) >= target
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"listing 2 patients cost {counts[0]} queries and listing 12 cost {counts[1]} — the "
+        "patient list is querying per row"
+    )
+
+
+async def test_patient_search_query_count_is_flat_in_the_number_of_patients(
+    db, auth_client, engine
+):
+    """Search decrypts and filters in Python, which must stay one read of the panel.
+
+    ``full_name`` and ``phone`` are non-deterministic ciphertext, so search cannot be a SQL
+    ``ILIKE`` and loads the account's patients to filter after decryption. That design makes a
+    per-row query especially easy to add by accident and especially invisible: the decryption
+    loop is already the expensive part.
+    """
+
+    async def _matches() -> int:
+        resp = await auth_client.post("/api/v1/patients/search", json={"search": "seek-"})
+        return int(resp.json()["pagination"]["total"])
+
+    counts = []
+    for target in (2, 12):
+        while await _matches() < target:
+            await create_patient(auth_client, full_name=f"seek-{uuid.uuid4().hex[:8]}")
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.post("/api/v1/patients/search", json={"search": "seek-"})
+        assert resp.status_code == 200, resp.text
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"searching a 2-patient panel cost {counts[0]} queries and a 12-patient panel "
+        f"{counts[1]} — the decrypt-and-filter loop is issuing a query per patient"
+    )
+
+
+async def test_document_list_query_count_is_flat_in_the_number_of_documents(
+    db, auth_client, engine
+):
+    """The chart's document list also closes out stalled extractions; that must stay batched.
+
+    Opening the chart is what reclaims documents whose extraction was interrupted, so this read
+    does more than select rows — which is exactly the kind of per-item work that turns into a
+    query per document without anyone meaning it to.
+    """
+    from app.models.document import Document
+
+    account_id = await _account_id(db)
+    counts = []
+    for n in (1, 10):
+        patient = await create_patient(auth_client, full_name=f"doclist-{n}")
+        for i in range(n):
+            db.add(
+                Document(
+                    patient_id=uuid.UUID(patient["id"]),
+                    account_id=account_id,
+                    file_name=f"doc{i}.pdf",
+                    file_type="pdf",
+                    file_size_bytes=10,
+                    storage_path=f"/tmp/doclist-{n}-{i}.pdf",
+                    storage_hash_sha256=uuid.uuid4().hex * 2,
+                    extraction_status="completed",
+                )
+            )
+        await db.commit()
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get(f"/api/v1/patients/{patient['id']}/documents")
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()) == n
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"listing 1 document cost {counts[0]} queries and listing 10 cost {counts[1]}"
+    )
+
+
+async def test_safety_report_register_query_count_is_flat_in_the_number_of_reports(
+    db, auth_client, engine
+):
+    """The adverse-event register is append-only and unpaged; a per-row query is unbounded."""
+    from app.models.validation import SafetyReport
+
+    account_id = await _account_id(db)
+    counts = []
+    for n in (1, 10):
+        for i in range(n):
+            db.add(
+                SafetyReport(
+                    account_id=account_id,
+                    category="near_miss",
+                    severity="near_miss",
+                    description=f"register row {i}",
+                )
+            )
+        await db.commit()
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get("/api/v1/safety-reports")
+        assert resp.status_code == 200, resp.text
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"a register of 1 report cost {counts[0]} queries and one of 11 cost {counts[1]}"
+    )
+
+
+async def test_validation_run_list_query_count_is_flat_in_the_number_of_runs(
+    db, auth_client, engine
+):
+    """The SaMD evidence trail: also append-only, also unpaged, also never pruned."""
+    from app.models.validation import ValidationRun
+
+    account_id = await _account_id(db)
+    counts = []
+    for n in (1, 10):
+        for i in range(n):
+            db.add(ValidationRun(account_id=account_id, vignette_count=1, notes=f"run {i}"))
+        await db.commit()
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get("/api/v1/validation/runs")
+        assert resp.status_code == 200, resp.text
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"listing 1 validation run cost {counts[0]} queries and listing 11 cost {counts[1]}"
+    )
+
+
+# ------------------------------------------------------------------------------------------
+# Session-scoped flatness.
+#
+# A reasoning session's output is the third axis, independent of both the chart's size and the
+# account's. One run emits a suggestion per differential, per can't-miss diagnosis, per
+# investigation and per management option, and these two endpoints are what the Reasoning
+# Theatre reads back — including the dissent, which must never be filtered out, so the count
+# is not something the UI can trim its way out of.
+# ------------------------------------------------------------------------------------------
+
+
+async def _completed_session(db, auth_client, label: str, *, output_type: str, n: int):
+    from app.models.clinical_suggestion import ClinicalSuggestion
+    from app.models.reasoning_session import ReasoningSession
+
+    account_id = await _account_id(db)
+    patient = await create_patient(auth_client, full_name=label)
+    session = ReasoningSession(
+        patient_id=uuid.UUID(patient["id"]),
+        account_id=account_id,
+        presenting_complaint="chest pain for two days",
+        status="completed",
+    )
+    db.add(session)
+    await db.flush()
+    for i in range(n):
+        db.add(
+            ClinicalSuggestion(
+                session_id=session.id,
+                patient_id=uuid.UUID(patient["id"]),
+                output_type=output_type,
+                title=f"{output_type} {i}",
+                body="Guidelines support considering this.",
+                autonomy_tier="suggestive",
+            )
+        )
+    await db.commit()
+    return session
+
+
+async def test_suggestion_list_query_count_is_flat_in_the_number_of_suggestions(
+    db, auth_client, engine
+):
+    counts = []
+    for n in (1, 12):
+        session = await _completed_session(
+            db, auth_client, f"sugg-{n}", output_type="differential", n=n
+        )
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get(f"/api/v1/reasoning/{session.id}/suggestions")
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()) == n
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"reading back 1 suggestion cost {counts[0]} queries and 12 cost {counts[1]} — the "
+        "Reasoning Theatre's result read is querying per suggestion"
+    )
+
+
+async def test_management_option_list_query_count_is_flat_in_the_number_of_options(
+    db, auth_client, engine
+):
+    """Management options carry citations and safety screening, so they are the likelier one."""
+    counts = []
+    for n in (1, 12):
+        session = await _completed_session(
+            db, auth_client, f"mgmt-{n}", output_type="management", n=n
+        )
+        db.expunge_all()
+        with counting_queries(engine) as counter:
+            resp = await auth_client.get(f"/api/v1/reasoning/{session.id}/management-options")
+        assert resp.status_code == 200, resp.text
+        counts.append(counter["n"])
+
+    assert counts[0] == counts[1], (
+        f"reading back 1 management option cost {counts[0]} queries and 12 cost {counts[1]}"
+    )

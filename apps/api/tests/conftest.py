@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.agents.circuit import breaker as llm_circuit_breaker
 from app.db import session as db_session
 from app.db.seed import seed_all
 from app.db.session import get_db
@@ -56,6 +57,21 @@ def _reset_session_sweep_schedule():
     reset_sweep_schedule()
     yield
     reset_sweep_schedule()
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_circuit_breaker():
+    """Clear the per-provider circuit-breaker state around every test.
+
+    ``app.agents.circuit.breaker`` is a process-wide singleton on purpose — an outage one caller
+    discovers is one the next should not have to rediscover — which across a test session means
+    a test that deliberately trips a provider would leave it tripped for every later test that
+    expects a provider call to happen. Cleared on both sides for the same reason
+    ``_reset_rate_limiter`` is.
+    """
+    llm_circuit_breaker.reset()
+    yield
+    llm_circuit_breaker.reset()
 
 
 @pytest.fixture(autouse=True)

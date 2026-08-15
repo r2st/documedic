@@ -23,7 +23,8 @@ import logging
 from typing import Any
 
 from app.agents import demo_data
-from app.agents.llm import available_providers, demo_fallback_enabled
+from app.agents.circuit import breaker, is_availability_failure
+from app.agents.llm import available_providers, callable_providers, demo_fallback_enabled
 from app.config import settings
 from app.core.logsafe import describe_exception
 from app.services.extraction.text_parser import ParsedEntity, ParsedField
@@ -357,15 +358,29 @@ def extract(file_bytes: bytes, file_type: str) -> tuple[list[ParsedEntity], str 
 
     Failures are logged with provider and exception type only — never the document bytes or
     the model response, which carry patient data.
+
+    Shares ``app.agents.circuit``'s breaker with the reasoning engine, because it shares the
+    providers. Extraction runs *inline in the upload request*, so during a provider outage this
+    is the path where the timeout is most visible: a clinician uploading a prescription waited
+    the full chain — three providers at ``llm_request_timeout_seconds`` each — before the
+    deterministic text/OCR parser they were always going to end up on got a look at the file.
+    A tripped breaker skips straight to it.
+
+    A provider that cannot handle the *file type* raises before any network call, and that is
+    not an availability failure: it is a fact about PDFs and the chat-completions vision path,
+    and it must not accumulate towards taking OpenAI out of service for the reasoning engine.
+    :func:`~app.agents.circuit.is_availability_failure` is what draws that line.
     """
-    providers = available_providers()
-    if not providers:
+    if not available_providers():
         raise RuntimeError("No LLM provider API key configured")
 
+    providers = callable_providers()
     last_err: Exception | None = None
     for provider in providers:
         extractor = _EXTRACTORS.get(provider)
         if extractor is None:  # pragma: no cover — guards against a new provider name
+            continue
+        if not breaker.allow(provider):
             continue
         try:
             text = extractor(file_bytes, file_type)
@@ -373,15 +388,27 @@ def extract(file_bytes: bytes, file_type: str) -> tuple[list[ParsedEntity], str 
             if start == -1 or end == -1:
                 raise RuntimeError("No JSON object in model response")
             payload = json.loads(text[start : end + 1])
-            return _to_entities(payload)
         except Exception as exc:  # noqa: BLE001 — try next provider, then deterministic path
             last_err = exc
+            reason = describe_exception(exc)
             logger.warning(
                 "Vision extraction via %r failed for file_type=%s: %s",
                 provider,
                 file_type,
-                describe_exception(exc),
+                reason,
             )
+            if is_availability_failure(exc):
+                breaker.record_failure(provider, reason=reason)
+            else:
+                breaker.record_success(provider)
+        else:
+            breaker.record_success(provider)
+            return _to_entities(payload)
+    if last_err is None:
+        # Nothing was called: every configured provider is in cooldown. Named as such rather
+        # than reported as "unknown", which is what describe_exception(None) would say and which
+        # would send an operator looking for a request that was never made.
+        raise RuntimeError("Every configured LLM provider is circuit-broken")
     # The document bytes went upstream, so an upstream error can quote them back — and on the
     # failure that matters most (a reply with no JSON object in it) the exception text is the
     # model's response, which is the chart. See app.core.logsafe.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID, JSONBType
@@ -23,6 +23,14 @@ class ValidationRun(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     """One execution of the clinical-validation harness over the vignette set."""
 
     __tablename__ = "validation_runs"
+    __table_args__ = (
+        # ``ValidationService.list_runs`` reads WHERE account_id = ? ORDER BY created_at DESC,
+        # and this table had no index at all — so the one endpoint an assessor uses to read the
+        # evidence trail was a sequential scan plus a sort. The rows are the expensive kind to
+        # scan, too: ``results`` carries per-vignette detail for the whole harness run, so the
+        # heap pages this walks are wide even though the filter reads two narrow columns.
+        Index("ix_validation_runs_account_created", "account_id", text("created_at DESC")),
+    )
 
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("accounts.id"), nullable=True
@@ -50,6 +58,12 @@ class SafetyReport(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             f"status IN ({', '.join(repr(s) for s in _REPORT_STATUS)})",
             name="ck_safety_reports_status",
         ),
+        # ``SafetyReportService.list_reports`` reads WHERE account_id = ? ORDER BY
+        # created_at DESC. The two indexes this table already had cover the *other* two ways of
+        # slicing it (by chart, by severity) and neither leads with account_id, so the register
+        # every clinician opens was the one read that scanned the whole table — on a table that
+        # is append-only by design and therefore only ever grows.
+        Index("ix_safety_reports_account_created", "account_id", text("created_at DESC")),
     )
 
     account_id: Mapped[uuid.UUID | None] = mapped_column(

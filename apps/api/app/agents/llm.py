@@ -17,7 +17,10 @@ Every provider call is bounded by ``settings.llm_request_timeout_seconds`` so a 
 connection fails over instead of blocking the calling worker thread indefinitely. Failures are
 logged (provider, attempt, exception type — never the prompt/patient snapshot, which lives in
 ``system``/``user``) so degraded-mode episodes are diagnosable in production. Retries of the
-same provider back off briefly between attempts to avoid hammering a struggling upstream.
+same provider back off briefly between attempts to avoid hammering a struggling upstream, and a
+provider that keeps failing is taken out of the chain by ``app.agents.circuit`` rather than
+being rediscovered as broken on every agent call — see that module for why the timeout alone was
+not enough.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ import time
 from typing import Any
 
 from app.agents import demo_data
+from app.agents.circuit import breaker, is_availability_failure
 from app.config import settings
 from app.core.logsafe import describe_exception
 
@@ -80,6 +84,19 @@ def _key_for(provider: str) -> str:
 def available_providers() -> list[str]:
     """Providers (in priority order) that have an API key configured."""
     return [p for p in _provider_order() if _key_for(p)]
+
+
+def callable_providers() -> list[str]:
+    """Configured providers whose circuit breaker is not currently open.
+
+    Deliberately separate from :func:`available_providers`, which answers "is a key configured"
+    and is what the health endpoints and the demo-net decisions are written against. Narrowing
+    *that* to exclude tripped breakers would make ``llm_mode`` flip to ``offline`` during a
+    transient blip, and would let a cooldown decide whether the simulated demo net engages — two
+    couplings the breaker has no business having. This is the call-site question instead: which
+    providers is it worth opening a socket to right now.
+    """
+    return [p for p in available_providers() if not breaker.is_open(p)]
 
 
 def demo_fallback_enabled() -> bool:
@@ -307,39 +324,71 @@ class LLMClient:
         attempts) before moving to the next. Raises ``LLMUnavailable`` when no provider
         succeeds so the agent degrades. Never logs ``system``/``user`` — they carry the
         patient snapshot — only provider name, attempt number, and exception type.
+
+        A provider whose breaker is open is skipped without a socket, and the retry loop for a
+        provider stops the moment its breaker trips rather than spending the remaining attempts
+        on an upstream that has just proved it is not answering. Both are what turns a dead
+        chain from 270 seconds of nothing into an immediate degrade — see ``app.agents.circuit``.
         """
-        providers = available_providers()
-        if not providers:
+        if not available_providers():
             # No provider configured: serve simulated data if the demo net is on, else degrade.
             if demo_fallback_enabled():
                 return demo_data.simulated_response(system, user)
             raise LLMUnavailable("No LLM provider API key configured")
 
+        providers = callable_providers()
         last_err: Exception | None = None
         for provider in providers:
             for attempt in range(retries + 1):
+                # Re-checked per attempt, not just per provider: a concurrent caller (the
+                # hypothesis panel runs four at once) may have tripped this breaker since the
+                # list was taken, and the attempts left on this loop are the ones that would
+                # each pay a full timeout to learn what is already known.
+                if not breaker.allow(provider):
+                    break
                 try:
-                    return _extract_json(self._complete(provider, system, user))
+                    parsed = _extract_json(self._complete(provider, system, user))
                 except Exception as exc:  # noqa: BLE001 — surfaced to caller as LLMUnavailable
                     last_err = exc
+                    reason = describe_exception(exc)
                     logger.warning(
                         "LLM provider %r failed (attempt %d/%d): %s",
                         provider,
                         attempt + 1,
                         retries + 1,
-                        describe_exception(exc),
+                        reason,
                     )
+                    if is_availability_failure(exc):
+                        breaker.record_failure(provider, reason=reason)
+                    else:
+                        # The provider answered; the answer was unusable. That is a fact about
+                        # this completion, not about the provider, so it must not accumulate
+                        # towards opening the breaker — but a run of them must not leave a
+                        # stale count behind either, or three bad completions spread across an
+                        # hour would trip on the next real timeout.
+                        breaker.record_success(provider)
                     if attempt < retries:
                         backoff = min(settings.llm_retry_backoff_base_seconds * (attempt + 1), 2.0)
                         time.sleep(backoff)
-        # Every configured provider failed. Final safety net: simulated demo data if enabled.
+                else:
+                    breaker.record_success(provider)
+                    return parsed
+        # Every provider worth calling failed or was skipped. Final safety net: simulated demo
+        # data if enabled.
         logger.error(
-            "All configured LLM providers failed (%s); last error: %s",
-            ", ".join(providers),
+            "No LLM provider produced a completion (attempted: %s; skipped by breaker: %s); "
+            "last error: %s",
+            ", ".join(providers) or "none",
+            ", ".join(p for p in available_providers() if p not in providers) or "none",
             describe_exception(last_err),
         )
         if demo_fallback_enabled():
             return demo_data.simulated_response(system, user)
+        if last_err is None:
+            # Nothing was called at all: every configured provider is in cooldown. Distinct
+            # from a provider error, and the message says so — an operator reading "TimeoutError"
+            # in a log would go looking for a socket that this run never opened.
+            raise LLMUnavailable("Every configured LLM provider is circuit-broken")
         # Not ``str(last_err)``: that laundered a provider's response body into an app-owned
         # exception, which every downstream handler then treats as safe to log and persist.
         raise LLMUnavailable(describe_exception(last_err))

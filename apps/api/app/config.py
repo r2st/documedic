@@ -60,6 +60,34 @@ class Settings(BaseSettings):
     # one whose probe is slowest, so re-running it per poll would make the status endpoint
     # hang for the length of the outage — and turn a monitoring poller into provider traffic.
     llm_health_probe_ttl_seconds: float = 60.0
+
+    # --- Provider circuit breaker ---
+    # Timeouts bound one socket; retries and the fallback chain then multiply that bound. A
+    # provider that accepts connections and stops answering costs
+    # llm_request_timeout_seconds x (retries + 1) per provider — 90s each, 270s across the chain
+    # — and it costs it AGAIN on the next agent call, and the one after that, because nothing
+    # remembered that the provider had just failed nine times in a row. That is the arithmetic
+    # the reasoning_run_lease_minutes comment describes, and it is why an outage at a third
+    # party turned into half an hour of a clinician watching an empty Reasoning Theatre.
+    #
+    # The breaker makes that cost be paid once. After llm_circuit_failure_threshold consecutive
+    # *availability* failures (timeouts, connection errors, 429/5xx, and auth rejections — not
+    # a malformed model response, which says nothing about whether the provider is up), the
+    # provider is skipped without a call until the cooldown elapses, then one trial call decides
+    # whether it is back. A run against a dead chain therefore degrades to the deterministic
+    # path in milliseconds instead of minutes, which is what Critical Safety Rule #8 wants: the
+    # offline safety checks were always going to answer, and now the clinician reaches them
+    # while the question is still live.
+    llm_circuit_breaker_enabled: bool = True
+    # Consecutive availability failures that open a provider's breaker. Three, which is exactly
+    # one exhausted complete_json attempt sequence — so a provider proves itself down over one
+    # agent call and is skipped from the next one onwards, rather than over several.
+    llm_circuit_failure_threshold: int = 3
+    # How long an open breaker stays open before admitting one trial call. Short enough that a
+    # provider blipping for a few seconds costs at most one run's worth of degradation, long
+    # enough that a real outage is not re-probed by every agent of every run.
+    llm_circuit_reset_seconds: float = 60.0
+
     # Size of the thread pool the provider SDKs are called on, and the reason that pool exists
     # separately at all. The SDKs are synchronous, so every call runs on a worker thread, and
     # `asyncio.to_thread` puts it on the event loop's *default* executor — which is shared with

@@ -83,7 +83,15 @@ class PasswordResetToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         GUID(), ForeignKey("accounts.id"), nullable=False, index=True
     )
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Indexed for the same reason ``Session.expires_at`` is, and it was missed when
+    # ``purge_spent_reset_tokens`` was written against the same shape: the sweep's only
+    # predicate is ``expires_at < cutoff``, so without this it is a sequential scan of a table
+    # that grows by a row per reset request — from an *unauthenticated* endpoint, which makes
+    # it the one auth table an outsider can inflate. The sweep is not a background job either;
+    # it runs inline on the sign-in path, so the scan lands in front of a clinician logging in.
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Superseded by a later request for the same account, rather than used. Kept apart from
     # ``used_at`` so "someone requested three resets in a row" and "someone spent one" read

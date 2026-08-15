@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.circuit import breaker
 from app.agents.llm import (
     available_providers,
+    callable_providers,
     demo_fallback_enabled,
     probe_all_providers,
     using_simulated_llm,
@@ -141,6 +143,15 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
         "llm_provider": settings.llm_provider,
         # Providers (in fallback order) that currently have an API key configured.
         "llm_available_providers": available_providers(),
+        # The subset of those the circuit breaker would actually let a call reach right now.
+        # Shorter than `llm_available_providers` means an outage is being absorbed: reasoning is
+        # degrading to the deterministic path without paying the timeout to rediscover it.
+        "llm_callable_providers": callable_providers(),
+        # Per-provider breaker detail — only providers that have failed at least once appear.
+        # Distinct from `llm_providers` above, which reports a live probe: this reports what
+        # real traffic has observed, which is the thing that is actually deciding whether calls
+        # go out. A provider can be `reachable` to a models-list probe and still be broken here.
+        "llm_circuit_breaker": breaker.snapshot(),
         # Per-provider {configured, reachable, error}. `reachable` is None when there is no
         # key to authenticate a probe with.
         "llm_providers": providers,
