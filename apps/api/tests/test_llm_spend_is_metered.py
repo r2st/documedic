@@ -79,6 +79,12 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     # other chart read. It is metered all the same: it is the one read that is deliberately
     # unpaged, so it is both the most expensive and the bulk-disclosure surface.
     ("GET", "/api/v1/patients/{patient_id}/export"): LOCAL_BUT_UNBOUNDED,
+    # The same chart, typeset instead of serialised, and so the same classification: unpaged,
+    # and additionally it lays out and deflates every row it read. It shares the *bucket* with
+    # the bundle above rather than carrying one of its own — the ceiling is on how often a whole
+    # chart may be pulled out of the system, and that question has the same answer whichever
+    # format it leaves in.
+    ("GET", "/api/v1/patients/{patient_id}/export/pdf"): LOCAL_BUT_UNBOUNDED,
     # Paging the trail is an indexed read of one page. Verifying it recomputes a SHA-256 per
     # entry over the patient's whole history — different work, different classification.
     ("GET", "/api/v1/patients/{patient_id}/audit"): DETERMINISTIC,

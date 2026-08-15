@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -22,6 +23,7 @@ from app.services.audit_service import AuditService
 from app.services.export_service import PatientExportService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
+from app.services.record_pdf import build_record_pdf
 from app.services.record_service import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, RecordService
 
 router = APIRouter(prefix="/patients/{patient_id}/record", tags=["records"])
@@ -142,6 +144,68 @@ async def export_record(
         headers={
             "Content-Disposition": (f'attachment; filename="aether-record-{patient_id}.fhir.json"')
         },
+    )
+
+
+@export_router.get(
+    "/pdf",
+    summary="The patient's whole record as a printable PDF",
+    responses=PATIENT_ERRORS | errors(429),
+    response_class=Response,
+    # The same bucket as the JSON export above, deliberately. The ceiling is on how often a
+    # whole chart may be pulled out of the system, and that question does not have a different
+    # answer depending on which format it leaves in — metering them separately would double the
+    # bulk-retrieval rate available to a stolen token for no clinical reason.
+    dependencies=[Depends(rate_limit("record_export"))],
+)
+async def export_record_pdf(
+    patient_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """The same record as `GET ../export`, typeset for a person rather than for a system.
+
+    Allergies first, then conditions, medications, labs, computed markers and visits. Every row
+    says whether a clinician confirmed it or whether it is still an unreviewed extraction, and
+    a section that hit the export ceiling is named on the page — a printed chart missing its
+    oldest labs is indistinguishable from a chart that never had any.
+
+    Carries no differential diagnoses, no management suggestions and no agent output, for the
+    same reason the FHIR bundle does not: those are this system's opinions about the patient,
+    and on paper nothing marks them apart from what a clinician recorded.
+
+    The document is typeset in a Latin-alphabet font. If any character in the record could not
+    be represented, the page says so and points at the JSON export, which is lossless.
+
+    Audited as `patient_record_exported`, alongside the JSON export and against the same limit.
+    """
+    patient = await PatientService(db).get(account.id, patient_id)
+    sections = await PatientExportService(db).load(patient)
+    # Off the event loop: laying out and deflating a chart at the per-section ceiling is real
+    # CPU, and this process serves every other clinician's chart reads and SSE streams from the
+    # same loop. Same idiom as the extraction pipeline in `DocumentService`.
+    pdf, lossy = await asyncio.to_thread(build_record_pdf, sections)
+    await AuditService(db).record(
+        action="patient_record_exported",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        # `characters_dropped` is on the audit row, not only on the page: if a patient later
+        # says the copy they were given misspelled their name, the trail has to be able to
+        # answer whether this system printed it wrong and knew.
+        payload={
+            "format": "pdf",
+            "bytes": len(pdf),
+            "truncated_sections": sections.incomplete,
+            "characters_dropped": lossy,
+        },
+    )
+    await db.commit()
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="aether-record-{patient_id}.pdf"'},
     )
 
 

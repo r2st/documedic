@@ -39,6 +39,7 @@ patient's record" is that it is the patient's record.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from html import escape
@@ -147,6 +148,26 @@ def _narrative(text: str | None) -> dict[str, Any] | None:
     }
 
 
+@dataclass(frozen=True)
+class RecordSections:
+    """One patient's whole chart, read once, for every format that exports it.
+
+    ``incomplete`` names the sections that hit ``export_max_rows_per_section``. It is carried
+    here rather than recomputed per format because a short export that does not say it is short
+    is the failure this whole module is written against, and each format has to be able to say
+    so in its own idiom — an ``OperationOutcome`` in the bundle, a sentence on the page.
+    """
+
+    patient: Patient
+    encounters: list[Encounter]
+    allergies: list[Allergy]
+    conditions: list[Condition]
+    medications: list[MedicationEvent]
+    labs: list[LabResult]
+    markers: list[DerivedMarker]
+    incomplete: list[str]
+
+
 def _prune(resource: dict[str, Any]) -> dict[str, Any]:
     """Drop absent elements. FHIR forbids null-valued elements, unlike our own schemas."""
     return {
@@ -172,6 +193,70 @@ class PatientExportService:
         rows = list((await self.db.execute(stmt.limit(limit + 1))).scalars().all())
         return rows[:limit], len(rows) > limit
 
+    async def load(self, patient: Patient) -> RecordSections:
+        """Every section of the chart, each under the per-section export ceiling.
+
+        Split out from :meth:`build_bundle` when the PDF export arrived. Both formats are the
+        same disclosure of the same record and must not be able to disagree about what is in
+        it: if one of them read its own rows, an ordering or a ceiling changed for one would
+        silently not apply to the other, and "the JSON export and the printed record differ"
+        is not a defect anybody notices until it matters.
+        """
+        encounters, encounters_truncated = await self._rows(
+            select(Encounter)
+            .where(Encounter.patient_id == patient.id, Encounter.is_deleted.is_(False))
+            .order_by(Encounter.encounter_date.desc(), Encounter.id)
+        )
+        allergies, allergies_truncated = await self._rows(
+            select(Allergy)
+            .where(Allergy.patient_id == patient.id, Allergy.is_deleted.is_(False))
+            .order_by(Allergy.allergen_name, Allergy.id)
+        )
+        conditions, conditions_truncated = await self._rows(
+            select(Condition)
+            .where(Condition.patient_id == patient.id, Condition.is_deleted.is_(False))
+            .order_by(Condition.condition_name, Condition.id)
+        )
+        medications, medications_truncated = await self._rows(
+            select(MedicationEvent)
+            .where(
+                MedicationEvent.patient_id == patient.id,
+                MedicationEvent.is_deleted.is_(False),
+            )
+            .order_by(MedicationEvent.event_date.desc().nullslast(), MedicationEvent.id)
+        )
+        labs, labs_truncated = await self._rows(
+            select(LabResult)
+            .where(LabResult.patient_id == patient.id, LabResult.is_deleted.is_(False))
+            .order_by(LabResult.sample_date.desc().nullslast(), LabResult.id)
+        )
+        markers, markers_truncated = await self._rows(
+            select(DerivedMarker)
+            .where(DerivedMarker.patient_id == patient.id, DerivedMarker.is_deleted.is_(False))
+            .order_by(DerivedMarker.computed_at.desc(), DerivedMarker.id)
+        )
+        incomplete: list[str] = []
+        for truncated, label in (
+            (encounters_truncated, "Encounter"),
+            (allergies_truncated, "AllergyIntolerance"),
+            (conditions_truncated, "Condition"),
+            (medications_truncated, "MedicationStatement"),
+            (labs_truncated, "Observation (laboratory)"),
+            (markers_truncated, "Observation (derived)"),
+        ):
+            if truncated:
+                incomplete.append(label)
+        return RecordSections(
+            patient=patient,
+            encounters=encounters,
+            allergies=allergies,
+            conditions=conditions,
+            medications=medications,
+            labs=labs,
+            markers=markers,
+            incomplete=incomplete,
+        )
+
     async def build_bundle(self, patient: Patient) -> dict[str, Any]:
         """The patient's record as a FHIR R4 ``Bundle`` of type ``collection``.
 
@@ -180,70 +265,28 @@ class PatientExportService:
         system is in no position to make. A collection says what this is — a set of related
         resources gathered for transfer — without claiming more.
         """
+        sections = await self.load(patient)
         patient_ref = f"urn:uuid:{patient.id}"
         entries: list[dict[str, Any]] = [self._patient(patient)]
-        incomplete: list[str] = []
+        incomplete = sections.incomplete
 
         # Visits first, because everything below references them. Which visits are in the file
         # has to be known before a finding can say it was recorded at one — a reference to an
         # encounter the ceiling truncated away would be a dangling one, and an importer either
         # rejects the bundle or resolves it against whatever else holds that id.
-        encounters, truncated = await self._rows(
-            select(Encounter)
-            .where(Encounter.patient_id == patient.id, Encounter.is_deleted.is_(False))
-            .order_by(Encounter.encounter_date.desc(), Encounter.id)
-        )
-        incomplete += ["Encounter"] if truncated else []
-        entries += [self._encounter(row, patient_ref) for row in encounters]
-        visits = {row.id for row in encounters}
+        entries += [self._encounter(row, patient_ref) for row in sections.encounters]
+        visits = {row.id for row in sections.encounters}
 
-        allergies, truncated = await self._rows(
-            select(Allergy)
-            .where(Allergy.patient_id == patient.id, Allergy.is_deleted.is_(False))
-            .order_by(Allergy.allergen_name, Allergy.id)
-        )
-        incomplete += ["AllergyIntolerance"] if truncated else []
-        entries += [self._allergy(row, patient_ref, visits) for row in allergies]
-
-        conditions, truncated = await self._rows(
-            select(Condition)
-            .where(Condition.patient_id == patient.id, Condition.is_deleted.is_(False))
-            .order_by(Condition.condition_name, Condition.id)
-        )
-        incomplete += ["Condition"] if truncated else []
-        entries += [self._condition(row, patient_ref, visits) for row in conditions]
-
-        medications, truncated = await self._rows(
-            select(MedicationEvent)
-            .where(
-                MedicationEvent.patient_id == patient.id,
-                MedicationEvent.is_deleted.is_(False),
-            )
-            .order_by(MedicationEvent.event_date.desc().nullslast(), MedicationEvent.id)
-        )
-        incomplete += ["MedicationStatement"] if truncated else []
-        entries += [self._medication(row, patient_ref, visits) for row in medications]
-
-        labs, truncated = await self._rows(
-            select(LabResult)
-            .where(LabResult.patient_id == patient.id, LabResult.is_deleted.is_(False))
-            .order_by(LabResult.sample_date.desc().nullslast(), LabResult.id)
-        )
-        incomplete += ["Observation (laboratory)"] if truncated else []
-        entries += [self._lab(row, patient_ref, visits) for row in labs]
+        entries += [self._allergy(row, patient_ref, visits) for row in sections.allergies]
+        entries += [self._condition(row, patient_ref, visits) for row in sections.conditions]
+        entries += [self._medication(row, patient_ref, visits) for row in sections.medications]
+        entries += [self._lab(row, patient_ref, visits) for row in sections.labs]
         # Which lab results actually made it into this bundle, so a marker computed from one
         # that was truncated away does not export a reference to a resource the file does not
         # contain. A dangling reference is worse than an absent one: the importer either
         # rejects the bundle or resolves it against whatever else happens to hold that id.
-        exported_lab_ids = {row.id for row in labs}
-
-        markers, truncated = await self._rows(
-            select(DerivedMarker)
-            .where(DerivedMarker.patient_id == patient.id, DerivedMarker.is_deleted.is_(False))
-            .order_by(DerivedMarker.computed_at.desc(), DerivedMarker.id)
-        )
-        incomplete += ["Observation (derived)"] if truncated else []
-        entries += [self._marker(row, patient_ref, exported_lab_ids) for row in markers]
+        exported_lab_ids = {row.id for row in sections.labs}
+        entries += [self._marker(row, patient_ref, exported_lab_ids) for row in sections.markers]
 
         if incomplete:
             entries.append(self._truncation_notice(incomplete))

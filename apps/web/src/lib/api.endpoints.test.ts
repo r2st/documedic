@@ -474,6 +474,20 @@ describe('exportPatientRecord', () => {
     expect(document.querySelectorAll('a[download]')).toHaveLength(0);
   });
 
+  it('downloads the PDF from its own route, under a .pdf name', async () => {
+    // The two formats are one disclosure against one rate limit, but they are different files
+    // and a browser that saves a PDF as `.fhir.json` gives the clinician something no viewer
+    // will open.
+    seedTokens('a1');
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('%PDF-1.4', { status: 200 }));
+
+    await api.exportPatientRecord('pat-1', 'pdf');
+
+    const [url] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toBe(`${PREFIX}/patients/pat-1/export/pdf`);
+    expect(click).toHaveBeenCalled();
+  });
+
   it('raises rather than saving an error page as the patient record', async () => {
     seedTokens('a1');
     vi.mocked(fetch).mockResolvedValueOnce(new Response('nope', { status: 500 }));

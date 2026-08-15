@@ -376,21 +376,25 @@ export const api = {
     `${PREFIX}/regulatory/samd-dossier?format=${format}`,
 
   /**
-   * Download the patient's whole record as a FHIR R4 bundle.
+   * Download the patient's whole record.
    *
-   * The bundle may carry an `OperationOutcome` saying it was truncated — that warning lives
-   * inside the file rather than only on the response, because the file is what gets kept.
+   * `fhir` is the FHIR R4 bundle, for a receiving system. `pdf` is the same record typeset for
+   * a person — a referral, or a patient exercising their DPDP Act right to a copy of it.
+   *
+   * Either file may say it was truncated. That warning lives *inside* the file rather than only
+   * on the response, because the file is what gets kept and mailed on.
    */
-  async exportPatientRecord(patientId: string): Promise<void> {
+  async exportPatientRecord(patientId: string, format: 'fhir' | 'pdf' = 'fhir'): Promise<void> {
     const headers: Record<string, string> = {};
     const access = tokenStore.access;
     if (access) headers['Authorization'] = `Bearer ${access}`;
 
-    const resp = await fetch(`${PREFIX}/patients/${patientId}/export`, { headers });
+    const path = format === 'pdf' ? `/export/pdf` : `/export`;
+    const resp = await fetch(`${PREFIX}/patients/${patientId}${path}`, { headers });
 
     if (resp.status === 401 && tokenStore.refresh) {
       const refreshed = await tryRefresh();
-      if (refreshed) return this.exportPatientRecord(patientId);
+      if (refreshed) return this.exportPatientRecord(patientId, format);
     }
 
     if (!resp.ok) {
@@ -401,7 +405,8 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `aether-record-${patientId}.fhir.json`;
+    a.download =
+      format === 'pdf' ? `aether-record-${patientId}.pdf` : `aether-record-${patientId}.fhir.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

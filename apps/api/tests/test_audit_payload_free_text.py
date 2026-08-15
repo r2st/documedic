@@ -526,7 +526,21 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # ``format`` is the interchange format, ``resources`` a count. Neither is patient data, and
     # together they are what makes a disclosure entry reviewable: which shape left, and how
     # much of the chart was in it.
-    "patient_record_exported": {"format", "resources"},
+    #
+    # The PDF export writes the same entry with the same ``format`` key and three more, all of
+    # them facts about the *file* rather than about the patient. ``bytes`` is its size and
+    # ``truncated_sections`` the section names the export ceiling cut — the FHIR section labels,
+    # a fixed vocabulary from the exporter, never anything a clinician or a model wrote.
+    # ``characters_dropped`` is a boolean: the base-14 fonts cannot draw scripts outside
+    # Latin-1, and if a patient later says the copy they were handed misspelled their name, the
+    # trail has to be able to answer whether this system printed it wrong and knew.
+    "patient_record_exported": {
+        "format",
+        "resources",
+        "bytes",
+        "truncated_sections",
+        "characters_dropped",
+    },
     # --- documents. No file_name anywhere: uploads are named after the patient.
     "document_uploaded": {"file_type", "sha256"},
     "document_list_viewed": {"document_count"},

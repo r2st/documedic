@@ -516,9 +516,21 @@ describe('record export', () => {
     render(<PatientDetailPage params={{ id: 'pat-1' }} />);
     await screen.findByText('Asha Reddy');
 
-    await userEvent.click(screen.getByRole('button', { name: /export record/i }));
+    await userEvent.click(screen.getByRole('button', { name: /export record \(FHIR\)/i }));
 
-    await waitFor(() => expect(api.exportPatientRecord).toHaveBeenCalledWith('pat-1'));
+    await waitFor(() => expect(api.exportPatientRecord).toHaveBeenCalledWith('pat-1', 'fhir'));
+  });
+
+  it('exports the same chart as a PDF when that is the button pressed', async () => {
+    // Two formats, one disclosure. The button a clinician presses has to be the file they get:
+    // handing a patient a FHIR bundle because the wrong handler fired is not a near miss.
+    vi.mocked(api.exportPatientRecord).mockResolvedValue(undefined);
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText('Asha Reddy');
+
+    await userEvent.click(screen.getByRole('button', { name: /export record \(PDF\)/i }));
+
+    await waitFor(() => expect(api.exportPatientRecord).toHaveBeenCalledWith('pat-1', 'pdf'));
   });
 
   it('says so when the export failed rather than leaving the button looking done', async () => {
@@ -528,7 +540,7 @@ describe('record export', () => {
     render(<PatientDetailPage params={{ id: 'pat-1' }} />);
     await screen.findByText('Asha Reddy');
 
-    await userEvent.click(screen.getByRole('button', { name: /export record/i }));
+    await userEvent.click(screen.getByRole('button', { name: /export record \(FHIR\)/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not export this record/i);
   });
