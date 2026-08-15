@@ -527,3 +527,57 @@ async def test_the_assessment_is_a_frozen_value_not_a_mutable_one() -> None:
     assert isinstance(assessment, ChildPughAssessment)
     with pytest.raises(FrozenInstanceError):
         assessment.lab_points = 9  # type: ignore[misc]
+
+
+async def test_an_inr_printed_as_pt_inr_still_reaches_both_scores(db) -> None:
+    """The name a coagulation panel actually prints, end to end into Child-Pugh and MELD.
+
+    ``pt inr`` was missing from the marker alias table while the long "prothrombin time inr" form
+    was present, so the commonest printed spelling did not resolve and the row was skipped. The
+    INR is the one input *both* scores need, so the chart lost the whole hepatic severity picture
+    at once — and reported the INR as an input it did not carry, on a chart that carried it.
+    Nothing raised and nothing was fabricated, which is why it went unnoticed.
+    """
+    _, patient = await _patient(db)
+    await _lab(db, patient, "Total Bilirubin", "4.1", "mg/dL")
+    await _lab(db, patient, "Serum Albumin", "2.4", "g/dL")
+    await _lab(db, patient, "PT/INR", "2.6", "")
+    await _lab(db, patient, "Serum Creatinine", "1.5", "mg/dL")
+
+    panel = await SafetyService(db)._hepatic_panel(patient.id)
+    assert panel.inr == 2.6
+
+    severity = assess_hepatic_severity(
+        bilirubin_mg_dl=panel.bilirubin_mg_dl,
+        albumin_g_dl=panel.albumin_g_dl,
+        inr=panel.inr,
+        creatinine_mg_dl=panel.creatinine_mg_dl,
+    )
+    assert severity.child_pugh is not None
+    assert severity.meld is not None
+    assert severity.missing_child_pugh == ()
+    assert severity.missing_meld == ()
+
+
+async def test_a_prothrombin_time_in_seconds_is_not_read_as_an_inr(db) -> None:
+    """The fence on the widening above. PT is ~11-14 seconds; read as an INR it is Child-Pugh C.
+
+    A chart with a normal clotting screen and no INR must come back with no INR — which is what
+    ``missing_child_pugh`` is for — rather than with a fabricated coagulopathy.
+    """
+    _, patient = await _patient(db)
+    await _lab(db, patient, "Total Bilirubin", "4.1", "mg/dL")
+    await _lab(db, patient, "Serum Albumin", "2.4", "g/dL")
+    await _lab(db, patient, "Prothrombin Time", "13.2", "sec")
+
+    panel = await SafetyService(db)._hepatic_panel(patient.id)
+    assert panel.inr is None
+
+    severity = assess_hepatic_severity(
+        bilirubin_mg_dl=panel.bilirubin_mg_dl,
+        albumin_g_dl=panel.albumin_g_dl,
+        inr=panel.inr,
+        creatinine_mg_dl=panel.creatinine_mg_dl,
+    )
+    assert severity.child_pugh is None
+    assert "INR" in severity.missing_child_pugh

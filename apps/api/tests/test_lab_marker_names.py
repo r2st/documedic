@@ -355,3 +355,66 @@ def test_every_alias_is_already_in_the_normalised_form_it_is_looked_up_by():
     """
     assert all(alias == " ".join(alias.lower().split()) for alias in _ALIASES)
     assert not [alias for alias in _ALIASES if any(c in alias for c in "/().-,%")]
+
+
+# --- The INR, which a coagulation panel abbreviates ---------------------------------------------
+#
+# ``prothrombin time inr`` was in the alias table and ``pt inr`` was not, which is the wrong way
+# round: the long form is what a textbook writes and the abbreviation is what a report prints.
+# The failure was silent and one-sided. An unresolved row is skipped, so no INR reached
+# ``HepaticPanel`` — and the INR is an input to *both* Child-Pugh and MELD, so a chart printing
+# "PT INR 2.8" lost the entire hepatic severity picture and ``assess_hepatic_severity`` named the
+# INR as an input the chart did not carry, on a chart that carried it.
+
+
+@pytest.mark.parametrize(
+    "printed",
+    [
+        "PT INR",
+        "PT/INR",
+        "PT-INR",
+        "PT_INR",
+        "INR (PT)",
+        "INR/PT",
+        "Prothrombin Time INR",
+        "Prothrombin Time International Normalized Ratio",
+        "PT INR Ratio",
+        "INR",
+        "International Normalised Ratio",
+    ],
+)
+def test_the_coagulation_panels_spellings_of_the_inr_all_resolve(printed: str) -> None:
+    assert _normalize_marker(printed) == "inr"
+
+
+@pytest.mark.parametrize(
+    "printed",
+    [
+        # Prothrombin time itself: a different quantity in different units (seconds, ~11-14).
+        # Read as an INR it is a coagulopathy that is not there, scoring 3 Child-Pugh points on a
+        # normal clotting screen — the R44 failure shape, in the marker that feeds two scores.
+        "PT",
+        "Prothrombin Time",
+        "PT (Prothrombin Time)",
+        "Prothrombin Time (seconds)",
+        # The other clotting times, which are not the INR either.
+        "APTT",
+        "aPTT",
+        "Activated Partial Thromboplastin Time",
+        "Thrombin Time",
+        "Bleeding Time",
+        "Clotting Time",
+    ],
+)
+def test_the_other_clotting_times_are_not_read_as_an_inr(printed: str) -> None:
+    assert _normalize_marker(printed) != "inr"
+
+
+def test_an_inr_printed_as_pt_inr_carries_a_value_through_to_the_canonical_form() -> None:
+    """The whole point of resolving it: the number has to arrive somewhere usable.
+
+    The INR is dimensionless, so there is no conversion to get wrong — which is exactly why the
+    row being dropped was invisible. Nothing failed; a score simply stopped being computable.
+    """
+    assert canonical_lab_value("PT INR", 2.8, None) == ("inr", 2.8)
+    assert canonical_lab_value("PT/INR", 2.8, "ratio") == ("inr", 2.8)

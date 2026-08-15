@@ -171,10 +171,26 @@ _ALIASES: dict[str, str] = {
     "urea": "urea",
     "blood urea": "urea",
     "serum urea": "urea",
+    # The INR. "prothrombin time inr" was here and "pt inr" was not, which is the wrong way
+    # round: a coagulation panel abbreviates the line, and "PT/INR", "PT-INR" and "PT INR" — all
+    # of which fold to the same "pt inr" — are how it is printed far more often than the long
+    # form. An unresolved row is skipped, so the effect was silent and one-sided: no INR reached
+    # ``HepaticPanel``, which removed *both* Child-Pugh and MELD from a chart that had the value
+    # on it, and ``assess_hepatic_severity`` reported them as missing an input the report was
+    # carrying. Safe, in that nothing was fabricated, and blind.
+    #
+    # A bare "pt" is deliberately absent and must stay absent. Prothrombin time is a different
+    # quantity in different units — seconds, around 11-14 — and reading one as an INR would put a
+    # coagulopathy that is not there into a Child-Pugh score.
     "inr": "inr",
     "international normalized ratio": "inr",
     "international normalised ratio": "inr",
     "prothrombin time inr": "inr",
+    "prothrombin time international normalized ratio": "inr",
+    "prothrombin time international normalised ratio": "inr",
+    "pt inr": "inr",
+    "inr pt": "inr",
+    "pt inr ratio": "inr",
     "wbc": "wbc",
     "wbc count": "wbc",
     "white blood cell count": "wbc",
