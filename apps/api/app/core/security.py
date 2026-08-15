@@ -78,8 +78,30 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def create_access_token(account_id: str | uuid.UUID, *, extra: dict | None = None) -> str:
-    """Short-lived signed JWT access token (HS256)."""
+def create_access_token(
+    account_id: str | uuid.UUID,
+    *,
+    auth_session_id: str | uuid.UUID | None = None,
+    extra: dict | None = None,
+) -> str:
+    """Short-lived signed JWT access token (HS256), bound to the sign-in that minted it.
+
+    ``auth_session_id`` is the ``sessions`` row the token was issued alongside, carried in the
+    ``asid`` claim so :func:`app.dependencies.get_current_account` can ask whether that sign-in
+    is still live. Without it an access token is a bearer credential nothing can withdraw for
+    the fifteen minutes it lives, and every revocation in this service — "sign out everywhere",
+    "sign out this other device", the password change made *because* a workstation was left
+    unlocked, the account-wide revocation after refresh-token reuse is detected — revokes only
+    the refresh token. The clinician is told the laptop is signed out; the laptop keeps reading
+    the chart until the access token expires on its own schedule.
+
+    Named ``asid`` and not ``sid`` because ``create_stream_token`` already spends ``sid`` on the
+    *reasoning* session it is scoped to. Two different session concepts sharing a claim name in
+    one token vocabulary is the kind of collision that gets resolved wrongly at 2am.
+
+    Optional, rather than required, only so a caller can mint a token that deliberately carries
+    no sign-in behind it; the dependency treats that as unauthenticated, so this is fail-closed.
+    """
     now = _now()
     payload: dict[str, Any] = {
         "sub": str(account_id),
@@ -88,12 +110,19 @@ def create_access_token(account_id: str | uuid.UUID, *, extra: dict | None = Non
         "exp": int((now + timedelta(minutes=settings.jwt_access_ttl_minutes)).timestamp()),
         "jti": uuid.uuid4().hex,
     }
+    if auth_session_id is not None:
+        payload["asid"] = str(auth_session_id)
     if extra:
         payload.update(extra)
     return jwt.encode(payload, settings.app_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_stream_token(account_id: str | uuid.UUID, session_id: str | uuid.UUID) -> str:
+def create_stream_token(
+    account_id: str | uuid.UUID,
+    session_id: str | uuid.UUID,
+    *,
+    auth_session_id: str | uuid.UUID | None = None,
+) -> str:
     """Narrowly scoped token for the SSE endpoint.
 
     EventSource cannot send an Authorization header, so the token travels in the query
@@ -101,6 +130,11 @@ def create_stream_token(account_id: str | uuid.UUID, session_id: str | uuid.UUID
     history. This token is therefore useless for anything else: it is bound to one
     reasoning session (``sid``), carries its own ``type``, and expires in
     ``settings.stream_token_ttl_seconds``. The real access token never enters a URL.
+
+    It carries ``asid`` for the same reason the access token does. This one is minted *from* an
+    access token, so a stream token that outlived the sign-in behind it would be a way to keep
+    reading a revoked session's reasoning output through the one endpoint that authenticates
+    from the query string.
     """
     now = _now()
     payload: dict[str, Any] = {
@@ -111,6 +145,8 @@ def create_stream_token(account_id: str | uuid.UUID, session_id: str | uuid.UUID
         "exp": int((now + timedelta(seconds=settings.stream_token_ttl_seconds)).timestamp()),
         "jti": uuid.uuid4().hex,
     }
+    if auth_session_id is not None:
+        payload["asid"] = str(auth_session_id)
     return jwt.encode(payload, settings.app_secret_key, algorithm=settings.jwt_algorithm)
 
 

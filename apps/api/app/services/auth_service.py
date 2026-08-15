@@ -169,7 +169,10 @@ class AuthService:
         )
         self.db.add(session)
         await self.db.flush()
-        access = create_access_token(account.id)
+        # Bound to the session row flushed just above, so revoking that row also withdraws the
+        # access token — see `app.dependencies.assert_auth_session_live`. The flush is what
+        # makes `session.id` available to put in the claim.
+        access = create_access_token(account.id, auth_session_id=session.id)
         return TokenResponse(
             access_token=access,
             refresh_token=refresh,

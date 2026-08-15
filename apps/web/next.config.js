@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const { securityHeaders } = require('./security-headers');
+
 const nextConfig = {
   reactStrictMode: true,
   // @aether/ui is published as TypeScript source rather than a build artifact, so Next
@@ -6,6 +8,9 @@ const nextConfig = {
   transpilePackages: ['@aether/ui'],
   // Enable gzip/brotli compression
   compress: true,
+  // The framework and its version are not something a clinical deployment should announce; it
+  // tells an attacker which framework advisories to try and buys nothing.
+  poweredByHeader: false,
   // Power bundle splitting — more granular chunks for better caching
   experimental: {
     optimizePackageImports: ['@/components', '@/lib'],
@@ -14,11 +19,7 @@ const nextConfig = {
     return [
       {
         source: '/:path*',
-        headers: [
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'Referrer-Policy', value: 'no-referrer' },
-        ],
+        headers: securityHeaders(),
       },
       // Cache static assets aggressively
       {

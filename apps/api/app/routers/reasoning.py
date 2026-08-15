@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.security import create_stream_token, decode_token
 from app.db.session import get_db
-from app.dependencies import enforce_rate_limit, get_current_account, rate_limit
+from app.dependencies import (
+    assert_auth_session_live,
+    enforce_rate_limit,
+    get_current_account,
+    rate_limit,
+)
 from app.exceptions import TokenError
 from app.models.intake import IntakeQuestion
 from app.models.reasoning_session import ReasoningSession
@@ -238,6 +243,11 @@ async def _account_from_query_or_header(
             "This account is no longer active. Contact your administrator to restore access.",
             detail=f"account {account_id} absent or soft-deleted",
         )
+    # Both token types carry the sign-in they were minted under, and both are checked here for
+    # the reason in `assert_auth_session_live`. This endpoint holds its connection open for the
+    # length of a reasoning run, so it is the one place where "the token is still inside its
+    # TTL" is furthest from "this device is still signed in".
+    await assert_auth_session_live(db, payload)
     return account
 
 
@@ -248,6 +258,7 @@ async def _account_from_query_or_header(
     responses=_SESSION_ERRORS,
 )
 async def mint_stream_token(
+    request: Request,
     session_id: uuid.UUID,
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
@@ -256,10 +267,16 @@ async def mint_stream_token(
 
     Authenticated with the normal bearer header, and only for a session this account owns,
     so the token that ends up in logs grants nothing but this one stream.
+
+    The minted token inherits the sign-in behind the bearer token that asked for it, so
+    signing that device out closes its open streams too rather than leaving them running to
+    the end of the stream token's own TTL.
     """
     await ReasoningService(db).get_session(account.id, session_id)
     return StreamTokenOut(
-        token=create_stream_token(account.id, session_id),
+        token=create_stream_token(
+            account.id, session_id, auth_session_id=request.state.auth_session_id
+        ),
         expires_in=settings.stream_token_ttl_seconds,
     )
 

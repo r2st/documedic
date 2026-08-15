@@ -168,12 +168,22 @@ async def test_list_sessions_shows_active_session(auth_client):
 
 @pytest.mark.asyncio
 async def test_revoke_session_logs_it_out(auth_client):
+    """Revoking the session you are holding signs *you* out, immediately.
+
+    This used to assert an empty session list on the next request, which was only readable
+    because the next request still authenticated: revocation acted on the refresh token, and
+    the access token in the header went on working until it expired. Now the access token is
+    bound to the revoked session, so the follow-up is a 401 — the endpoint does what its
+    summary says.
+    """
     sessions = (await auth_client.get("/api/v1/auth/sessions")).json()
     session_id = sessions[0]["id"]
     resp = await auth_client.delete(f"/api/v1/auth/sessions/{session_id}")
     assert resp.status_code == 200
-    after = (await auth_client.get("/api/v1/auth/sessions")).json()
-    assert after == []
+
+    after = await auth_client.get("/api/v1/auth/sessions")
+    assert after.status_code == 401, after.text
+    assert after.json()["code"] == "invalid_token"
 
 
 @pytest.mark.asyncio

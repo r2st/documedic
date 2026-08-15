@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -16,6 +17,7 @@ from app.core.security import decode_token
 from app.db.session import get_db
 from app.exceptions import RateLimitExceededError, TokenError
 from app.models.user import Account
+from app.models.user import Session as AuthSession
 
 # Declared purely so the OpenAPI schema records that these routes take a bearer token: without
 # a security scheme in the dependency tree, the generated spec claimed every patient route was
@@ -58,7 +60,64 @@ async def get_current_account(
             "This account is no longer active. Contact your administrator to restore access.",
             detail=f"account {account_id} absent or soft-deleted",
         )
+    await assert_auth_session_live(db, payload)
+    # Stashed so a handler that needs to mint a token scoped to this same sign-in (see
+    # `routers.reasoning.mint_stream_token`) does not have to re-parse the header to find it.
+    request.state.auth_session_id = uuid.UUID(str(payload["asid"]))
     return account
+
+
+async def assert_auth_session_live(db: AsyncSession, payload: dict) -> None:
+    """Reject a token whose sign-in has since been revoked or expired.
+
+    A JWT is valid until it expires, so on its own an access token is a credential that cannot
+    be withdrawn. Every revocation this service offers acted only on the refresh token, which
+    meant each of them was a promise it kept fifteen minutes late:
+
+    * "Sign out everywhere" after losing a laptop left the laptop reading charts.
+    * "Sign out this other device" did not sign out that device.
+    * Changing the password — which ``AuthService.change_password`` performs *because* someone
+      may have reached an unlocked workstation — revoked the intruder's refresh token and left
+      their access token working.
+    * Refresh-token reuse detection revokes the whole family precisely because one of the two
+      holders is an attacker; the attacker's access token survived that too.
+
+    The check is one indexed lookup on a session id the token already carries, on a request
+    that has just fetched the account row anyway. Both conditions matter and neither implies
+    the other: ``is_revoked`` is the deliberate withdrawal, and ``expires_at`` is the absolute
+    ceiling on a sign-in that ``_issue_tokens`` anchors to when the *family* started, so a
+    long-lived family's last access token must not outlive it either.
+
+    A token with no ``asid`` names no sign-in, so there is nothing that could revoke it — it is
+    refused rather than waved through, which is what keeps the claim from being optional in
+    practice. Tokens minted before this claim existed are refused the same way; the client's
+    refresh flow answers a 401 by rotating, so the cost is one extra round-trip per signed-in
+    browser at deploy, not a re-login.
+    """
+    raw = payload.get("asid")
+    if raw is None:
+        raise TokenError(detail="token carries no asid claim, so no sign-in backs it")
+    try:
+        auth_session_id = uuid.UUID(str(raw))
+    except ValueError as exc:
+        raise TokenError(detail=f"token asid {raw!r} is not a uuid") from exc
+
+    session = await db.get(AuthSession, auth_session_id)
+    if session is None:
+        raise TokenError(detail=f"no session row for asid {auth_session_id}")
+    if session.is_revoked:
+        raise TokenError(
+            "You have been signed out of this device. Sign in again to continue.",
+            detail=f"session {auth_session_id} is revoked",
+        )
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at < datetime.now(UTC):
+        raise TokenError(
+            "Your sign-in session has expired. Sign in again to continue.",
+            detail=f"session {auth_session_id} past its absolute expiry",
+        )
 
 
 # Convenience alias used across routers.
