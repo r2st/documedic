@@ -38,6 +38,29 @@ const SEVERITY_STYLES: Record<string, string> = {
 };
 
 /**
+ * The style for a flag, for a `severity` string this build may not know.
+ *
+ * The lookup used to be `SEVERITY_STYLES[severity] ?? ''`, and the empty string is the problem:
+ * a severity added to the API after this bundle shipped rendered as a bare white box with a
+ * transparent left border — no colour, in the one component whose entire job is to say how
+ * much a finding weighs. `lib/safety.ts` already treats an unknown severity as a real
+ * possibility ("the API can add a fifth") and ranks it with the warnings; the colour has to
+ * make the same assumption, or the two halves of the same decision disagree.
+ *
+ * `isHardBlock` is consulted first, and that ordering is the point. It is a boolean the client
+ * cannot misread, it is what actually stops the prescription, and it is what the badge in this
+ * card already announces — so a flag that says HARD BLOCK is red even if its severity string is
+ * a word this build has never seen. Anything else unrecognised takes the amber warning
+ * treatment rather than the blue informational one: of the two ways to be wrong about an
+ * unknown severity, over-weighting it costs a clinician a second look and under-weighting it
+ * costs the look entirely.
+ */
+export function severityStyle(severity: string, isHardBlock: boolean): string {
+  if (isHardBlock) return SEVERITY_STYLES.hard_block;
+  return SEVERITY_STYLES[severity] ?? SEVERITY_STYLES.warning;
+}
+
+/**
  * One deterministic safety finding.
  *
  * `checkType` is optional so the component keeps working for a caller that has no type to hand,
@@ -63,7 +86,7 @@ export function SafetyFlagCard({
     // this screen that a sighted clinician gets from the length of the column.
     <div
       role="listitem"
-      className={`rounded-lg border-l-4 p-4 text-sm ${SEVERITY_STYLES[severity] ?? ''}`}
+      className={`rounded-lg border-l-4 p-4 text-sm ${severityStyle(severity, isHardBlock)}`}
     >
       <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="text-xs font-bold uppercase tracking-wider">
