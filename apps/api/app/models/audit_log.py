@@ -42,6 +42,7 @@ AUDIT_ACTIONS = (
     # Retention housekeeping. Dead session rows are deleted; this is what makes their removal
     # accountable, since the rows themselves can no longer say they existed.
     "auth_sessions_purged",
+    "auth_reset_tokens_purged",
     "critical_lab_value_detected",
     "critical_lab_value_not_evaluated",
     "patient_created",

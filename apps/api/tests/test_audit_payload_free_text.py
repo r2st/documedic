@@ -490,6 +490,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # Retention sweep. Counts and configuration, no identifiers: the rows it removed are gone,
     # and naming them would recreate in this table the record the sweep exists to retire.
     "auth_sessions_purged": {"removed", "retention_days"},
+    # Same sweep, second table. Deliberately no account ids: the reset endpoint is
+    # unauthenticated and its whole design is that a request reveals nothing about whether the
+    # address has an account, so a purge that named the accounts whose rows it removed would
+    # answer that question in the one table nobody can delete from.
+    "auth_reset_tokens_purged": {"removed", "retention_days"},
     # --- patient. ``changed_fields`` is field *names*; the new values are the PII.
     "patient_created": {"consent_given"},
     # consent_given is the one field *value* this payload carries. It is the opposite of PII --

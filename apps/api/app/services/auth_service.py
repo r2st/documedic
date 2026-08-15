@@ -752,6 +752,61 @@ class AuthService:
             )
         return removed
 
+    async def purge_spent_reset_tokens(self, *, now: datetime | None = None) -> int:
+        """Delete password-reset rows long past any use. Returns rows removed.
+
+        ``password_reset_tokens`` had the same shape ``purge_expired_sessions`` was written for
+        and was missed by it: one row per reset request, marked ``used_at`` or ``invalidated_at``
+        and then kept forever. Its ceiling is five per account per hour and the endpoint is
+        unauthenticated, so it is the one auth table an outsider can make grow — and what it
+        grows is a hash, an address and a timestamp per attempt, for accounts whose owners may
+        never have asked for anything.
+
+        Keyed on ``expires_at`` alone, deliberately. A token past its TTL cannot be spent
+        whatever its other columns say — ``reset_password`` rejects it on exactly this
+        comparison — so expiry is the one condition that proves the row can never do anything
+        again. Testing ``used_at``/``invalidated_at`` instead would be the narrower filter and
+        the wrong one: an unspent live token would still be caught by neither, and an unspent
+        *expired* one is exactly as dead as a spent one.
+
+        The retention window is ``session_retention_days``, shared with the session sweep rather
+        than given its own knob: both are the same decision about how long a dead access record
+        stays readable for an incident review, and two settings that must move together are one
+        setting somebody will forget to move.
+
+        Same bounded, non-transactional shape as the session sweep, and the same division of
+        responsibility with the audit log: every request, throttle, completion and replay is
+        recorded there independently and is never pruned, so removing these rows removes the
+        capability's remains, not its history.
+        """
+        if settings.session_retention_days <= 0 or settings.session_sweep_batch_size <= 0:
+            return 0
+        cutoff = (now or datetime.now(UTC)) - timedelta(days=settings.session_retention_days)
+        doomed = (
+            select(PasswordResetToken.id)
+            .where(PasswordResetToken.expires_at < cutoff)
+            .limit(settings.session_sweep_batch_size)
+        )
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                delete(PasswordResetToken).where(
+                    PasswordResetToken.id.in_(doomed.scalar_subquery())
+                )
+            ),
+        )
+        removed = result.rowcount or 0
+        if removed:
+            await self.audit.record(
+                action="auth_reset_tokens_purged",
+                entity_type="account",
+                payload={
+                    "removed": removed,
+                    "retention_days": settings.session_retention_days,
+                },
+            )
+        return removed
+
     async def sweep_sessions_if_due(self) -> int:
         """Run the retention sweep at most once per ``session_sweep_interval_minutes``.
 
@@ -770,6 +825,7 @@ class AuthService:
             return 0
         try:
             removed = await self.purge_expired_sessions()
+            removed += await self.purge_spent_reset_tokens()
             await self.db.commit()
             return removed
         except Exception:
