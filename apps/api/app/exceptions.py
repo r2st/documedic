@@ -266,6 +266,37 @@ class ReasoningRunSupersededError(ConflictError):
     code = "reasoning_run_superseded"
 
 
+class ExtractionInProgressError(ConflictError):
+    """This document is still being read. Wait for that to finish before asking for it again.
+
+    Raised by the extraction retry path when the document is in ``processing`` and its
+    ``extraction_started_at`` is recent enough that a request could still be working on it. A
+    second extraction of the same document is not a second opinion: both would overwrite
+    ``extraction_metadata``, and the clinician would be reviewing whichever one happened to
+    finish last against a screen drawn from the other.
+
+    A ``processing`` document older than ``settings.extraction_stall_minutes`` is *not* this
+    error — nothing is working on it and it is reclaimed instead. See
+    ``DocumentService.reclaim_stalled_extractions``.
+    """
+
+    code = "extraction_in_progress"
+
+
+class ExtractionAlreadyApprovedError(ConflictError):
+    """This document's extracted details are already in the patient's record, so it cannot be
+    read again. Upload a corrected scan instead, or amend the record directly.
+
+    Re-extracting an approved document would replace the reviewed, corrected extraction with a
+    fresh one that has never been seen — while the entities merged from the *old* one are
+    already charted. The review screen would then be offering a set of items to approve that no
+    longer corresponds to what is in the chart, and approving it again would merge against
+    ``GraphService``'s deduplication with different values than it deduplicated the first time.
+    """
+
+    code = "extraction_already_approved"
+
+
 class EmailAlreadyExistsError(ConflictError):
     """An account with this email already exists. Sign in instead, or use another address."""
 
@@ -365,6 +396,26 @@ class CorrectionNotApplicableError(ValidationError):
     """
 
     code = "correction_not_applicable"
+
+
+class NothingToApproveError(ValidationError):
+    """Nothing was read from this document, so there is nothing to approve into the record. Try
+    reading it again, or enter the details by hand.
+
+    Approving an extraction that produced no entities merges nothing and used to answer 200
+    with ``{"merged": {}}`` — the same silent no-op that :class:`CorrectionNotApplicableError`
+    and :class:`EntityNotMergeableError` exist to refuse, and with the worst reading of the
+    three: the clinician is told the document is approved and moves on, when in fact the scan
+    was never read at all. It also flipped ``extraction_status`` to ``completed``, erasing the
+    one signal — on the document row and in every operator query over it — that the scan had
+    never been read.
+
+    Reachable two ways, and neither is recoverable by approving: extraction ``failed``
+    outright, or it ran and found nothing (an unreadable scan, or a vision provider that was
+    down while the deterministic parser found no text in the file either).
+    """
+
+    code = "nothing_to_approve"
 
 
 class EntityNotMergeableError(ValidationError):

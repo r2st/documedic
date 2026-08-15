@@ -91,13 +91,27 @@ class ExtractionPipeline:
         parser found no entities in — are the same outcome for the caller, so they share one
         exit (``_no_entities``).
         """
-        vision = self._try_vision(file_bytes, file_type)
-        if vision is not None:
-            return vision
+        confident, unsure = self._try_vision(file_bytes, file_type)
+        if confident is not None:
+            return confident
 
         text, ocr_used = self._recover_text(file_bytes, file_type, raw_text)
         parsed = parse_document(text) if text.strip() else ParsedDocument([], 0)
         if not parsed.entities:
+            # Nothing deterministic to prefer over the vision read, so a vision read the
+            # confidence gate rejected is better than the empty result that gate used to
+            # produce. It was thrown away *before* the fallback was known to have failed: a
+            # scanned prescription the model read at 0.4 mean confidence, in a PDF with no text
+            # layer for pypdf to recover, extracted four drugs and then reported none — and the
+            # document went into the chart as read-and-empty rather than as needing review.
+            #
+            # Every field in it bands "low" or "medium", so ``_run_extraction`` marks the
+            # document ``needs_confirmation`` and no value reaches the record until a clinician
+            # has confirmed it against the original. That is the state a doubtful read belongs
+            # in; silence is not.
+            if unsure is not None:
+                unsure.ocr_fallback_used = ocr_used
+                return unsure
             return self._no_entities(ocr_used)
         return ExtractionResultInternal(
             parsed.entities,
@@ -107,16 +121,27 @@ class ExtractionPipeline:
             parsed.unreadable,
         )
 
-    def _try_vision(self, file_bytes: bytes, file_type: str) -> ExtractionResultInternal | None:
-        """Claude vision, when configured and confident enough. ``None`` means "fall through"."""
+    def _try_vision(
+        self, file_bytes: bytes, file_type: str
+    ) -> tuple[ExtractionResultInternal | None, ExtractionResultInternal | None]:
+        """Claude vision, as ``(confident, unsure)``.
+
+        ``confident`` is a read at or above ``settings.ocr_fallback_threshold`` and is used as
+        it stands. ``unsure`` is a read below it: entities the model did produce, held back in
+        favour of the deterministic parser but kept in case that finds nothing at all. Both are
+        ``None`` when no provider is configured or every one of them failed.
+        """
         if not claude_client.is_available():
-            return None
+            return None, None
         try:
             entities, doc_type = claude_client.extract(file_bytes, file_type)
-            if entities and self._mean_confidence(entities) >= settings.ocr_fallback_threshold:
-                return ExtractionResultInternal(
+            if entities:
+                result = ExtractionResultInternal(
                     entities, doc_type, False, claude_client.model_label()
                 )
+                if self._mean_confidence(entities) >= settings.ocr_fallback_threshold:
+                    return result, None
+                return None, result
         except Exception as exc:  # noqa: BLE001 — fall through to the deterministic path
             # Never log the document bytes or the model response (patient data) — only the
             # exception type, so degraded extraction stays diagnosable. This appended
@@ -128,7 +153,7 @@ class ExtractionPipeline:
                 file_type,
                 describe_exception(exc),
             )
-        return None
+        return None, None
 
     def _recover_text(
         self, file_bytes: bytes, file_type: str, raw_text: str | None

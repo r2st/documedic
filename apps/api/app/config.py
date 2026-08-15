@@ -326,6 +326,16 @@ class Settings(BaseSettings):
     max_request_bytes: int = 24 * 1024 * 1024  # 24 MB
     confirmation_confidence_threshold: float = 0.85
     ocr_fallback_threshold: float = 0.50
+    # How long a document may sit in `processing` before it is treated as abandoned.
+    #
+    # Extraction runs inline in the upload request and is bounded well below this: a vision call
+    # is `llm_request_timeout_seconds` per provider over at most three providers, Tesseract is a
+    # 60s subprocess, and pypdf parsing is CPU-bound on a file capped at `max_upload_bytes`. So
+    # a document still `processing` after fifteen minutes is not slow, it is orphaned — the
+    # worker was restarted, the deploy rolled, or the request was cancelled between the commit
+    # that records the attempt and the commit that records its result. Nothing will ever finish
+    # it, and until it is reclaimed it sits in the chart reading "being read" forever.
+    extraction_stall_minutes: int = 15
 
     # --- CORS ---
     cors_origins: str = "http://localhost:3000"

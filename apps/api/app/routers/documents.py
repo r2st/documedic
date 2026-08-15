@@ -110,8 +110,15 @@ async def upload_document(
     Oversized bodies are aborted mid-stream with 422 `file_too_large` rather than buffered whole.
 
     Extraction runs inline and its failure is not this endpoint's failure: the document is
-    stored either way and the response reports `extraction_status`. Nothing extracted touches
-    the patient graph until a clinician approves it at `POST /{doc_id}/approve`.
+    stored either way and the response reports `extraction_status`. `failed` means the scan is
+    in the chart but was not read; `needs_confirmation` covers both a doubtful read and a read
+    that produced nothing at all. Nothing extracted touches the patient graph until a clinician
+    approves it at `POST /{doc_id}/approve`.
+
+    Identical bytes for the same patient return the document already stored rather than a
+    second one — and if that document was never successfully read, uploading it again re-runs
+    extraction over it, which is the same recovery as `POST /{doc_id}/extraction/retry`. An
+    already-approved document is returned untouched.
     """
     data = await _read_capped(file, settings.max_upload_bytes)
     document = await DocumentService(db).upload(
@@ -139,8 +146,14 @@ async def list_documents(
     Unpaginated, because a chart's document count is bounded by the patient's history. The
     listing is a PHI disclosure in itself — file names and dates describe the patient's care —
     so it is audited as `document_list_viewed`.
+
+    Opening the chart is also what closes out documents whose extraction was interrupted and
+    never finished: they are marked `failed`, so they stop reading as "still being read" and
+    become retryable. That runs after this response is built, so a reclaim shows up on the next
+    load rather than this one.
     """
-    docs = await DocumentService(db).list(account.id, patient_id)
+    service = DocumentService(db)
+    docs = await service.list(account.id, patient_id)
     # Appended after the read and immediately before the commit: on PostgreSQL the append
     # lock is transaction-scoped and only released at COMMIT, so auditing first and reading
     # afterwards would hold the global lock for the length of the read.
@@ -155,7 +168,16 @@ async def list_documents(
         payload={"document_count": len(docs)},
     )
     await db.commit()
-    return [DocumentResponse.model_validate(d) for d in docs]
+    body = [DocumentResponse.model_validate(d) for d in docs]
+    # After the commit, and after the response has been materialised — never before. The
+    # reclaim runs in its own transaction so failed housekeeping cannot take the chart listing
+    # down with it, and its failure path rolls back, which expires *every* object in the
+    # session including the `account` this handler is still holding. Reading `account.id` after
+    # that reloads from an async engine outside a greenlet context and raises MissingGreenlet.
+    # Same placement, and mostly the same argument, as `AuthService.sweep_sessions_if_due` on
+    # the sign-in routes.
+    await service.reclaim_stalled_extractions(patient_id)
+    return body
 
 
 @router.get(
@@ -216,6 +238,40 @@ async def get_extraction(
 
 
 @router.post(
+    "/{doc_id}/extraction/retry",
+    response_model=DocumentResponse,
+    summary="Read a stored document again",
+    responses=_UPLOAD_ERRORS | errors(409),
+    dependencies=[Depends(rate_limit("document_upload"))],
+)
+async def retry_extraction(
+    patient_id: uuid.UUID,
+    doc_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentResponse:
+    """Re-run extraction over a document already in the chart, and report the new status.
+
+    The recovery path when a scan did not read: every vision provider was down, the worker was
+    restarted mid-page, or the extraction simply came back empty. The stored file is re-read
+    from storage — nothing is re-uploaded — and the previous extraction is replaced.
+
+    Refused with 409 if the extraction has already been approved (`extraction_already_approved`)
+    — those entities are in the record, and a fresh unreviewed extraction would no longer
+    describe what was merged — or if extraction is genuinely still running
+    (`extraction_in_progress`). A document that has been stuck in `processing` past
+    `EXTRACTION_STALL_MINUTES` is not "still running": nothing is finishing it, and it is
+    retryable.
+
+    Costs an LLM call, so it shares the upload rate limit and can answer 429.
+    """
+    document = await DocumentService(db).retry_extraction(
+        account_id=account.id, patient_id=patient_id, doc_id=doc_id
+    )
+    return DocumentResponse.model_validate(document)
+
+
+@router.post(
     "/{doc_id}/approve",
     summary="Merge a reviewed extraction into the patient graph",
     responses=PATIENT_ERRORS | errors(403, 409),
@@ -237,6 +293,13 @@ async def approve_extraction(
     (`correction_not_applicable`) and nothing is approved — the client is working from a stale
     view, and silently dropping the amendment would merge the value the clinician just
     overruled. Re-fetch `../extraction` and post the correction against it.
+
+    A document nothing was extracted from — it failed, or it read as empty — is a 422
+    (`nothing_to_approve`) rather than a 200 that merged nothing: approving it would tell the
+    clinician the scan is in the record and would overwrite the status that says it never was.
+    Read it again at `../extraction/retry`, or enter the details by hand. Rejecting every
+    extracted entity is a different thing and stays a 200 — that is a decision about a
+    document that *was* read.
 
     Safe to repeat. Approving twice merges nothing the second time rather than duplicating the
     document's entities, so a retry after a timeout — or a double-clicked button — is harmless.

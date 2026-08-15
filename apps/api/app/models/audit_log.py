@@ -51,6 +51,7 @@ AUDIT_ACTIONS = (
     "document_uploaded",
     "extraction_completed",
     "extraction_failed",
+    "extraction_retried",
     "extraction_approved",
     "field_corrected",
     "graph_merged",

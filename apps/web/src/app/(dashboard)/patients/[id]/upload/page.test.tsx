@@ -17,6 +17,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       uploadDocument: vi.fn(),
       getExtraction: vi.fn(),
       approveExtraction: vi.fn(),
+      retryDocumentExtraction: vi.fn(),
     },
   };
 });
@@ -442,5 +443,76 @@ describe('UploadPage unreadable-line warning', () => {
     await review({ unreadable_line_count: undefined });
 
     expect(screen.queryByText(/could not be read/i)).not.toBeInTheDocument();
+  });
+});
+
+
+describe('UploadPage when nothing could be read from the document', () => {
+  // An empty review queue and a document with nothing chartable on it render identically, and
+  // only one of them is a document that has been understood. Left unsaid, the screen offers an
+  // Approve button over an empty list — which the server refuses — and the clinician's only
+  // remaining move is to upload the same file a second time.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.uploadDocument).mockResolvedValue(DOC);
+  });
+
+  async function reviewEmpty() {
+    vi.mocked(api.getExtraction).mockResolvedValue(
+      extraction({ entities: [], confirmation_required_count: 0 }),
+    );
+    const user = userEvent.setup();
+    const { container } = render(<UploadPage params={{ id: 'pat-1' }} />);
+    await user.upload(fileInput(container), PDF);
+    await screen.findByText('Review extraction');
+    return user;
+  }
+
+  it('says nothing was read rather than showing an empty list', async () => {
+    await reviewEmpty();
+
+    const warning = await screen.findByRole('alert');
+    expect(warning).toHaveTextContent(/nothing could be read/i);
+    // The file is not lost, which is the part a clinician holding the only copy needs to hear.
+    expect(warning).toHaveTextContent(/stored/i);
+  });
+
+  it('does not offer to merge an empty extraction into the record', async () => {
+    await reviewEmpty();
+
+    expect(
+      screen.queryByRole('button', { name: /confirm & merge into record/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers to read the document again, and shows what the retry found', async () => {
+    const user = await reviewEmpty();
+    vi.mocked(api.retryDocumentExtraction).mockResolvedValue(DOC);
+    vi.mocked(api.getExtraction).mockResolvedValue(extraction());
+
+    await user.click(screen.getByRole('button', { name: /read the document again/i }));
+
+    await waitFor(() => expect(api.retryDocumentExtraction).toHaveBeenCalledWith('pat-1', 'doc-1'));
+    // The file is never re-posted — the stored bytes are re-read on the server.
+    expect(api.uploadDocument).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByRole('button', { name: /confirm & merge into record/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/nothing could be read/i)).not.toBeInTheDocument();
+  });
+
+  it('reports a failed re-read and offers to try it again', async () => {
+    const user = await reviewEmpty();
+    vi.mocked(api.retryDocumentExtraction).mockRejectedValue(
+      new ApiError(503, 'service_unavailable', 'Extraction is unavailable right now.'),
+    );
+
+    await user.click(screen.getByRole('button', { name: /read the document again/i }));
+
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    // The API's own clinician-facing message, not a page-local relabelling of it.
+    expect(screen.getByText('Extraction is unavailable right now.')).toBeInTheDocument();
+    // And the empty-extraction notice is still up, so the offer to re-read has not vanished.
+    expect(screen.getByRole('button', { name: /read the document again/i })).toBeInTheDocument();
   });
 });

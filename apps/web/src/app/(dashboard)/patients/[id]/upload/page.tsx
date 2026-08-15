@@ -94,6 +94,34 @@ export default function UploadPage({ params }: { params: { id: string } }) {
     }
   }
 
+  /**
+   * Read the stored document again, for a scan that produced nothing.
+   *
+   * Distinct from `retryExtraction` above, which re-fetches an extraction that already exists.
+   * This re-runs the extraction itself, and it is the only way out of an empty review queue:
+   * the causes are usually transient and nothing about them is the clinician's to fix — every
+   * vision provider unreachable, the worker restarted mid-page. Without it the screen offers
+   * an Approve button over an empty list, which the server now refuses, and the only remaining
+   * move is to upload the same file again.
+   */
+  async function rereadDocument(docId: string) {
+    setError(null);
+    setRetry(null);
+    setBusy(true);
+    try {
+      await api.retryDocumentExtraction(id, docId);
+      await loadExtraction(docId);
+    } catch (err) {
+      fail(
+        err,
+        'reading the document again',
+        err instanceof ApiError ? () => void rereadDocument(docId) : null,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleDragOver(e: React.DragEvent) {
     e.preventDefault();
     setIsDragging(true);
@@ -274,6 +302,35 @@ export default function UploadPage({ params }: { params: { id: string } }) {
               any entity to exclude it.
             </p>
             {/*
+              An empty queue is not a document with nothing on it — it is a document nothing was
+              read from, and the two look identical here. Left unsaid, the screen shows an empty
+              list under an Approve button; the server refuses that approval, correctly, and the
+              clinician is left with no move except uploading the same file again. The usual
+              causes are transient and none of them are theirs to fix, so the remedy is on the
+              screen with the diagnosis.
+            */}
+            {reviewed.extraction.entities.length === 0 && (
+              <div
+                role="alert"
+                className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-200"
+              >
+                <p>
+                  Nothing could be read from this document, so there is nothing to approve into
+                  the record. The file itself is stored and can still be opened. Try reading it
+                  again, or enter the details by hand.
+                </p>
+                <Button
+                  className="mt-2"
+                  variant="secondary"
+                  onClick={() => void rereadDocument(reviewed.docId)}
+                  disabled={busy}
+                  aria-busy={busy}
+                >
+                  {busy ? 'Reading…' : 'Read the document again'}
+                </Button>
+              </div>
+            )}
+            {/*
               The list below can only show what was read. Without this, a page whose drug line the
               scanner mangled reads as a complete, cleanly-extracted prescription — so the one
               thing the clinician needs to know is that the queue is short of the original.
@@ -332,14 +389,19 @@ export default function UploadPage({ params }: { params: { id: string } }) {
           </ul>
 
           <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
-            <Button
-              className="w-full sm:w-auto"
-              onClick={() => void approve(reviewed.docId)}
-              disabled={busy}
-              aria-busy={busy}
-            >
-              {busy ? 'Saving…' : 'Confirm & merge into record'}
-            </Button>
+            {/* Not rendered at all when there is nothing to merge: the server refuses that
+                approval, and offering a button whose only outcome is an error reads as the
+                system being broken rather than as the scan not having been read. */}
+            {reviewed.extraction.entities.length > 0 && (
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => void approve(reviewed.docId)}
+                disabled={busy}
+                aria-busy={busy}
+              >
+                {busy ? 'Saving…' : 'Confirm & merge into record'}
+              </Button>
+            )}
             <Link href={`/patients/${id}`} className="w-full sm:w-auto">
               <Button className="w-full sm:w-auto" variant="secondary">
                 Discard

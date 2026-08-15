@@ -24,11 +24,43 @@ every other request queues behind it.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
+from sqlalchemy import event
 
 from tests.conftest import create_patient
 from tests.test_documents import PRESCRIPTION
 from tests.test_query_efficiency import counting_queries
+
+_COMMIT = "<<COMMIT>>"
+
+
+@contextmanager
+def statements_and_commits(engine):
+    """Every statement executed on ``engine``, with a ``_COMMIT`` marker where each COMMIT fell.
+
+    ``counting_queries`` hangs off ``before_cursor_execute``, which never sees a COMMIT — the
+    driver commits at the connection, not through a cursor. That is enough for counting work,
+    but not for the one property below, which is about a *window*: the audit append takes an
+    advisory lock that has no unlock and is released by the COMMIT. Where the COMMIT falls is
+    therefore half of what is being asserted, so it has to be recorded too.
+    """
+    recorded: list[str] = []
+
+    def _statement(conn, cursor, statement, parameters, context, executemany):
+        recorded.append(statement)
+
+    def _commit(conn):
+        recorded.append(_COMMIT)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _statement)
+    event.listen(engine.sync_engine, "commit", _commit)
+    try:
+        yield recorded
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _statement)
+        event.remove(engine.sync_engine, "commit", _commit)
 
 
 async def _upload(auth_client, patient_id: str) -> dict:
@@ -280,26 +312,35 @@ async def test_the_audit_insert_is_the_last_statement_of_a_read_request(
 
     Asserted on statement order because that is the observable form of the property; there is
     nothing to measure on SQLite, where the lock is a no-op.
+
+    The window that matters ends at the COMMIT, which is where the lock is released — so what
+    is asserted is that nothing runs *between* the INSERT and that COMMIT. Work a handler does
+    afterwards is outside the lock by construction and is not this test's business: the
+    document listing runs its stalled-extraction reclaim there for exactly that reason.
     """
     patient = await create_patient(auth_client)
     doc = await _upload(auth_client, patient["id"])
     url = template.format(pid=patient["id"], doc=doc["id"])
 
-    with counting_queries(engine) as counter:
+    with statements_and_commits(engine) as recorded:
         assert (await auth_client.get(url)).status_code == 200
 
-    statements = [s.strip() for s in counter["statements"] if s.strip()]
+    statements = [s.strip() for s in recorded if s.strip()]
     inserts = [
         i for i, s in enumerate(statements) if s.upper().startswith("INSERT INTO AUDIT_LOGS")
     ]
     assert len(inserts) == 1, f"{action} issued {len(inserts)} audit inserts"
 
     after = statements[inserts[0] + 1 :]
+    # Cut at the COMMIT: that is where the advisory lock is released, so that is where the
+    # window this test is about ends.
+    assert _COMMIT in after, f"{action} appended an audit entry and never committed it"
+    inside_the_lock = after[: after.index(_COMMIT)]
     # A savepoint release belongs to the append itself, and the tail read is part of it.
-    residual = [s for s in after if not s.upper().startswith(("RELEASE", "SAVEPOINT", "COMMIT"))]
+    residual = [s for s in inside_the_lock if not s.upper().startswith(("RELEASE", "SAVEPOINT"))]
     assert residual == [], (
-        f"{action} issued {len(residual)} statement(s) after appending its audit entry, so the "
-        f"global append lock is held across them: {residual[:3]}"
+        f"{action} issued {len(residual)} statement(s) between appending its audit entry and "
+        f"committing, so the global append lock is held across them: {residual[:3]}"
     )
 
 

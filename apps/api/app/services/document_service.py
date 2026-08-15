@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -17,7 +17,10 @@ from app.exceptions import (
     CorrectionNotApplicableError,
     DocumentNotFoundError,
     EntityNotMergeableError,
+    ExtractionAlreadyApprovedError,
+    ExtractionInProgressError,
     FileTooLargeError,
+    NothingToApproveError,
     UnsupportedFileTypeError,
 )
 from app.models.document import Document
@@ -91,6 +94,48 @@ def _band(score: float) -> str:
     if score >= settings.ocr_fallback_threshold:
         return "medium"
     return "low"
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite drops tzinfo on round-trip; treat a naive timestamp as UTC. See auth_service."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def is_stalled(document: Document) -> bool:
+    """Whether a ``processing`` document has been abandoned rather than being worked on.
+
+    Extraction runs inside the request that uploaded (or retried) the document and is bounded
+    well under ``settings.extraction_stall_minutes`` — see the setting for the arithmetic. So
+    once that long has passed there is no request left to finish it: the worker was restarted
+    mid-extraction, the deploy rolled, or the client disconnected and the handler's task was
+    cancelled between the commit that records the attempt and the commit that records its
+    result. ``asyncio.CancelledError`` is not an ``Exception`` and so is deliberately not caught
+    by ``_run_extraction``'s handler; this is what covers it instead.
+
+    A ``processing`` row with no ``extraction_started_at`` is stalled by definition — the two
+    are written in the same flush, so a row missing the timestamp predates that pairing and
+    cannot be evidence of anything in flight.
+    """
+    if document.extraction_status != "processing":
+        return False
+    started = document.extraction_started_at
+    if started is None:
+        return True
+    cutoff = datetime.now(UTC) - timedelta(minutes=settings.extraction_stall_minutes)
+    return _aware(started) < cutoff
+
+
+def _is_retryable(document: Document) -> bool:
+    """Whether re-reading this document would be a recovery rather than a regression.
+
+    ``failed`` is the obvious one, and ``pending``/stalled-``processing`` are documents nothing
+    is going to finish on its own. An extraction that has been *approved* is excluded: its
+    entities are in the chart, and replacing the reviewed extraction with an unreviewed one
+    would leave the review screen describing something other than what was merged.
+    """
+    if (document.extraction_metadata or {}).get("approved"):
+        return False
+    return document.extraction_status in {"failed", "pending"} or is_stalled(document)
 
 
 class DocumentService:
@@ -171,6 +216,15 @@ class DocumentService:
         )
         dup = existing.scalar_one_or_none()
         if dup is not None:
+            # Same bytes, same chart: one document, not two. But "already uploaded" and "already
+            # read" are different facts, and returning the row unconditionally conflated them.
+            # A document whose extraction failed — a provider outage, a worker restart — came
+            # back from a re-upload exactly as it was, still `failed`, with no second attempt
+            # made. Uploading the file again is the first thing anyone tries when a scan will
+            # not read, and it was the one recovery guaranteed to do nothing.
+            if _is_retryable(dup):
+                await self._run_extraction(account_id, dup, data)
+                await self.db.refresh(dup)
             return dup
 
         storage_path = await self.storage.write_async(str(patient_id), sha256, file_name, data)
@@ -198,10 +252,32 @@ class DocumentService:
             # only duplicates a likely direct identifier into an immutable never-pruned table.
             payload={"file_type": file_type, "sha256": sha256},
         )
-        # Phase 1: extraction runs synchronously. (Plan P1-05c upgrades this to a Redis
-        # Stream worker with SSE progress; the pipeline interface is unchanged.)
-        await self._run_extraction(account_id, document, data)
+        # The upload is committed before extraction begins, and this is not a tidiness
+        # preference — two things went wrong while one transaction spanned both.
+        #
+        # The audit log serialises appends on a *transaction-scoped* advisory lock, taken by the
+        # `document_uploaded` record above and held until COMMIT (``AuditService._lock`` spells
+        # this out: "a request that appends early and then does a second of clinical work holds
+        # the global append lock for that second"). Extraction is not a second of work, it is up
+        # to a minute and a half of it — three vision providers at `llm_request_timeout_seconds`
+        # each, or a 60s Tesseract subprocess. Every audit append in the deployment queued behind
+        # one clinician's unreadable scan, and since almost every write path audits, so did
+        # almost every write: sign-ins, chart edits, reasoning runs. It also held a connection
+        # from a pool of `database_pool_size` for the same stretch.
+        #
+        # And the document only existed once extraction was over. Anything that killed the
+        # request before then — a worker restart, a rolling deploy, the client disconnecting —
+        # rolled the row back and left the bytes on disk, which is the orphaned-blob failure
+        # ``_run_extraction`` describes, reachable by every route except an exception out of the
+        # pipeline. Committing here makes the upload durable the moment it is stored; a failure
+        # during extraction now leaves a visible `processing` row that `reclaim_stalled_
+        # extractions` finishes, instead of nothing at all.
+        #
+        # Phase 1: extraction still runs inline, in the same request. (Plan P1-05c upgrades this
+        # to a Redis Stream worker with SSE progress; the pipeline interface is unchanged, and
+        # the durable pre-extraction row is what that worker would pick up.)
         await self.db.commit()
+        await self._run_extraction(account_id, document, data)
         await self.db.refresh(document)
         return document
 
@@ -223,10 +299,21 @@ class DocumentService:
         nothing ever set it. This is the state it was for: the document is kept, the clinician
         can still download the original and enter the values by hand, and the failure is on the
         audit trail rather than only in a server log.
+
+        Runs in its own transactions, before and after: the caller has already committed the
+        row (see ``upload``), and the ``processing`` marker below is committed so that a request
+        that dies mid-extraction leaves evidence of the attempt rather than a row that quietly
+        reverts to ``pending`` and is never looked at again.
         """
         document.extraction_status = "processing"
         document.extraction_started_at = datetime.now(UTC)
-        await self.db.flush()
+        # Committed, not just flushed. A flush is invisible outside this transaction and is
+        # undone by the rollback that follows a crash or a cancellation, so `processing` only
+        # became a durable state once it was committed on its own — and a durable `processing`
+        # row is the entire input to ``reclaim_stalled_extractions``. Without this, an
+        # interrupted extraction leaves a `pending` document that nothing distinguishes from
+        # one whose extraction has not started, and no code path ever starts it.
+        await self.db.commit()
 
         try:
             # Off the event loop. ``ExtractionPipeline.run`` is synchronous and every branch of
@@ -292,9 +379,20 @@ class DocumentService:
         # "completed" — which reads as "this page has been fully understood". It has not been, and
         # the one thing standing between that and a chart missing a drug is whether the clinician
         # happens to compare the queue against the original.
+        # Nothing read is not the same as nothing to do, and "completed" says the second. An
+        # extraction that produced no entities at all — an unreadable scan, or every vision
+        # provider down while the file had no text layer for the deterministic parser to work
+        # on — used to land here as `completed` with an empty review queue, which on the
+        # document list is indistinguishable from a page that was read and simply held nothing
+        # chartable. The scan is then filed as processed and nobody keys its drugs in.
+        #
+        # `needs_confirmation` is what that document is: a human has to look at the original
+        # before anything from it can be in the chart. It also keeps the document out of
+        # `completed`, which is the state the approval path writes and the one that means the
+        # clinician has signed the extraction off.
         document.extraction_status = (
             "needs_confirmation"
-            if confirmation_required or result.unreadable_lines
+            if not result.entities or confirmation_required or result.unreadable_lines
             else "completed"
         )
         await self.db.flush()
@@ -311,16 +409,36 @@ class DocumentService:
                 "status": document.extraction_status,
             },
         )
+        await self.db.commit()
 
     async def _mark_extraction_failed(
-        self, account_id: uuid.UUID, document: Document, exc: Exception
+        self,
+        account_id: uuid.UUID,
+        document: Document,
+        exc: Exception | None = None,
+        *,
+        failure_type: str | None = None,
     ) -> None:
-        """Record the failure on the document and on the audit trail. See ``_run_extraction``."""
+        """Record the failure on the document and on the audit trail. See ``_run_extraction``.
+
+        Either an ``exc`` (the pipeline raised) or an explicit ``failure_type`` (the extraction
+        was never finished by anyone — see ``reclaim_stalled_extractions``).
+        """
+        if failure_type is not None:
+            kind = failure_type
+        elif exc is not None:
+            kind = type(exc).__name__
+        else:  # pragma: no cover — both callers supply one or the other
+            kind = "UnknownError"
         logger.exception(
-            "Extraction failed for document %s (file_type=%s); the document is kept and marked "
-            "failed for manual entry.",
+            "Extraction failed for document %s (file_type=%s, failure_type=%s); the document is "
+            "kept and marked failed for manual entry.",
             document.id,
             document.file_type,
+            kind,
+            # No live exception on the reclaim path, and logger.exception would then log
+            # "NoneType: None" as the traceback.
+            exc_info=exc is not None,
         )
         document.extraction_status = "failed"
         document.extraction_completed_at = datetime.now(UTC)
@@ -336,7 +454,7 @@ class DocumentService:
             "approved": False,
             # Type only. The exception's message can quote the document's contents (a parser
             # error carries the text it choked on), and extraction_metadata is not encrypted.
-            "failure_type": type(exc).__name__,
+            "failure_type": kind,
         }
         await self.db.flush()
         await self.audit.record(
@@ -345,8 +463,131 @@ class DocumentService:
             patient_id=document.patient_id,
             entity_type="document",
             entity_id=document.id,
-            payload={"failure_type": type(exc).__name__},
+            payload={"failure_type": kind},
         )
+        await self.db.commit()
+
+    async def reclaim_stalled_extractions(self, patient_id: uuid.UUID) -> int:
+        """Close out this chart's abandoned ``processing`` documents. Returns how many.
+
+        The class of document this exists for: uploaded, stored, recorded, extraction begun —
+        and then nothing, because the request that was doing the extracting is gone. A worker
+        restart, a rolling deploy, an OOM kill, or a cancellation (``asyncio.CancelledError`` is
+        a ``BaseException``, so ``_run_extraction``'s ``except Exception`` does not see it, and
+        deliberately: there is nothing useful to do inside a task that is being torn down).
+        Left alone the row reads "being read" in the chart forever, is not in the review queue
+        because it has no extraction, and is not in any list of failures because it never
+        failed. It is the quietest way for a scan to go missing.
+
+        Reclaiming means marking it ``failed`` with ``failure_type: "ExtractionInterrupted"``,
+        which puts it on the audit trail, tells the clinician the truth on the document list,
+        and — because ``_is_retryable`` reads that status — makes re-uploading the file or
+        pressing Retry actually re-read it.
+
+        Scoped to one patient and hung off the document listing rather than run by a scheduler,
+        for the reason ``AuthService.sweep_sessions_if_due`` gives: this deployment has no
+        scheduler, and the chart someone is looking at is where a stuck document matters. It
+        commits its own work and swallows its own failures — a chart that cannot be listed
+        because housekeeping failed would be a strictly worse outcome than an unreclaimed row.
+
+        **Call it after the caller has finished with its own session**, which for the listing
+        route means after the response models are built. Two reasons, and the first is not
+        obvious: ``Session.rollback`` expires *every* object in the session regardless of
+        ``expire_on_commit``, so the failure path below silently expires whatever the request is
+        holding — including the ``Account`` the authentication dependency loaded. The next plain
+        attribute read on it (``account.id``, on the line after this one used to be called) then
+        tries to reload from an async engine outside a greenlet context and raises
+        ``MissingGreenlet``: a 500, from the error handling that exists to prevent one. The
+        second is the ordinary one — committing inside someone else's transaction commits their
+        half-finished work too.
+
+        The cost is that a chart with a stuck document shows it as ``processing`` once more
+        before the reclaim lands. That is the right way round: a listing that is one refresh
+        behind on abandoned housekeeping beats a listing that 500s.
+        """
+        try:
+            rows = (
+                (
+                    await self.db.execute(
+                        select(Document).where(
+                            Document.patient_id == patient_id,
+                            Document.is_deleted.is_(False),
+                            Document.extraction_status == "processing",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Filtered in Python, not in SQL: `extraction_started_at` comes back tz-naive from
+            # SQLite and comparing it against an aware cutoff raises. The candidate set is every
+            # in-flight extraction for one patient, which is zero or one in ordinary operation.
+            stalled = [row for row in rows if is_stalled(row)]
+            for document in stalled:
+                logger.warning(
+                    "Reclaiming document %s: extraction has been in `processing` since %s and "
+                    "no request is finishing it.",
+                    document.id,
+                    document.extraction_started_at,
+                )
+                await self._mark_extraction_failed(
+                    document.account_id, document, failure_type="ExtractionInterrupted"
+                )
+            return len(stalled)
+        except Exception:
+            await self.db.rollback()
+            logger.warning(
+                "Reclaiming stalled extractions for patient %s failed; the documents were left "
+                "as they were.",
+                patient_id,
+                exc_info=True,
+            )
+            return 0
+
+    async def retry_extraction(
+        self, *, account_id: uuid.UUID, patient_id: uuid.UUID, doc_id: uuid.UUID
+    ) -> Document:
+        """Read a stored document again. The recovery path for an extraction that did not work.
+
+        Extraction can fail for reasons that have nothing to do with the scan — every vision
+        provider down, a worker restarted mid-page — and until this existed there was no way
+        back from any of them. The document sat in the chart as ``failed`` (or, worse,
+        ``processing``) permanently, and re-uploading the identical file matched the dedup
+        lookup and returned the same untouched row.
+
+        Refused for a document whose extraction is already approved, and for one that is
+        genuinely still being read. Everything else is re-read, including a successful
+        extraction the clinician does not trust — nothing from it is in the record until they
+        approve it, so replacing it costs nothing.
+        """
+        document = await self.get(account_id, patient_id, doc_id)
+        if (document.extraction_metadata or {}).get("approved"):
+            raise ExtractionAlreadyApprovedError()
+        if document.extraction_status == "processing" and not is_stalled(document):
+            raise ExtractionInProgressError(
+                detail=f"extraction started at {document.extraction_started_at}"
+            )
+        # Re-reading a scan puts new extracted personal data on the record, so it is subject to
+        # the same DPDP lawful-basis check as the upload that first stored it.
+        await self._get_patient_for_processing(account_id, patient_id)
+
+        data = await self.storage.read_async(document.storage_path)
+        await self.audit.record(
+            action="extraction_retried",
+            account_id=account_id,
+            patient_id=patient_id,
+            entity_type="document",
+            entity_id=document.id,
+            payload={"previous_status": document.extraction_status},
+        )
+        # Committed before the pipeline runs, for the reason `upload` sets out at length: the
+        # audit append lock is transaction-scoped, and holding it across a vision call would
+        # queue every other audit append in the deployment behind this one retry.
+        await self.db.commit()
+
+        await self._run_extraction(account_id, document, data)
+        await self.db.refresh(document)
+        return document
 
     async def get(
         self,
@@ -448,6 +689,18 @@ class DocumentService:
         patient = await self._get_patient_for_processing(account_id, patient_id, for_update=True)
         meta = dict(document.extraction_metadata or {})
         raw_entities = meta.get("entities", [])
+
+        # There is a difference between "I reviewed this and rejected all of it" and "there was
+        # never anything here", and only the first is an approval. An extraction that produced
+        # no entities — it failed, or it ran and read nothing off an unreadable scan — used to
+        # answer 200 with `{"merged": {}}` and set `extraction_status` to `completed`, which
+        # both told the clinician the document was in the record and destroyed the one marker
+        # showing it had never been read. See NothingToApproveError; the way forward is
+        # ../extraction/retry, or entering the values by hand.
+        if not raw_entities:
+            raise NothingToApproveError(
+                detail=f"extraction_status={document.extraction_status}, no extracted entities"
+            )
 
         # Resolve every correction to the field it names *before* applying any of them. A
         # correction that matched nothing used to be dropped and the approval still answered

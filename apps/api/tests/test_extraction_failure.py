@@ -199,6 +199,7 @@ async def test_a_slow_extraction_does_not_stall_the_rest_of_the_worker(auth_clie
             release.set()
         resp = await upload
 
-    # And the upload itself still lands, with the empty extraction the pipeline returned.
+    # And the upload itself still lands, with the empty extraction the pipeline returned —
+    # `needs_confirmation`, because a document nothing was read from needs a human, not a tick.
     assert resp.status_code == 201, resp.text
-    assert resp.json()["extraction_status"] == "completed"
+    assert resp.json()["extraction_status"] == "needs_confirmation"

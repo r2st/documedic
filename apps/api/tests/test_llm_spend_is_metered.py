@@ -78,6 +78,9 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/patients/{patient_id}/documents/{doc_id}/approve"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/documents/{doc_id}/extraction"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/documents/{doc_id}/file"): DETERMINISTIC,
+    # Retry re-runs the same multimodal extraction over the stored scan, so it costs exactly
+    # what the upload costs and shares the upload's ceiling.
+    ("POST", "/api/v1/patients/{patient_id}/documents/{doc_id}/extraction/retry"): LLM,
     # --- drug safety and labs. Critical Safety Rule #8 — these answer whenever asked.
     ("POST", "/api/v1/patients/{patient_id}/drug-safety/check"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/drug-safety/flags"): DETERMINISTIC,

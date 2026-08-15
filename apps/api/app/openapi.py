@@ -51,7 +51,10 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "rather than starting a second — two runs write two sets of immutable suggestions "
         "against one session), `concurrent_answer` when another submission recorded an answer "
         "to one of the same intake questions first (reload the intake and re-enter anything "
-        "missing — a clarifying question has exactly one answer of record), `conflict` "
+        "missing — a clarifying question has exactly one answer of record), "
+        "`extraction_in_progress` when a document is still being read and a second extraction "
+        "of it was asked for, `extraction_already_approved` when re-reading a document whose "
+        "extracted details are already merged into the record was asked for, `conflict` "
         "otherwise."
     ),
     429: (

@@ -270,6 +270,18 @@ export const api = {
   },
   getExtraction: (id: string, docId: string) =>
     request<ExtractionResult>(`/patients/${id}/documents/${docId}/extraction`),
+  /**
+   * Read a stored document again, replacing whatever the last extraction produced.
+   *
+   * Not the same as re-fetching `getExtraction`, which reads what is already there. This
+   * re-runs the extraction itself over the stored file — the way back from a scan that did not
+   * read because every vision provider was down, or because the worker was restarted part-way
+   * through. Refused with 409 once the extraction has been approved into the record.
+   */
+  retryDocumentExtraction: (id: string, docId: string) =>
+    request<DocumentResponse>(`/patients/${id}/documents/${docId}/extraction/retry`, {
+      method: 'POST',
+    }),
   approveExtraction: (id: string, docId: string, rejected: number[] = []) =>
     request<{ merged: Record<string, number> }>(`/patients/${id}/documents/${docId}/approve`, {
       method: 'POST',

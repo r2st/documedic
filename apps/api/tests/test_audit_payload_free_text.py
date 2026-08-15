@@ -524,6 +524,10 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
         "status",
     },
     "extraction_failed": {"failure_type"},
+    # A status name from a fixed five-value vocabulary (the ck_documents_extraction_status
+    # constraint) — what the document was before it was read again. No document content and
+    # nothing patient-derived, which is what lets it sit in an unencrypted table forever.
+    "extraction_retried": {"previous_status"},
     "field_corrected": {"corrections"},
     "extraction_approved": {"merged", "rejected_count"},
     # --- clinical. ``flags`` here is structured measurements plus the lab row ids they came
