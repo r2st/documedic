@@ -12,6 +12,7 @@ from app.agents.state import CaseState
 from app.agents.tools import summarize_snapshot
 from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, text_list
+from app.core.clinical_language import prescriber_framed, prescriber_framed_list
 
 AGENT = "devils_advocate"
 
@@ -70,13 +71,42 @@ def _critique(leading: str, result: dict) -> dict:
     malformed one took down not just the dissent but the whole suggestion it was attached to,
     leaving the leading hypothesis on screen with nothing arguing against it. Coercion keeps the
     dissent readable instead: a bare string becomes one item, an object is flattened to its text.
+
+    **Prescriber framing (Critical Safety Rule #4) is applied here rather than in
+    ``synthesis``**, which is where every other model-written clinical string in the engine is
+    reframed. Two reasons, and the second is the one that matters. This critique is not only
+    persisted onto a ``ClinicalSuggestion``: it is emitted as its own SSE event straight from
+    ``run`` below and written into the ``case_state`` snapshot, so the Reasoning Theatre renders
+    it live, minutes before ``synthesis`` runs — reframing it downstream would leave the text
+    the clinician actually read untouched. And Rule #5 puts this agent's output on screen for
+    *every* case, uncollapsed, by construction, which makes it the model prose most certain to
+    be read and the worst place for "The patient has GERD, not ACS" to survive. ``summary`` and
+    ``base_rate_caveat`` are conclusions about the case and ``alternative_explanations`` are
+    diagnoses, so all three are framed.
+
+    ``disconfirming_evidence`` deliberately is not. It is a list of findings that argue against
+    the leading hypothesis, and ``app.core.clinical_language`` excludes evidence lines on
+    purpose: "the patient has crushing chest pain" is an accurate record of a symptom, and
+    hedging it would make the record less true rather than more careful.
+
+    ``prescriber_framed`` is idempotent, so ``synthesis``'s own pass over the fields it owns
+    stays correct with this in front of it.
     """
+    alternatives, alts_reframed = prescriber_framed_list(
+        text_list(result.get("alternative_explanations"))
+    )
+    caveat, caveat_reframed = prescriber_framed(as_text(result.get("base_rate_caveat")))
+    summary, summary_reframed = prescriber_framed(as_text(result.get("summary")))
     return {
         "leading_hypothesis": leading,
         "disconfirming_evidence": text_list(result.get("disconfirming_evidence")),
-        "alternative_explanations": text_list(result.get("alternative_explanations")),
-        "base_rate_caveat": as_text(result.get("base_rate_caveat")),
-        "summary": as_text(result.get("summary")),
+        "alternative_explanations": alternatives,
+        "base_rate_caveat": caveat,
+        "summary": summary,
+        # Recorded, not escalated — see ``app.core.clinical_language`` for why a phrasing defect
+        # must not fill the flag-for-review tier. It reaches the Theatre and the immutable
+        # suggestion, so a provider that keeps ignoring its framing instructions is visible.
+        "language_reframed": alts_reframed or caveat_reframed or summary_reframed,
     }
 
 
@@ -100,4 +130,8 @@ def _fallback(state: CaseState, leading: str) -> dict:
             f"Findings are not specific for {leading.lower()}; the evidence remains "
             "compatible with alternatives until a discriminating test is performed."
         ),
+        # Written by us and already prescriber-framed, so nothing was rewritten. Stated rather
+        # than omitted so the key is present on every critique the UI receives, whichever
+        # branch produced it.
+        "language_reframed": False,
     }

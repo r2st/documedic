@@ -8,6 +8,7 @@ from app.agents.state import CaseState, Investigation
 from app.agents.tools import compute_discriminating_test
 from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, norm_band, objects
+from app.core.clinical_language import prescriber_framed
 
 AGENT = "investigation_strategist"
 _TIERS = {"phc", "chc", "district_hospital", "referral"}
@@ -32,12 +33,20 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             if not name:
                 continue
             tier = inv.get("availability_tier")
+            # Critical Safety Rule #4, applied here rather than in ``synthesis``: the rationale
+            # is emitted on the ``investigations`` SSE event below and read in the Theatre long
+            # before a suggestion is built, so reframing it downstream would leave the sentence
+            # the clinician saw untouched. It is also the field most likely to carry an order —
+            # "Start empirical antibiotics while awaiting the culture" is a natural way for a
+            # model to justify a test, and it is a prescribing instruction. The test *name* is
+            # left alone: it is a noun, not a claim.
+            rationale, _ = prescriber_framed(as_text(inv.get("rationale")))
             investigations.append(
                 Investigation(
                     name=name,
                     # Coerced, not passed through: these are rendered as strings on the
                     # suggestion card, and an object here reaches the client as one.
-                    rationale=as_text(inv.get("rationale")),
+                    rationale=rationale,
                     expected_information_gain=norm_band(
                         inv.get("expected_information_gain"), "moderate"
                     ),

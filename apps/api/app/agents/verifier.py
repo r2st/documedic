@@ -18,6 +18,7 @@ from app.agents.state import (
 from app.agents.tools import summarize_snapshot
 from app.agents.untrusted import fenced
 from app.agents.util import as_text, call_llm, text_list
+from app.core.clinical_language import prescriber_framed, prescriber_framed_list
 
 AGENT = "verifier"
 _VALID_STATUS = {"agree", "partial_disagreement", "major_disagreement"}
@@ -38,9 +39,23 @@ def _recognised(value: object, allowed: set[str], default: str | None) -> str | 
     return value if isinstance(value, str) and value in allowed else default
 
 
-# Caveats are a model-supplied list of sentences, coerced the same way every other agent's is.
-# This guard started here and now lives in ``util`` because the Devil's-Advocate needed it too.
-_caveat_list = text_list
+def _caveat_list(value: object) -> list[str]:
+    """Model-supplied caveats: coerced to a list of sentences, then prescriber-framed.
+
+    The coercion half started here and now lives in ``util.text_list`` because the
+    Devil's-Advocate needed it too. The framing half is Critical Safety Rule #4, applied at
+    this node rather than in ``synthesis`` for the reason the other agents give: the caveats go
+    out on the ``verifier`` SSE event below and into the ``case_state`` snapshot, so the
+    Theatre renders them long before a ``ClinicalSuggestion`` exists to reframe.
+
+    The gate's own prose is worth framing even though the gate is the agent asked to be
+    cautious. A caveat is where a certainty claim is most plausible — "The patient has sepsis;
+    treat before the culture returns" reads as diligence — and the Verifier's word carries more
+    weight with the clinician than any other agent's, which is exactly why its modality has to
+    be checked like everything else rather than trusted because of who said it.
+    """
+    framed, _ = prescriber_framed_list(text_list(value))
+    return framed
 
 
 async def run(state: CaseState, ctx: ReasoningContext) -> None:
@@ -87,11 +102,15 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             # nothing to keep -- and calling .get() on it would raise inside the ungated node.
             if not isinstance(v, dict):
                 continue
+            # ``target`` is not framed: it is the *name* of the thing that was checked, and it
+            # has to keep matching a hypothesis name for ``synthesis._verdict_for`` to attach
+            # the verdict to the right card. The rationale is the claim, and it is framed.
+            rationale, _ = prescriber_framed(as_text(v.get("rationale")))
             verdicts.append(
                 VerifierVerdict(
                     target=as_text(v.get("target")),
                     status=_recognised(v.get("status"), _VALID_STATUS, "agree") or "agree",
-                    rationale=as_text(v.get("rationale")),
+                    rationale=rationale,
                     caveats=_caveat_list(v.get("caveats")),
                 )
             )

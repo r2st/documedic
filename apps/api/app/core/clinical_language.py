@@ -22,11 +22,23 @@ untouched and in place. "Give aspirin 300 mg" becomes "Guidelines support consid
 dropped or reworded the clinical noun phrase would be a far worse bug than the one being fixed,
 so the patterns are anchored, narrow, and only ever replace a leading verb phrase.
 
-**Scope: titles and bodies, not evidence.** Applied to the text that carries a *conclusion or
-recommendation* and deliberately not to evidence lines, where "the patient has crushing chest
-pain" is an accurate record of a symptom rather than a certainty claim about a diagnosis.
-Reframing a finding into a hedge would make the record less true, not more careful. See
-``app.agents.synthesis`` for the call sites.
+**Scope: conclusions and recommendations, not evidence.** Applied to the text that carries a
+*conclusion or recommendation* and deliberately not to evidence lines, where "the patient has
+crushing chest pain" is an accurate record of a symptom rather than a certainty claim about a
+diagnosis. Reframing a finding into a hedge would make the record less true, not more careful.
+That is why ``Hypothesis.evidence_for``/``evidence_against`` and the Devil's-Advocate's
+``disconfirming_evidence`` are the three fields left alone.
+
+**Where it is applied, and why it is in two places.** ``app.agents.synthesis`` frames the
+strings it builds a ``ClinicalSuggestion`` out of — hypothesis titles and rationales, and the
+management-option text. That covers everything the persisted record carries and nothing else,
+which was the gap: three model-written fields reach the clinician *before* synthesis runs, over
+the Reasoning Theatre's SSE stream and in the ``case_state`` snapshot, and are then copied into
+the immutable suggestion verbatim. The Devil's-Advocate critique (``app.agents.devils_advocate``
+— on screen for every case by Rule #5, and uncollapsible), the Investigation Strategist's
+rationales, and the Verifier's verdict rationale and caveats are therefore framed at their own
+nodes, where the text is first read off the response. :func:`prescriber_framed` is idempotent
+precisely so that layering it this way is safe.
 
 **Not an escalation.** When a rewrite fires, the suggestion records that it did (visible in the
 Theatre and on the audit trail) but keeps its autonomy tier. Rule #2's "conservative wins" is
@@ -126,6 +138,19 @@ def prescriber_framed(text: str) -> tuple[str, bool]:
     result = _CERTAINTY_ADVERBS.sub("", result)
     result = _WHITESPACE.sub(" ", result).strip()
     return result, result != text
+
+
+def prescriber_framed_list(items: list[str]) -> tuple[list[str], bool]:
+    """:func:`prescriber_framed` over a list of sentences, and whether any of them moved.
+
+    The model-written clinical text in this engine is as often a *list* of sentences as a
+    single one — the Devil's-Advocate's alternative explanations, the Verifier's caveats — and
+    each item is its own claim, rendered as its own line. Framing them one at a time rather
+    than joining and re-splitting keeps each item's sentence-start anchor intact, which is what
+    every rule in ``_RULES`` is written against.
+    """
+    framed = [prescriber_framed(item) for item in items]
+    return [text for text, _ in framed], any(changed for _, changed in framed)
 
 
 def has_certainty_language(text: str) -> bool:

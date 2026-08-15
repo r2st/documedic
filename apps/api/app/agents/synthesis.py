@@ -45,10 +45,13 @@ def _framed(value: Any) -> tuple[str, bool]:
     :func:`~app.core.clinical_language.prescriber_framed` second, because Critical Safety Rule
     #4 is about the modality of the sentence that results.
 
-    This is the chokepoint on purpose. Every clinical string the engine emits is built here, so
-    a rule enforced at this one function cannot be bypassed by an agent added later — the same
-    argument ``agents.util.call_llm`` makes for appending the untrusted-data framing at the one
-    place a call leaves the process.
+    This is the chokepoint for the strings a ``ClinicalSuggestion`` is *built from* — its title
+    and its body — so a new output type added here cannot be the one that forgets. It is not
+    the only place the rule is enforced, and it cannot be: the Devil's-Advocate critique, the
+    investigation rationales and the Verifier's verdicts are all read in the Reasoning Theatre
+    over SSE before this node runs, and arrive here already assembled. Those three are framed at
+    their own nodes; see ``app.core.clinical_language`` for the division and for why
+    :func:`~app.core.clinical_language.prescriber_framed` is idempotent.
     """
     return prescriber_framed(as_text(value))
 
