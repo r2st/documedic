@@ -42,7 +42,11 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
     if result:
         critique = _critique(leader.diagnosis_name, result)
     else:
-        state.degraded = state.degraded or not ctx.llm_available()
+        # Reaching this branch *is* the degradation — see the same fix in
+        # ``cant_miss_sentinel``. ``ctx.llm_available()`` only reports whether a key is
+        # configured, so a provider that was down left the case marked healthy while the
+        # clinician read a template counter-argument in place of the dissent Rule #5 promises.
+        state.degraded = True
         critique = _fallback(state, leader.diagnosis_name)
 
     leader.devil_advocate = critique

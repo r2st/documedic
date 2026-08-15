@@ -74,7 +74,12 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
             )
             existing.add(name.lower())
     else:
-        state.degraded = state.degraded or not ctx.llm_available()
+        # Reaching this branch *is* the degradation. This asked ``ctx.llm_available()`` instead,
+        # which is a configuration check — it answers "is a key set", never "did the call work" —
+        # so a keyed provider that was down, revoked, out of quota or answering in prose left the
+        # case marked healthy while the sentinel ran on its rule table alone. See
+        # ``tests/test_agent_degraded_on_provider_failure.py``.
+        state.degraded = True
 
     state.hypothesis_set.extend(added)
     state.add_trace(AGENT, f"Forced {len(added)} can't-miss diagnoses onto the differential", {})

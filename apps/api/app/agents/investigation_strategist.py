@@ -46,7 +46,14 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
                 )
             )
     if not investigations:
-        state.degraded = state.degraded or not ctx.llm_available()
+        # Reaching this branch *is* the degradation — see the same fix in ``cant_miss_sentinel``.
+        # ``ctx.llm_available()`` only reports whether a key is configured, never whether the
+        # call worked, so a provider that was down left the case marked healthy. The condition is
+        # "nothing usable came back" rather than "the call failed", for the reason
+        # ``guideline_rag`` spells out at ``grounded_by_model``: a response nothing survived
+        # parsing from is not an answer of "no investigations", and either way what the clinician
+        # ends up reading is ``compute_discriminating_test``'s deterministic output.
+        state.degraded = True
         investigations = compute_discriminating_test(leaders)
 
     state.recommended_investigations.extend(investigations)

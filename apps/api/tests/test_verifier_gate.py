@@ -389,18 +389,36 @@ async def test_an_unavailable_model_marks_the_run_degraded():
     assert state.degraded is True
 
 
-async def test_a_provider_outage_mid_call_is_not_recorded_as_degraded_reasoning():
-    """A client that reports itself available and then fails is a different fact from one that
-    was never configured. ``degraded`` tracks "no AI in the loop"; ``ctx.llm_available()`` is
-    still true here, so the node falls back for this call without relabelling the whole run.
-    What matters for safety is that the floor still stands, which is asserted alongside.
+async def test_a_provider_outage_mid_call_is_recorded_as_degraded_reasoning():
+    """This asserted ``degraded is False`` until R57. The reversal, and why.
+
+    The position it encoded was that a client which reports itself available and then fails is a
+    different fact from one that was never configured, so the node should fall back for this call
+    without relabelling the run. The distinction is real; it is just not a distinction anyone
+    downstream can act on. ``degraded`` means "no AI in the loop", and from the clinician's side
+    that is exactly what a failed call produces — the node ran its deterministic floor and the
+    model contributed nothing. Configured-but-dead and never-configured are the same case to the
+    person reading the output.
+
+    The old reading also picked the wrong failure to optimise for. A key that was never set fails
+    on the first run in staging; a key that lapses, hits its quota, rate-limits or times out fails
+    in production, mid-clinic, and that was the one being recorded as healthy. This round already
+    fixed the identical confusion on the health endpoints, where a revoked key published
+    ``llm_mode: live`` — see the reachability probes in ``app.agents.llm``. Same mistake, one
+    layer in, reaching a clinician instead of an operator.
+
+    The floor standing is not the whole of what matters, either: the caveat "AI reasoning ran in
+    degraded mode; treat output with extra caution" is attached by ``_deterministic_floor`` *only*
+    when ``degraded`` is set, so under the old behaviour a provider outage produced no such
+    caveat anywhere in the output. See ``tests/test_agent_degraded_on_provider_failure.py``.
     """
     state = _state(hypothesis_set=[_hypothesis("Sepsis", cant_miss_flag=True)])
     ctx, _ = _ctx(_FailingLLM())
 
     await verifier.run(state, ctx)
 
-    assert state.degraded is False
+    assert state.degraded is True
+    # Everything the old test asserted alongside still holds.
     assert state.autonomy_tier == "flag_for_review"
     assert state.verifier_verdicts[0].target == "case"
 
@@ -712,10 +730,21 @@ async def test_a_down_gate_is_degraded_even_while_the_agents_provider_answers():
     assert state.degraded is True
 
 
-async def test_the_gates_own_provider_outage_still_is_not_relabelled_as_an_offline_run():
-    """The distinction ``degraded`` draws is preserved: a configured provider that fails
-    mid-call is a failed call, not "no AI in the loop". The escalation above is what carries the
-    safety weight; ``degraded`` stays a statement about configuration."""
+async def test_a_gate_whose_provider_died_is_degraded_even_while_the_agents_answer():
+    """The test above, with the gate's provider *failing* rather than unconfigured.
+
+    Those were treated as different facts until R57 — this asserted ``degraded is False`` on the
+    grounds that the flag is "a statement about configuration". Reversed for the reasons set out
+    at ``test_a_provider_outage_mid_call_is_recorded_as_degraded_reasoning``, and this pairing is
+    the sharpest illustration of why: the two cases differ only in whether the gate's key is
+    absent or merely not working, they are indistinguishable in the output, and the second is the
+    one that happens in production.
+
+    It is also the case with the least left over to notice it by. The gate has its own client, so
+    a failure here leaves all seven other nodes reporting themselves healthy; ``degraded`` was
+    the run-level flag, and it said the case had been cross-checked by a model that never
+    answered.
+    """
     state = _unverifiable_case()
     ctx, _ = _ctx()
     ctx.llm = _CannedLLM({"status": "agree", "autonomy_tier": "suggestive"})
@@ -723,5 +752,6 @@ async def test_the_gates_own_provider_outage_still_is_not_relabelled_as_an_offli
 
     await verifier.run(state, ctx)
 
-    assert state.degraded is False
+    assert ctx.llm_available() is True
+    assert state.degraded is True
     assert state.autonomy_tier == "flag_for_review"

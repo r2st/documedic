@@ -109,7 +109,14 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
         # separate client: the agents' provider can be up and answering while the gate's is down,
         # and every other node reports itself perfectly healthy.
         unverified = True
-        state.degraded = state.degraded or not ctx.verifier_llm_available()
+        # Reaching this branch *is* the degradation. ``verifier_llm_available()`` answers "is the
+        # gate's key configured", never "did the re-check happen", so the one failure this node
+        # was written to notice — a keyed gate provider that is down, revoked or out of quota —
+        # was the one it recorded as healthy. Worse here than at any other node: the separate
+        # client means the gate can fail while all seven agents report themselves fine, so
+        # ``degraded`` stayed false for the whole run and the escalation below was the only trace
+        # left. See ``tests/test_agent_degraded_on_provider_failure.py``.
+        state.degraded = True
         tier = more_conservative_tier(tier, "flag_for_review")
         case_caveats.append(
             "The independent verification re-check did not complete, so nothing has "
