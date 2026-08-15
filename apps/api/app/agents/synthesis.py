@@ -13,8 +13,26 @@ from typing import Any
 from app.agents.context import ReasoningContext
 from app.agents.state import CaseState
 from app.agents.util import as_text
+from app.core.clinical_language import prescriber_framed
 
 AGENT = "synthesis"
+
+
+def _framed(value: Any) -> tuple[str, bool]:
+    """Model-written text, flattened and then forced into prescriber framing.
+
+    The two coercions that every model-sourced string reaching a ``ClinicalSuggestion`` needs,
+    in the order they have to happen: ``as_text`` first, because a value that arrived as an
+    object or a list is not a sentence and cannot be pattern-matched as one, and
+    :func:`~app.core.clinical_language.prescriber_framed` second, because Critical Safety Rule
+    #4 is about the modality of the sentence that results.
+
+    This is the chokepoint on purpose. Every clinical string the engine emits is built here, so
+    a rule enforced at this one function cannot be bypassed by an agent added later — the same
+    argument ``agents.util.call_llm`` makes for appending the untrusted-data framing at the one
+    place a call leaves the process.
+    """
+    return prescriber_framed(as_text(value))
 
 
 async def run(state: CaseState, ctx: ReasoningContext) -> dict[str, Any]:
@@ -40,15 +58,19 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
     # --- Differential diagnoses (evidence before conclusion). ---
     for h in state.leading_hypotheses(8):
         tier = "flag_for_review" if h.cant_miss_flag else state.autonomy_tier
+        # Coerced to text and then to prescriber framing: ``body`` is rendered as a string in
+        # the UI, so a non-string rationale from a non-conforming model must never reach the
+        # client — and neither must an imperative or certain one. The evidence lists below are
+        # deliberately NOT reframed; see ``app.core.clinical_language``.
+        title, title_reframed = _framed(h.diagnosis_name)
+        body, body_reframed = _framed(h.rationale)
         out.append(
             {
                 "output_type": "cant_miss" if h.cant_miss_flag else "differential",
                 "autonomy_tier": tier,
                 "confidence_band": h.probability_band,
-                "title": as_text(h.diagnosis_name),
-                # Coerce to text: ``body`` is rendered as a string in the UI, so a non-string
-                # rationale from a non-conforming model must never reach the client.
-                "body": as_text(h.rationale) or None,
+                "title": title,
+                "body": body or None,
                 "cant_miss_flag": h.cant_miss_flag,
                 "evidence": {
                     # Evidence intentionally listed first; the conclusion is the title.
@@ -62,6 +84,7 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
                     ],
                     "source_agent": h.source_agent,
                     "icd_code": h.icd_code,
+                    "language_reframed": title_reframed or body_reframed,
                 },
                 "devils_advocate": h.devil_advocate or {},
                 "verifier_verdict": _verdict_for(state, h.diagnosis_name),
@@ -118,6 +141,10 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
         # the flags with it — the conservative reading wins (Critical Safety Rules #2 and #3).
         conflicted = bool(opt.safety_flags)
         blocked = opt.has_hard_block()
+        # The management option is guideline text as the RAG agent summarised it, so it is
+        # model-written and reframed like any other. This is the output type the rule is most
+        # about: it is the one that names a drug and a dose.
+        option_text, option_reframed = _framed(opt.text)
         out.append(
             {
                 "output_type": "management",
@@ -130,11 +157,12 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
                     if conflicted
                     else "Guideline-supported management option"
                 ),
-                "body": as_text(opt.text) or None,
+                "body": option_text or None,
                 "is_hard_block": blocked,
                 "evidence": {
                     "sufficient_support": opt.sufficient_support,
                     "safety_flags": opt.safety_flags,
+                    "language_reframed": option_reframed,
                 },
                 "verifier_verdict": {},
                 "devils_advocate": {},

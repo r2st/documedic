@@ -24,6 +24,25 @@ def _confidence_band(score: float) -> str:
     return "low"
 
 
+def _truncate_text(text: str, *, source: str) -> str:
+    """``text``, cut to ``settings.max_extracted_text_chars``. Logs when it cuts.
+
+    The last bound before the deterministic parser, which walks every character of what it is
+    given with a set of regexes. See ``settings.max_extracted_text_chars`` for why a bounded
+    *file* does not imply bounded text.
+    """
+    limit = settings.max_extracted_text_chars
+    if len(text) <= limit:
+        return text
+    logger.warning(
+        "Extracted text from a %s document exceeded %d characters and was truncated; "
+        "entities past the cut will not be read.",
+        source,
+        limit,
+    )
+    return text[:limit]
+
+
 def _pdf_text(file_bytes: bytes) -> str:
     """The PDF's text layer, or '' when there is not one this parser can read.
 
@@ -34,12 +53,43 @@ def _pdf_text(file_bytes: bytes) -> str:
     scan" are the same '' downstream, and without a line in the log there is nothing that tells
     an operator which of the two a document that came back empty actually was. Never logs the
     bytes or the exception's own message, which can quote document content.
+
+    Bounded twice — by page count and by extracted characters, both from
+    ``settings.max_pdf_pages_extracted`` / ``max_extracted_text_chars``, which document why the
+    upload size limit is not itself a bound on this work. The page loop is written as a loop
+    rather than a generator expression precisely so it can stop: ``reader.pages`` is lazy, so
+    pages past the limit are never decompressed at all, which is where nearly all of the cost
+    would have been.
+
+    Truncation is not failure. The pages that were read are returned and parsed as usual, so an
+    over-long document is read as far as the limit and then reviewed like any other partial
+    read — the same outcome as a scan whose later pages were illegible.
     """
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(file_bytes))
-        return "\n".join((page.extract_text() or "") for page in reader.pages)
+        page_limit = settings.max_pdf_pages_extracted
+        char_limit = settings.max_extracted_text_chars
+        pages: list[str] = []
+        length = 0
+        read = 0
+        for page in reader.pages:
+            if read >= page_limit or length >= char_limit:
+                break
+            text = page.extract_text() or ""
+            pages.append(text)
+            # +1 for the newline the join puts back, so the running total matches the result.
+            length += len(text) + 1
+            read += 1
+        if read and read < len(reader.pages):
+            logger.warning(
+                "Read the text layer of %d of a PDF's %d pages before hitting an extraction "
+                "limit; the rest of the document was not read.",
+                read,
+                len(reader.pages),
+            )
+        return _truncate_text("\n".join(pages), source="pdf")
     except Exception as exc:  # noqa: BLE001 — OCR is the fallback for any unreadable PDF
         logger.warning(
             "Could not read a text layer from a PDF (%s); falling back to OCR.",
@@ -181,14 +231,20 @@ class ExtractionPipeline:
     def _recover_text(
         self, file_bytes: bytes, file_type: str, raw_text: str | None
     ) -> tuple[str, bool]:
-        """Returns the document's text and whether Tesseract OCR produced it."""
+        """Returns the document's text and whether Tesseract OCR produced it.
+
+        Every branch leaves through ``_truncate_text``. ``_pdf_text`` bounds itself as well —
+        it has to, because the cost it is bounding is incurred while *producing* the string —
+        but OCR output and a plain-text upload are only bounded here, and the parser downstream
+        walks whatever it is handed.
+        """
         if raw_text:
-            return raw_text, False
+            return _truncate_text(raw_text, source="supplied-text"), False
         if file_type == "pdf":
             text = _pdf_text(file_bytes)
             return (text if text.strip() else self._maybe_plain(file_bytes)), False
         if file_type.startswith("image/"):
-            text = _tesseract_text(file_bytes, file_type)
+            text = _truncate_text(_tesseract_text(file_bytes, file_type), source=file_type)
             return text, bool(text.strip())
         return self._maybe_plain(file_bytes), False
 
@@ -206,7 +262,7 @@ class ExtractionPipeline:
     @staticmethod
     def _maybe_plain(file_bytes: bytes) -> str:
         try:
-            return file_bytes.decode("utf-8")
+            return _truncate_text(file_bytes.decode("utf-8"), source="plain-text")
         except UnicodeDecodeError:
             return ""
 

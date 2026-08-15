@@ -186,6 +186,20 @@ class PatientService:
         account's patients (already scoped to one clinician's panel, not the whole system) and
         filters in Python after decryption, then paginates the filtered list. Without a search
         term, pagination stays a plain SQL LIMIT/OFFSET as before.
+
+        **The ordering ends in the primary key**, for the reason
+        :mod:`app.services.record_service` spells out and every other paged read in this codebase
+        already observed: ``LIMIT``/``OFFSET`` over a sort with ties is not a partition of the
+        set. ``updated_at`` alone is full of ties here — a seeded panel, a bulk import, or any
+        two charts created inside the same clock tick share it — and two rows that compare equal
+        may come back in either order between two requests, so paging the list could serve one
+        patient twice and never show another at all. The tiebreaker is clinically meaningless
+        and that is the point: it exists to make the comparison total, not to be read.
+
+        ``ix_patients_account_updated_live`` does not carry ``id``, so on PostgreSQL the planner
+        takes an incremental sort over the index prefix rather than a plain ordered scan. That is
+        a sort of the rows sharing one ``updated_at`` value, not of the page, and it is the price
+        of the page meaning anything.
         """
         base = select(Patient).where(
             Patient.account_id == account_id, Patient.is_deleted.is_(False)
@@ -193,7 +207,7 @@ class PatientService:
 
         if search:
             needle = search.strip().lower()
-            result = await self.db.execute(base.order_by(Patient.updated_at.desc()))
+            result = await self.db.execute(base.order_by(Patient.updated_at.desc(), Patient.id))
             matched = [
                 p
                 for p in result.scalars().all()
@@ -204,7 +218,7 @@ class PatientService:
 
         total_count = await self.db.scalar(select(func.count()).select_from(base.subquery()))
         result = await self.db.execute(
-            base.order_by(Patient.updated_at.desc()).limit(limit).offset(offset)
+            base.order_by(Patient.updated_at.desc(), Patient.id).limit(limit).offset(offset)
         )
         return list(result.scalars().all()), int(total_count or 0)
 

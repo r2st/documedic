@@ -420,11 +420,38 @@ class Settings(BaseSettings):
     max_json_depth: int = 32
     confirmation_confidence_threshold: float = 0.85
     ocr_fallback_threshold: float = 0.50
+    # How many pages of a PDF are read for their text layer, and how much text is kept.
+    #
+    # `max_upload_bytes` bounds the *file*, and a bounded file does not bound this work: PDF
+    # content streams are Flate-compressed, so page count and extracted text length are both
+    # unbounded functions of a 20 MB upload. A file that declares tens of thousands of pages —
+    # or a handful of pages whose streams decompress to hundreds of megabytes of text — costs
+    # minutes of CPU in `pypdf`, and then the deterministic parser walks every character of the
+    # result with a set of regexes.
+    #
+    # That cost lands on the *default* thread pool. `_run_extraction` dispatches the pipeline
+    # with `asyncio.to_thread`, which shares the pool with bcrypt behind `verify_password`,
+    # document blob I/O, and upload hashing — six threads on the box this runs on. It is the
+    # same saturation `agents.util.llm_executor` exists to keep a hung provider out of, arriving
+    # by a different door: a few concurrent uploads of one pathological scan hold every thread,
+    # and signing in stops working. Requiring a valid session first narrows who can do it; it
+    # does not make an accidental one (a 4000-page fax archive) any cheaper.
+    #
+    # Both ceilings are far above any real clinical document. A prescription is one page, a
+    # discharge summary a dozen, a bound lab panel rarely past thirty; 200 pages of extracted
+    # text is roughly 600 KB of characters, which is already more than any of them carry. Past
+    # the limit the read is *truncated, not refused* — the pages that were read still produce
+    # entities, and the document lands in the review queue like any other partial read rather
+    # than as a failure the clinician has to work around.
+    max_pdf_pages_extracted: int = 200
+    max_extracted_text_chars: int = 1024 * 1024  # 1 MB of characters
     # How long a document may sit in `processing` before it is treated as abandoned.
     #
     # Extraction runs inline in the upload request and is bounded well below this: a vision call
     # is `llm_request_timeout_seconds` per provider over at most three providers, Tesseract is a
-    # 60s subprocess, and pypdf parsing is CPU-bound on a file capped at `max_upload_bytes`. So
+    # 60s subprocess, and pypdf parsing is bounded by `max_pdf_pages_extracted` and
+    # `max_extracted_text_chars` — not, as this comment used to claim, by `max_upload_bytes`,
+    # which bounds the file and says nothing about what its compressed streams expand to. So
     # a document still `processing` after fifteen minutes is not slow, it is orphaned — the
     # worker was restarted, the deploy rolled, or the request was cancelled between the commit
     # that records the attempt and the commit that records its result. Nothing will ever finish

@@ -37,8 +37,10 @@ RISK_CONTROLS = [
     },
     {
         "rule": "No certainty language in clinical output",
-        "control": "Agent prompts enforce prescriber-framed, hedged language and qualitative "
-        "probability bands (HIGH/MODERATE/LOW/VERY_LOW), never numeric probabilities.",
+        "control": "app/core/clinical_language.py rewrites imperative and certainty phrasing "
+        "out of every model-written title and body at the synthesis chokepoint, offline and "
+        "deterministically; agent prompts ask for the same framing and qualitative probability "
+        "bands (HIGH/MODERATE/LOW/VERY_LOW) rather than numeric probabilities.",
     },
     {
         "rule": "Devil's-advocate dissent is always shown",
