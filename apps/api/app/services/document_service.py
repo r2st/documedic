@@ -67,6 +67,27 @@ def _is_observation_conflict(exc: IntegrityError) -> bool:
     return any(marker in message for marker in _OBSERVATION_CONFLICT_MARKERS)
 
 
+# The same two forms for ``uq_documents_patient_hash``: PostgreSQL names the index it rejected,
+# SQLite names the columns. Pinned against both live drivers by test, for the reason the
+# observation markers above are — a wording change must fail a test rather than quietly turn a
+# lost upload race into a 500.
+_UPLOAD_CONFLICT_MARKERS = (
+    "uq_documents_patient_hash",
+    "documents.patient_id, documents.storage_hash_sha256",
+)
+
+
+def _is_upload_conflict(exc: IntegrityError) -> bool:
+    """Whether this integrity error is the one-file-per-chart constraint firing.
+
+    Narrow on purpose: any other constraint violated while storing a document is a bug rather
+    than a race, and must keep propagating with its traceback instead of being reported to the
+    clinician as a benign collision.
+    """
+    message = str(exc.orig)
+    return any(marker in message for marker in _UPLOAD_CONFLICT_MARKERS)
+
+
 def file_too_large_message(limit_bytes: int, actual_bytes: int | None = None) -> str:
     """Message for a rejected oversized upload, in megabytes and with a way out.
 
@@ -169,6 +190,107 @@ class DocumentService:
             account_id, patient_id, for_update=for_update
         )
 
+    async def _already_uploaded(self, patient_id: uuid.UUID, sha256: str) -> Document | None:
+        """The chart's live document for these bytes, if it has one. Same bytes, same chart, one
+        document.
+
+        Ordered and limited rather than read with ``scalar_one_or_none``, which raises
+        ``MultipleResultsFound`` the moment two rows match — and *every* upload of the file then
+        answers 500, permanently, including the re-upload that is the documented way to recover
+        a scan that would not read. ``uq_documents_patient_hash`` now stops the second row being
+        written, but the constraint is created only on PostgreSQL and only from migration 0026:
+        a database restored from an older backup, or one whose duplicates were retired by that
+        migration and are still sitting there soft-deleted, must not be able to wedge the upload
+        route. Reading defensively costs an ORDER BY over an index that already leads with
+        ``patient_id``.
+
+        Oldest first, matching the row migration 0026 keeps when it retires a duplicate group,
+        so the application and the migration agree on which of a pre-existing pair is *the*
+        document. The primary key breaks ties, so the answer is stable rather than whatever the
+        scan happened to return first.
+        """
+        result = await self.db.execute(
+            select(Document)
+            .where(
+                Document.patient_id == patient_id,
+                Document.storage_hash_sha256 == sha256,
+                Document.is_deleted.is_(False),
+            )
+            .order_by(Document.created_at, Document.id)
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def _reuse(
+        self, account_id: uuid.UUID, patient_id: uuid.UUID, dup: Document, data: bytes
+    ) -> Document:
+        """Answer an upload of a file the chart already holds with the document it already has.
+
+        "Already uploaded" and "already read" are different facts, and returning the row
+        unconditionally conflated them. A document whose extraction failed — a provider outage,
+        a worker restart — came back from a re-upload exactly as it was, still ``failed``, with
+        no second attempt made. Uploading the file again is the first thing anyone tries when a
+        scan will not read, and it was the one recovery guaranteed to do nothing.
+
+        The re-read is audited as ``extraction_retried``, the same action ``retry_extraction``
+        records, because it is the same act: new extracted personal data derived from the scan,
+        on a route whose ordinary answer writes no audit record at all. Without it a re-read
+        reached the model with nothing on the trail naming who asked for it.
+        """
+        if not _is_retryable(dup):
+            return dup
+        await self.audit.record(
+            action="extraction_retried",
+            account_id=account_id,
+            patient_id=patient_id,
+            entity_type="document",
+            entity_id=dup.id,
+            payload={"previous_status": dup.extraction_status, "via": "re_upload"},
+        )
+        # Committed before the pipeline runs, for the reason `upload` sets out below: the audit
+        # append lock is transaction-scoped, and holding it across a vision call would queue
+        # every other audit append in the deployment behind this one re-read.
+        await self.db.commit()
+        await self._run_extraction(account_id, dup, data)
+        await self.db.refresh(dup)
+        return dup
+
+    async def _discard_unreferenced(self, storage_path: str) -> None:
+        """Remove a blob this request wrote and then did not keep a row for.
+
+        The one place this system provably orphans a file. ``upload`` writes the bytes before it
+        inserts the row, so an INSERT that loses the duplicate race leaves them behind — and the
+        winner does not necessarily cover them, because the stored filename carries the *uploaded
+        name's* extension: the same scan sent as ``rx.pdf`` and as ``rx.PDF`` hashes identically
+        and lands at two paths. Nothing would ever read the loser's, and nothing would ever
+        clean it up.
+
+        Guarded on no document row at all naming that exact path, so the check is against what
+        the database actually references rather than against an assumption about how paths are
+        built. Deliberately *not* restricted to live rows the way every other document query
+        here is: withdrawing a document is a soft delete precisely so the original scan survives
+        it, and reading past ``is_deleted`` would make this delete the one copy of a withdrawn
+        document's file. If anything at all still points at the path the file stays — an
+        orphaned blob costs disk, and a row pointing at bytes that are gone costs a clinician
+        the original scan.
+
+        Failure is logged and swallowed for the same reason: the upload has already succeeded by
+        this point, and housekeeping must not turn that into an error.
+        """
+        try:
+            referenced = await self.db.execute(
+                select(Document.id).where(Document.storage_path == storage_path).limit(1)
+            )
+            if referenced.scalars().first() is not None:
+                return
+            await self.storage.delete_async(storage_path)
+        except Exception:
+            logger.warning(
+                "Could not discard the unreferenced upload at %r; it is orphaned on disk.",
+                storage_path,
+                exc_info=True,
+            )
+
     async def upload(
         self,
         *,
@@ -206,26 +328,9 @@ class DocumentService:
 
         sha256 = await compute_sha256_async(data)
 
-        # Deduplicate: same bytes already uploaded for this patient.
-        existing = await self.db.execute(
-            select(Document).where(
-                Document.patient_id == patient_id,
-                Document.storage_hash_sha256 == sha256,
-                Document.is_deleted.is_(False),
-            )
-        )
-        dup = existing.scalar_one_or_none()
+        dup = await self._already_uploaded(patient_id, sha256)
         if dup is not None:
-            # Same bytes, same chart: one document, not two. But "already uploaded" and "already
-            # read" are different facts, and returning the row unconditionally conflated them.
-            # A document whose extraction failed — a provider outage, a worker restart — came
-            # back from a re-upload exactly as it was, still `failed`, with no second attempt
-            # made. Uploading the file again is the first thing anyone tries when a scan will
-            # not read, and it was the one recovery guaranteed to do nothing.
-            if _is_retryable(dup):
-                await self._run_extraction(account_id, dup, data)
-                await self.db.refresh(dup)
-            return dup
+            return await self._reuse(account_id, patient_id, dup, data)
 
         storage_path = await self.storage.write_async(str(patient_id), sha256, file_name, data)
         document = Document(
@@ -239,7 +344,32 @@ class DocumentService:
             extraction_status="pending",
         )
         self.db.add(document)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            # `uq_documents_patient_hash`: another upload of this same file landed between the
+            # lookup above and this flush. Losing that race is not an error the clinician did
+            # anything to cause and there is nothing for them to decide — the document they were
+            # uploading is now in the chart, put there by the request they raced. So this
+            # answers with the winner rather than with a 409, which is what the second of two
+            # double-clicks should do.
+            #
+            # Not a 500 either, which is what it used to be twice over: the losing INSERT had no
+            # constraint to hit, so it wrote a second row, and the *next* upload of the file
+            # then found two and raised `MultipleResultsFound` out of `scalar_one_or_none`.
+            if not _is_upload_conflict(exc):
+                raise
+            await self.db.rollback()
+            winner = await self._already_uploaded(patient_id, sha256)
+            if winner is None:  # pragma: no cover — the constraint fired, so a live row exists
+                raise
+            logger.info(
+                "Concurrent upload of the same file for patient %s; returning document %s.",
+                patient_id,
+                winner.id,
+            )
+            await self._discard_unreferenced(storage_path)
+            return await self._reuse(account_id, patient_id, winner, data)
         await self.audit.record(
             action="document_uploaded",
             account_id=account_id,

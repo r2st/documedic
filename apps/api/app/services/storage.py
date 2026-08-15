@@ -118,6 +118,28 @@ class LocalStorage:
         except DocumentNotFoundError:
             return False
 
+    def delete(self, storage_path: str) -> bool:
+        """Remove a stored blob. ``True`` if a file was there and is now gone.
+
+        Deliberately not reachable from any route. The only caller is
+        ``DocumentService._discard_unreferenced``, cleaning up bytes written for a document row
+        that was rolled back, and it establishes that nothing in ``documents`` names this path
+        before calling. Withdrawing a chart or a document is a *soft* delete precisely so the
+        original scan survives — the audit trail's hash chain references these rows, and a
+        clinical record whose source documents can be made to vanish is not an audit trail.
+
+        Confined to the storage root by the same check as every read, so a ``storage_path`` that
+        has stopped being trustworthy cannot turn this into an arbitrary file delete. A path
+        that is already gone is not an error: the caller's job is to leave nothing behind, and
+        it is already true.
+        """
+        path = self._confined(storage_path)
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+
     # Every method above blocks: they stat, resolve, create directories, and move up to
     # ``settings.max_upload_bytes`` (20 MB) of bytes to and from a disk that in production is a
     # network volume. Called straight from an ``async def`` — which is where both of the real
@@ -141,6 +163,10 @@ class LocalStorage:
     async def exists_async(self, storage_path: str) -> bool:
         """``exists`` off the event loop. Use this from any async caller."""
         return await asyncio.to_thread(self.exists, storage_path)
+
+    async def delete_async(self, storage_path: str) -> bool:
+        """``delete`` off the event loop. Use this from any async caller."""
+        return await asyncio.to_thread(self.delete, storage_path)
 
 
 def get_storage() -> LocalStorage:

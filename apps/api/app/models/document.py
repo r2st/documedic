@@ -54,6 +54,32 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         # patient_id and quicksorts. DocumentService.list has no LIMIT, so the ordering buys
         # no early exit; it would if the list were ever paginated.
         Index("ix_documents_patient_created", "patient_id", text("created_at DESC")),
+        # One stored file per chart, enforced by the database and not only by the read-then-insert
+        # check in ``DocumentService.upload``.
+        #
+        # That check is a SELECT on (patient_id, storage_hash_sha256) followed by an INSERT, and
+        # two uploads of the same file that overlap inside that window both read a chart without
+        # the document and both write one. A double-clicked upload button is enough, and so is a
+        # client that retries after a timeout while the first request is still running.
+        #
+        # What made the duplicate more than untidy is how the SELECT read it back: a
+        # ``scalar_one_or_none`` over a pair of matching rows raises ``MultipleResultsFound``,
+        # so from the moment the race is lost, *every* subsequent upload of that file — including
+        # the re-upload that is the documented recovery for a scan that would not read — answers
+        # 500. The chart is left holding one document twice, and the only way to put the file in
+        # again is to change its bytes.
+        #
+        # Partial on ``is_deleted`` for the reason ``uq_lab_results_observation`` is: a withdrawn
+        # document must not permanently forbid re-uploading the file it held. Both dialects
+        # support partial indexes, and the matching predicate is already on the dedup read.
+        Index(
+            "uq_documents_patient_hash",
+            "patient_id",
+            "storage_hash_sha256",
+            unique=True,
+            sqlite_where=text("is_deleted = 0"),
+            postgresql_where=text("is_deleted = false"),
+        ),
     )
 
     # No single-column index: ix_documents_patient_created leads with patient_id.

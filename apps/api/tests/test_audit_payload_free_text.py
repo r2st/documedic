@@ -525,9 +525,12 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     },
     "extraction_failed": {"failure_type"},
     # A status name from a fixed five-value vocabulary (the ck_documents_extraction_status
-    # constraint) — what the document was before it was read again. No document content and
-    # nothing patient-derived, which is what lets it sit in an unencrypted table forever.
-    "extraction_retried": {"previous_status"},
+    # constraint) — what the document was before it was read again — and, when the re-read was
+    # triggered by uploading the same file again rather than by the retry route, the literal
+    # "re_upload" saying so. Both are constants this codebase chooses from a closed set. No
+    # document content and nothing patient-derived, which is what lets them sit in an
+    # unencrypted table forever.
+    "extraction_retried": {"previous_status", "via"},
     "field_corrected": {"corrections"},
     "extraction_approved": {"merged", "rejected_count"},
     # --- clinical. ``flags`` here is structured measurements plus the lab row ids they came
