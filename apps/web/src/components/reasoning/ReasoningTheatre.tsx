@@ -102,6 +102,21 @@ export function ReasoningTheatre({
   const verified = Boolean(verifier);
   const withheld = Boolean(state.error) && !verified;
 
+  // Whether the engine produced this case without the LLM. `reasoning_complete` has carried
+  // `degraded` since the graph was written and nothing on this screen read it, so the one state
+  // Critical Safety Rule #8 names an indicator for — "AI reasoning paused" — was the one state
+  // the theatre rendered identically to a healthy run.
+  //
+  // The clinician was not told *nothing*: the Verifier's floor adds a caveat line and escalates
+  // the tier. But that lands as one sentence inside the verdict card, below the differential,
+  // among unrelated floor reasons ("A can't-miss diagnosis is on the differential"), and it is
+  // the same card a full-strength run shows. The fact that changes how every panel above it
+  // should be read cannot be a footnote underneath them — that is the anti-automation-bias
+  // argument of Rule #6 applied to the run's own provenance.
+  //
+  // So it goes first, above the output it qualifies, and it is neither collapsible nor dismissible.
+  const degraded = Boolean(ev.reasoning_complete?.degraded);
+
   const statusLabel = state.error
     ? 'Error'
     : state.done
@@ -215,6 +230,44 @@ export function ReasoningTheatre({
           clinician left it. Nothing scrolls it into view and nothing takes focus, so it is a
           polite live region — the can't-miss block inside it is assertive on its own. */}
       <div aria-live="polite" className="space-y-4">
+        {degraded && (
+          // Above the output, because it changes how all of it should be read. `role="status"`
+          // rather than `alert`: the run has finished and nothing is being interrupted, and the
+          // enclosing region is already polite.
+          <div
+            role="status"
+            className="rounded-xl border-2 border-amber-400 bg-amber-50 p-5 text-sm text-amber-900"
+          >
+            <div className="mb-1.5 flex items-center gap-2">
+              <svg
+                aria-hidden="true"
+                className="h-5 w-5 text-amber-700"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                />
+              </svg>
+              <p className="font-bold uppercase tracking-wide">AI reasoning paused</p>
+            </div>
+            <p>
+              The reasoning engine could not reach its model for this run, so what follows was
+              assembled from the deterministic rules alone — no specialist panel, no independent
+              cross-check of the wording, and no counter-argument beyond the standard one. Read it
+              as a starting checklist rather than as a considered differential.
+            </p>
+            <p className="mt-1.5">
+              The drug-safety checks on this chart are unaffected: allergy, contraindication and
+              interaction screening are deterministic and do not use the model.
+            </p>
+          </div>
+        )}
+
         {withheld && (
           <div
             role="status"

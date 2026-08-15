@@ -473,3 +473,98 @@ describe('ReasoningTheatre after a run stops mid-pipeline', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe('ReasoningTheatre degraded-run indicator', () => {
+  /**
+   * Critical Safety Rule #8: when the engine runs without its model, the clinician gets an
+   * "AI reasoning paused" indicator. `reasoning_complete` has carried `degraded` since the graph
+   * was written, and nothing on this screen read it — so the one state the rule names an
+   * indicator for rendered exactly like a full-strength run.
+   *
+   * The clinician was not told nothing: the Verifier's deterministic floor adds a caveat line and
+   * escalates the tier. But that arrives as one sentence inside the verdict card, *below* the
+   * differential, among unrelated floor reasons — in the same card a healthy run shows. A fact
+   * that changes how every panel above it should be read cannot sit underneath them.
+   */
+  async function streamDegradedRun(): Promise<void> {
+    const source = await latestSource();
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'Community-acquired pneumonia', probability_band: 'high' }],
+      });
+      source.emit('verifier', {
+        status: 'agree',
+        autonomy_tier: 'flag_for_review',
+        case_caveats: ['AI reasoning ran in degraded mode; treat output with extra caution.'],
+      });
+      source.emit('reasoning_complete', {
+        autonomy_tier: 'flag_for_review',
+        degraded: true,
+        suggestion_count: 1,
+      });
+    });
+  }
+
+  it('names the state the way the rule does', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamDegradedRun();
+
+    expect(screen.getByText('AI reasoning paused')).toBeInTheDocument();
+  });
+
+  it('says what was actually missing rather than only that something was', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamDegradedRun();
+
+    expect(screen.getByText(/deterministic rules alone/)).toBeInTheDocument();
+    expect(screen.getByText(/drug-safety checks on this chart are unaffected/)).toBeInTheDocument();
+  });
+
+  it('puts the indicator above the output it qualifies', async () => {
+    // The whole point of the placement: a caveat underneath a differential is read after the
+    // differential has already been believed (Rule #6, applied to the run's own provenance).
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamDegradedRun();
+
+    const banner = screen.getByText('AI reasoning paused');
+    const diagnosis = screen.getByText('Community-acquired pneumonia');
+    expect(banner.compareDocumentPosition(diagnosis)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('still shows the output — a degraded run is published, not withheld', async () => {
+    // Distinct from the pre-Verifier failure above. This run completed and passed the gate; it
+    // is qualified, not suppressed.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamDegradedRun();
+
+    expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+    expect(screen.getByText('Verifier verdict')).toBeInTheDocument();
+  });
+
+  it('stays silent on a healthy run', async () => {
+    // The fence: an indicator on every case is an indicator on none.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'Acute bronchitis', probability_band: 'low' }],
+      });
+      source.emit('reasoning_complete', { autonomy_tier: 'suggestive', degraded: false });
+    });
+
+    expect(screen.queryByText('AI reasoning paused')).not.toBeInTheDocument();
+  });
+
+  it('stays silent while the run is still going', async () => {
+    // `degraded` is only known at `reasoning_complete`; nothing should be inferred before it.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'Acute bronchitis', probability_band: 'low' }],
+      });
+    });
+
+    expect(screen.queryByText('AI reasoning paused')).not.toBeInTheDocument();
+  });
+});
