@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -818,7 +819,22 @@ class DocumentService:
         # for two approvals to deadlock on.
         patient = await self._get_patient_for_processing(account_id, patient_id, for_update=True)
         meta = dict(document.extraction_metadata or {})
-        raw_entities = meta.get("entities", [])
+        # Deep-copied, and that is load-bearing rather than defensive. ``extraction_metadata`` is
+        # an ordinary JSON column, not a ``MutableDict``, so SQLAlchemy decides whether to emit
+        # an UPDATE by comparing the attribute's new value against the value it loaded. ``dict()``
+        # above is shallow, so the entity dicts below were the *same objects* the ORM was holding
+        # as the loaded state — and the correction loop writes straight into them. Both sides of
+        # that comparison therefore moved together, the values came out equal, and no UPDATE was
+        # emitted at all.
+        #
+        # It went unnoticed because the *first* approval of a document also sets
+        # ``meta["approved"] = True``, a genuine change on that pass which carried the rest of
+        # the write along with it. A second approval — the documented, supported way to land a
+        # correction the clinician spotted after signing off — had no such change, so the
+        # corrected dose was merged into the chart while the stored extraction still showed what
+        # the extractor had read. The chart and the document then disagreed about what the
+        # clinician typed, and the document is what a reviewer opens.
+        raw_entities = copy.deepcopy(meta.get("entities", []))
 
         # There is a difference between "I reviewed this and rejected all of it" and "there was
         # never anything here", and only the first is an approval. An extraction that produced
@@ -877,6 +893,37 @@ class DocumentService:
 
         # Build the merge payload, skipping rejected entities.
         rejected = set(approval.rejected_entity_indexes)
+
+        # What was rejected, and not merely how much of it. Rejecting an extracted entity is a
+        # clinical decision with a clinical consequence: the item never reaches the chart, so
+        # nothing downstream can see it. A rejected allergy is the sharp case — the
+        # deterministic hard block in Critical Safety Rule #3 evaluates against charted
+        # allergies, so dropping one at review silently disables the block for that allergen,
+        # for good, with no flag anywhere saying a document had recorded it.
+        #
+        # The trail recorded ``rejected_count`` alone, and the count is not recoverable into a
+        # decision: the stored extraction keeps every entity whether merged or not, and the
+        # merge deduplicates, so an entity absent from the chart may have been rejected *or*
+        # already present. "One of the four was dropped" cannot be turned back into "the
+        # penicillin allergy was dropped" by any query.
+        #
+        # Recorded as position plus type, which is the shape ``critical_lab_value_not_evaluated``
+        # already uses: an index into the extraction this entry's ``entity_id`` points at, and a
+        # value from the closed ``MERGEABLE_ENTITY_TYPES`` vocabulary. No field values —
+        # ``audit_logs.payload`` is unencrypted, immutable and never pruned, and the allergen
+        # name is on the document row the index resolves against.
+        rejected_entities = [
+            {"index": idx, "entity_type": ent.get("entity_type")}
+            for idx, ent in enumerate(raw_entities)
+            if idx in rejected
+        ]
+        # And on the document itself, so the extraction carries the decision rather than only
+        # the trail describing it. Written for every entity, not only the rejected ones, so a
+        # later approval that accepts something previously rejected clears the mark instead of
+        # leaving a stale one behind. Safe to assign in place: ``raw_entities`` is the deep copy
+        # taken at the top of this method, not the ORM's loaded state.
+        for idx, ent in enumerate(raw_entities):
+            ent["rejected"] = idx in rejected
 
         # An entity of a type the graph cannot chart is refused, not merged-and-forgotten. Same
         # argument as CorrectionNotApplicableError above, and the same failure it was written
@@ -962,7 +1009,11 @@ class DocumentService:
                     patient_id=patient_id,
                     entity_type="document",
                     entity_id=document.id,
-                    payload={"merged": counts, "rejected_count": len(rejected)},
+                    payload={
+                        "merged": counts,
+                        "rejected_count": len(rejected),
+                        "rejected": rejected_entities,
+                    },
                 ),
                 AuditDraft(
                     action="graph_merged",

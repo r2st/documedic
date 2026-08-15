@@ -547,7 +547,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # unencrypted table forever.
     "extraction_retried": {"previous_status", "via"},
     "field_corrected": {"corrections"},
-    "extraction_approved": {"merged", "rejected_count"},
+    # ``rejected`` is the position of each dropped entity in the stored extraction plus its
+    # entity_type, a value from the closed MERGEABLE_ENTITY_TYPES vocabulary. No field values:
+    # the count alone could not say *which* item a clinician kept off the chart, and a rejected
+    # allergy silently disables the Rule #3 hard block for that allergen.
+    "extraction_approved": {"merged", "rejected_count", "rejected"},
     # --- clinical. ``flags`` here is structured measurements plus the lab row ids they came
     # from, so a reviewer can get back to the result; no free text is interpolated into it.
     "critical_lab_value_detected": {"flags"},
