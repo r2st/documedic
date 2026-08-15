@@ -93,11 +93,18 @@ def _safe_validation_errors(exc: RequestValidationError) -> list[dict]:
 
 
 async def _seed_drug_data() -> None:
-    """Seed drug vocabulary, interactions, and contraindications if empty.
+    """Reconcile drug vocabulary, interactions, and contraindications against the curated files.
 
-    Idempotent — the underlying seed functions skip rows that already exist.
-    Runs only the deterministic drug-safety data (not guidelines, which require
-    Qdrant and can be slow).  Failures are logged but never crash the app.
+    Runs only the deterministic drug-safety data (not guidelines, which require Qdrant and can
+    be slow). Re-running changes nothing on a database already in step; where it differs, the
+    file wins — including corrections to existing rows, which is what makes a curated fix
+    reachable without dropping tables. See ``app.db.seed``.
+
+    Failures are logged but never crash the app, and that is the safe direction *here* even
+    though the seeder refuses an empty or dangling corpus outright: this path runs against a
+    database that already holds the previous corpus, so declining to apply a bad one leaves the
+    old rules serving. The deploy path (``Dockerfile``) chains the seeder before uvicorn with
+    ``&&``, which is where a refusal is meant to stop the release.
     """
     from app.db.seed import (
         seed_contraindications,

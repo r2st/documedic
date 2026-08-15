@@ -15,9 +15,15 @@ appear:
     allergy, and returns a clean check for a drug nothing was checked against".
 
 The rest of this file pins the properties reconciling brings with it: absent keys reset rather
-than linger, the seeder's idea of "the same rule" matches the safety engine's (case-folded),
-duplicates that could disagree are collapsed, a withdrawn row stops serving, an empty file is
-refused rather than applied, and a second run over an unchanged corpus is still a no-op.
+than linger, one rule written twice is not two rules, duplicates that could disagree are
+collapsed, a withdrawn row stops serving, an empty file is refused rather than applied, and a
+second run over an unchanged corpus is still a no-op.
+
+Note what the case-folding here does and does not mean. It decides what counts as *the same
+rule* inside a file, so re-curating "Peptic ulcer" as "Peptic Ulcer" edits one rule rather than
+adding a second. It does not make case irrelevant to a *drug reference id*: the safety engine
+compares those exactly, so an id in the wrong case names a drug it cannot resolve and the rule
+never fires. That is refused at load — see ``test_drug_rule_references``.
 """
 
 from __future__ import annotations
@@ -208,7 +214,14 @@ async def test_recasing_a_condition_name_edits_the_rule_instead_of_duplicating_i
 
 @pytest.mark.asyncio
 async def test_an_interaction_pair_written_the_other_way_round_is_the_same_rule(db, curated):
-    """Order and case are both presentation. Neither creates a second rule."""
+    """Order is presentation: the engine looks a pair up both ways round.
+
+    Case is *not*, despite this loader folding it to decide what counts as the same rule. That
+    fold is about duplicates within a file; the engine's own comparison against a reference id
+    is exact, so an endpoint written in the wrong case names a drug it cannot resolve and the
+    rule silently never fires. It is refused at load rather than folded away —
+    ``test_drug_rule_references``.
+    """
     entry = curated.read("interactions.json")[0]
     a, b = entry["drug_a_reference_id"], entry["drug_b_reference_id"]
     before = await db.scalar(select(func.count()).select_from(DrugInteraction))
@@ -216,8 +229,8 @@ async def test_an_interaction_pair_written_the_other_way_round_is_the_same_rule(
     curated.edit(
         "interactions.json",
         lambda r: r["drug_a_reference_id"] == a and r["drug_b_reference_id"] == b,
-        drug_a_reference_id=b.lower(),
-        drug_b_reference_id=a.lower(),
+        drug_a_reference_id=b,
+        drug_b_reference_id=a,
     )
     await seed_interactions(db)
     await db.commit()

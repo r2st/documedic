@@ -42,6 +42,12 @@ Three further properties follow from reconciling rather than inserting:
   through ``check_unevaluated_medications`` as a visible gap, which is this project's standing
   preference over an answer from data the curator has retracted.
 
+Two ways a corpus is refused rather than applied, both because the failure they prevent is
+silence rather than an error: a rule file that loaded to zero entries would deactivate the whole
+table it seeds (:class:`EmptyCorpusError`), and a rule keyed on a drug the vocabulary does not
+carry can never fire (:class:`DanglingRuleError`). Withdrawal makes the second reachable through
+ordinary curation, which is the reason it is checked here rather than trusted to review.
+
 ``source_version`` — three columns that existed on the models and were never written by
 anything — now carries a short digest of the file each row was loaded from, so an operator can
 ask a deployed database which revision of the corpus it is actually serving. Nothing reads it
@@ -119,6 +125,88 @@ def _load(name: str) -> list[dict]:
             f"{name} contains no entries; refusing to deactivate the table it seeds"
         )
     return rows
+
+
+class DanglingRuleError(RuntimeError):
+    """A curated rule is keyed on a drug the vocabulary does not carry.
+
+    Such a rule loads without complaint, is counted as applied, and can never fire. The safety
+    engine scopes both rule tables to the drugs actually in play —
+    ``SafetyService._build_context`` collects reference ids off the patient's *resolved*
+    medications and the query is an exact ``IN`` — so a rule whose ``drug_reference_id`` matches
+    no vocabulary row is never even fetched, let alone evaluated. What reaches the clinician is
+    a clean check.
+
+    Three ordinary ways to author one, none of which announce themselves:
+
+    * a typo in a reference id;
+    * a difference in case. Reference ids are written uppercase (``ASP-75``), the engine's
+      comparison is exact, and this loader's own duplicate detection is case-*folded* — so the
+      seeder will tell a curator that ``asp-75`` and ``ASP-75`` are one rule while the engine
+      treats them as two, and the rule they edited is not the one that fires;
+    * withdrawing a drug from ``drug_vocabulary.json``. That deactivates its vocabulary row, and
+      every interaction and contraindication keyed on it quietly stops being reachable —
+      ordinary curation, producing a dead rule.
+
+    So this refuses, like :class:`EmptyCorpusError`: the curated files ship in the repository, a
+    deploy runs the seeder before uvicorn, and a build that would serve a dead safety rule is
+    better stopped than started.
+    """
+
+
+def _curated_identities(vocabulary: list[dict]) -> set[str]:
+    """Every reference id a curated rule may legitimately be keyed on.
+
+    Products *and* the molecules inside fixed-dose combinations, because the engine evaluates a
+    combination as its ingredients (``app.core.safety._ingredients``) and a rule against one of
+    those ingredients is exactly how a combination gets checked at all. A component carrying no
+    reference id of its own is skipped rather than counted: the model documents that as
+    "participates in allergy and duplicate-therapy matching, and matches no reference-id-keyed
+    rule", which is a deliberate state and not a dangling one.
+
+    Exact spellings, deliberately not folded. The question this answers is not "did the curator
+    mean this drug" but "will this rule resolve against the engine's exact ``IN``" — and folding
+    here would wave through the case mismatch that is one of the three ways to author a dead
+    rule.
+    """
+    identities = {entry["reference_id"] for entry in vocabulary}
+    identities |= {
+        component["reference_id"]
+        for entry in vocabulary
+        for component in (entry.get("components") or [])
+        if component.get("reference_id")
+    }
+    return identities
+
+
+def _assert_rules_resolve(name: str, entries: list[dict], id_fields: tuple[str, ...]) -> None:
+    """Refuse a rule file naming a drug ``drug_vocabulary.json`` does not carry."""
+    known = _curated_identities(_load("drug_vocabulary.json"))
+    dangling = sorted(
+        {
+            value
+            for entry in entries
+            for field in id_fields
+            if (value := entry.get(field)) and value not in known
+        }
+    )
+    if not dangling:
+        return
+    # Case-only mismatches get named as such. "ASP-75 is not in the vocabulary" is baffling to
+    # read when ``ASP-75`` is plainly sitting there three lines down in the other file.
+    folded = {_fold(identity): identity for identity in known}
+    detail = ", ".join(
+        f"{value!r} (did you mean {folded[_fold(value)]!r}? — the engine's comparison is "
+        "case-sensitive)"
+        if _fold(value) in folded
+        else repr(value)
+        for value in dangling
+    )
+    raise DanglingRuleError(
+        f"{name} is keyed on {len(dangling)} drug reference id(s) that drug_vocabulary.json "
+        f"does not carry: {detail}. A rule keyed on an unknown drug is never loaded and never "
+        "fires — it returns a clean check rather than an error — so this refuses to seed it."
+    )
 
 
 def corpus_version(name: str) -> str:
@@ -245,6 +333,9 @@ async def seed_drug_vocabulary(db: AsyncSession) -> int:
 async def seed_interactions(db: AsyncSession) -> int:
     """Reconcile ``drug_interactions`` against ``interactions.json``. Returns rows changed."""
     entries = _load("interactions.json")
+    _assert_rules_resolve(
+        "interactions.json", entries, ("drug_a_reference_id", "drug_b_reference_id")
+    )
     existing = (await db.execute(select(DrugInteraction))).scalars().all()
     return await _reconcile(
         db,
@@ -263,6 +354,7 @@ async def seed_interactions(db: AsyncSession) -> int:
 async def seed_contraindications(db: AsyncSession) -> int:
     """Reconcile ``contraindications`` against ``contraindications.json``. Returns rows changed."""
     entries = _load("contraindications.json")
+    _assert_rules_resolve("contraindications.json", entries, ("drug_reference_id",))
     existing = (await db.execute(select(Contraindication))).scalars().all()
     return await _reconcile(
         db,
