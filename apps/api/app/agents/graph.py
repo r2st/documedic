@@ -73,7 +73,7 @@ async def drug_safety_check(state: CaseState, ctx: ReasoningContext) -> None:
     flags = await resolve_safety(ctx.evaluate_safety(""))
     state.drug_safety_flags = flags
     for f in flags:
-        _record_hard_block(state, f)
+        record_hard_block(state, f)
 
     option_flag_count = 0
     for option in state.management_options:
@@ -82,7 +82,7 @@ async def drug_safety_check(state: CaseState, ctx: ReasoningContext) -> None:
         option.safety_flags = await resolve_safety(ctx.evaluate_safety(option.text))
         option_flag_count += len(option.safety_flags)
         for f in option.safety_flags:
-            _record_hard_block(state, f)
+            record_hard_block(state, f)
 
     state.add_trace(
         "drug_safety_check",
@@ -106,13 +106,17 @@ async def drug_safety_check(state: CaseState, ctx: ReasoningContext) -> None:
     await ctx.emit("agent_complete", {"agent": "drug_safety_check"})
 
 
-def _record_hard_block(state: CaseState, flag: dict[str, Any]) -> None:
+def record_hard_block(state: CaseState, flag: dict[str, Any]) -> None:
     """Promote a hard-blocking flag onto ``state.hard_blocks``, once.
 
     Deduplicated on the summary because the two passes legitimately overlap: a management
     option naming a drug the patient is already on raises the same conflict the current-
     medication pass just raised, and the clinician should see one hard block, not two
     identically-worded ones.
+
+    Public because the same dedup has to govern the post-panel re-check in
+    ``ReasoningService._recheck_chart_safety``, which promotes blocks onto a state this node has
+    already written to. A second implementation of "once" would drift from this one.
     """
     if not flag.get("is_hard_block"):
         return

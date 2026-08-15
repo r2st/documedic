@@ -551,6 +551,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
         "hard_blocks",
     },
     "hard_block_triggered": {"hard_blocks"},
+    # A count, deliberately — not the summaries. ``hard_block_triggered`` alongside it already
+    # carries every block this run ended with, so repeating the new ones here would duplicate
+    # clinical text into a store that is unencrypted, immutable and never pruned to say
+    # something the pair of entries already says.
+    "reasoning_chart_changed_under_run": {"hard_blocks_appeared"},
     "clinical_suggestion_created": {
         "output_type",
         "autonomy_tier",

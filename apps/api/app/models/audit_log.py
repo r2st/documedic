@@ -68,6 +68,11 @@ AUDIT_ACTIONS = (
     "clinical_suggestion_created",
     "clinician_decision_recorded",
     "hard_block_triggered",
+    # A hard block that was documented on the chart *while the panel was deliberating*, and so
+    # was invisible to it — caught by the re-check that runs before anything is written. Kept
+    # apart from ``hard_block_triggered`` because it says something that entry cannot: this
+    # run's reasoning was built on a chart that no longer existed by the time it was published.
+    "reasoning_chart_changed_under_run",
     "validation_run_executed",
     "safety_report_filed",
     "regulatory_dossier_generated",

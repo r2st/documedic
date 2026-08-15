@@ -19,10 +19,11 @@ from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents import graph
+from app.agents import graph, synthesis
 from app.agents.context import EventEmitter, ReasoningContext, Retriever, SafetyEvaluator
+from app.agents.graph import record_hard_block
 from app.agents.llm import LLMClient, is_available
-from app.agents.state import CaseState, IntakeQuestionState
+from app.agents.state import CaseState, IntakeQuestionState, more_conservative_tier
 from app.config import settings
 from app.core.logsafe import describe_exception
 from app.exceptions import (
@@ -756,6 +757,11 @@ class ReasoningService:
             await self.db.flush()
             ctx = await self._build_context(account_id, patient_id, emit=emit)
             output = await graph.run_reasoning(state, ctx)
+            # Inside the try, because a re-check that cannot be completed must fail the run
+            # rather than let it publish output nothing confirmed was still safe.
+            output, appeared = await self._recheck_chart_safety(
+                account_id, patient_id, state, output, emit=emit
+            )
         except Exception as exc:  # noqa: BLE001 — record failure, surface to clinician
             try:
                 await self._release_claim_as_failed(
@@ -809,9 +815,123 @@ class ReasoningService:
                     payload={"hard_blocks": [b.summary for b in state.hard_blocks]},
                 )
             )
+        if appeared:
+            # Its own entry, separate from ``hard_block_triggered``, because the two answer
+            # different questions. That one says the run ended with hard blocks; this says the
+            # chart moved under a run in flight and the panel reasoned without part of it —
+            # which is what a reviewer asking "why does this run's differential not mention the
+            # allergy it was blocked on?" needs, and what nothing else in the trail records.
+            closing.append(
+                AuditDraft(
+                    action="reasoning_chart_changed_under_run",
+                    account_id=account_id,
+                    patient_id=session.patient_id,
+                    entity_type="reasoning_session",
+                    entity_id=session.id,
+                    payload={"hard_blocks_appeared": len(appeared)},
+                )
+            )
         await self.audit.record_many(closing)
         await self.db.commit()
         return session, suggestions
+
+    async def _recheck_chart_safety(
+        self,
+        account_id: uuid.UUID,
+        patient_id: uuid.UUID,
+        state: CaseState,
+        output: dict[str, Any],
+        *,
+        emit: EventEmitter | None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Re-evaluate the chart's own drug safety against the record as it stands *now*.
+
+        Returns the output to publish and the summaries of any hard block the panel did not see.
+
+        The panel deliberates over a chart frozen when the run's context was built, and a run is
+        minutes of LLM calls long. The current-medication arm of ``drug_safety_check`` was frozen
+        with it — ``_safety_evaluator`` precomputes that arm — so anything documented while the
+        panel was thinking was invisible to it. One clinician does not have to be careless for
+        that window to matter: the arrangement this product is built for is a practice login used
+        from two rooms, and "start the reasoning, then go and enter what the patient just told
+        you about their reactions" is the ordinary way to work, not a race someone has to
+        contrive. Approving an extracted prescription mid-run does it just as well.
+
+        What that cost, before this: a patient on aspirin, an aspirin allergy documented while
+        the panel ran, and a completed run reporting **no hard block at all** — the same chart
+        evaluated from the start raises one. Critical Safety Rule #3 says an allergy conflict is
+        a hard block rather than a warning, and it was being decided by which of two things
+        happened first. The clinician is shown a finished run over the current chart with nothing
+        marking it stale, which is worse than a slow answer and worse than no answer.
+
+        So the deterministic evaluation is redone here, at the last moment before anything is
+        written, and it is the evaluation that ships with the run. Cheap enough to be
+        unconditional: a handful of indexed queries against a run that just spent minutes on the
+        panel, and no LLM — so it works identically in degraded mode, which is the point of Rule
+        #8. Only the *chart's own* arm is redone; the management-option arm already screened live
+        (``SafetyService.screen_text`` builds its context per call), which is how one run could
+        hard-block a guideline suggestion naming a drug while saying nothing about the same
+        conflict against the patient's own medication list.
+
+        A hard block that appeared is added and forces flag-for-review — never removed, and
+        neither is one the panel raised that has since gone away. Conservative wins (Rule #2):
+        the fresh read decides what to *add*, not what to withdraw, so a retracted allergy leaves
+        a block the clinician can override with documented reasoning rather than one that
+        silently vanished. The blocks reach the clinician through the ordinary path — synthesis
+        rebuilds the suggestion list from the corrected state — so they carry the same shape,
+        the same override requirement and the same audit as any other.
+
+        This runs after the Verifier and does not go through it, which Rule #1 otherwise forbids.
+        It is not an exception to that rule: nothing here is generated. A deterministic table
+        lookup can only add a hard block and escalate the tier to flag-for-review, which is the
+        most conservative verdict the Verifier itself can reach — so this can only move the
+        output in the direction the Verifier is there to move it, never past it.
+        """
+        results = await SafetyService(self.db).active_flags(
+            account_id=account_id, patient_id=patient_id
+        )
+        fresh = [_flag_dict(f) for _vocab, flag_list in results for f in flag_list]
+        known = {block.summary for block in state.hard_blocks}
+        state.drug_safety_flags = fresh
+        for flag in fresh:
+            record_hard_block(state, flag)
+        appeared = [b.summary for b in state.hard_blocks if b.summary not in known]
+
+        if appeared:
+            state.autonomy_tier = more_conservative_tier(state.autonomy_tier, "flag_for_review")
+            state.add_trace(
+                "drug_safety_recheck",
+                f"{len(appeared)} hard block(s) documented on the chart while this run was in "
+                "flight; the panel did not see them",
+                {},
+            )
+        if emit is not None:
+            # Last-wins in the Theatre's reducer, so this replaces the pre-panel picture rather
+            # than appearing beside it. Emitted whether or not a block appeared: the flag list
+            # shown live has to be the one that shipped, and "the re-check agreed" is not
+            # something the clinician can infer from an event that never arrives.
+            await emit(
+                "drug_safety",
+                {
+                    "agent": "drug_safety_check",
+                    "flags": fresh,
+                    "management_flags": [
+                        {"option": o.text, "flags": o.safety_flags}
+                        for o in state.management_options
+                        if o.safety_flags
+                    ],
+                    "hard_blocks": len(state.hard_blocks),
+                    "appeared_during_run": len(appeared),
+                },
+            )
+        # Rebuilt rather than patched, so the published output cannot drift from the state it is
+        # supposed to describe. ``build_suggestions`` is a pure function of the state and the
+        # re-check is normally a no-op, in which case this reproduces what synthesis already
+        # returned.
+        return {
+            "suggestions": synthesis.build_suggestions(state),
+            "case_state": state.to_dict(),
+        }, appeared
 
     async def _persist_suggestions(
         self,
