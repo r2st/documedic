@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # Base delay (seconds) for exponential backoff between retries of the SAME provider.
     # Actual sleep = llm_retry_backoff_base_seconds * attempt_number, capped at 2s.
     llm_retry_backoff_base_seconds: float = 0.25
+    # Timeout for the reachability probe behind GET /health/dependencies. Much shorter than
+    # llm_request_timeout_seconds on purpose: a health endpoint that waits as long as a real
+    # completion tells an operator nothing they could not have learned by waiting themselves.
+    llm_health_probe_timeout_seconds: float = 5.0
+    # How long a probe result (success OR failure) is reused. An unreachable provider is the
+    # one whose probe is slowest, so re-running it per poll would make the status endpoint
+    # hang for the length of the outage — and turn a monitoring poller into provider traffic.
+    llm_health_probe_ttl_seconds: float = 60.0
 
     # --- OpenAI (primary LLM) ---
     openai_api_key: str = ""

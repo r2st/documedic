@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.llm import (
     available_providers,
     demo_fallback_enabled,
+    probe_all_providers,
     using_simulated_llm,
 )
 from app.config import settings
@@ -88,18 +91,40 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
     does report `llm_mode`, so "reasoning is simulated" remains public by design: a clinician
     needs to know the engine is in demo mode, and it is a property of the deployment rather
     than of its wiring.)
+
+    **`llm_providers` is the field to watch.** Every other LLM field here, and `llm_mode` on
+    the public probe, answers "is a key configured" — which a revoked, expired or
+    out-of-quota key passes. This one calls each configured provider and reports whether it
+    answered, so the gap between "we hold a key" and "reasoning works" is visible here rather
+    than to whichever clinician runs the next panel. Results are cached briefly; see
+    `LLM_HEALTH_PROBE_TTL_SECONDS`.
     """
     db_ok = True
     try:
         await db.execute(text("SELECT 1"))
     except Exception:
         db_ok = False
+    # Off the event loop: the provider SDKs are synchronous, and an unreachable provider
+    # blocks for the whole probe timeout. Same offload idiom as `agents.util.call_llm`.
+    providers = await asyncio.to_thread(probe_all_providers)
+    reachable = [name for name, state in providers.items() if state["reachable"]]
     return {
         "database": "ok" if db_ok else "error",
+        # Pool occupancy, so connection-pool exhaustion is diagnosable while it is happening
+        # rather than afterwards from a wall of timeouts. `checked_out` climbing to
+        # `pool_size + overflow` is the signal; the long-running reasoning routes hold a
+        # connection for the length of a panel, so this is the number that moves first.
+        "database_pool": _pool_stats(db),
         "llm_configured": settings.llm_configured,
         "llm_provider": settings.llm_provider,
         # Providers (in fallback order) that currently have an API key configured.
         "llm_available_providers": available_providers(),
+        # Per-provider {configured, reachable, error}. `reachable` is None when there is no
+        # key to authenticate a probe with.
+        "llm_providers": providers,
+        # True when at least one configured provider actually answered. This, not `llm_mode`,
+        # is what "reasoning will work" means.
+        "llm_reachable": bool(reachable),
         "llm_mode": _llm_mode(),
         "llm_fallback_enabled": settings.llm_fallback_enabled,
         "llm_openrouter_fallback": settings.llm_openrouter_fallback,
@@ -111,3 +136,37 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
         "llm_simulated": using_simulated_llm(),
         "storage_backend": settings.storage_backend,
     }
+
+
+def _pool_stats(db: AsyncSession) -> dict:
+    """Connection-pool occupancy, or an empty dict for a pool that does not report it.
+
+    Read from the session's own bind rather than from ``get_engine()``: that is the pool the
+    request in hand actually came out of, and asking for the process-global engine would
+    *create* one in any context where it does not already exist.
+
+    SQLite (tests) uses ``StaticPool``, which does not carry every counter, so this reports
+    what it can rather than raising on a health probe.
+    """
+    try:
+        # get_bind() is typed as Engine | Connection; only the engine carries a pool, and a
+        # session bound to a bare Connection (never the case here) reports nothing.
+        pool = getattr(db.get_bind(), "pool", None)
+    except Exception:  # noqa: BLE001 — a probe never fails on its own diagnostics
+        return {}
+    if pool is None:
+        return {}
+    stats: dict = {}
+    for name, attribute in (
+        ("size", "size"),
+        ("checked_out", "checkedout"),
+        ("checked_in", "checkedin"),
+        ("overflow", "overflow"),
+    ):
+        getter = getattr(pool, attribute, None)
+        if callable(getter):
+            try:
+                stats[name] = getter()
+            except Exception:  # noqa: BLE001 — a probe never fails on its own diagnostics
+                continue
+    return stats

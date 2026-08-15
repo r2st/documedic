@@ -109,6 +109,104 @@ def is_available() -> bool:
     return bool(available_providers()) or demo_fallback_enabled()
 
 
+# --- Reachability probes -------------------------------------------------------------------
+#
+# Everything above answers "is a key configured", which is what the health endpoints reported
+# as ``llm_mode: live``. A key is not a working provider: revoked, expired, out of quota, or
+# simply unreachable from this network, it still reads as configured. So a deployment whose
+# OpenRouter key had lapsed published ``live`` while every reasoning run degraded to
+# ``offline_paused`` in front of a clinician — and in production the demo net is refused
+# outright, so there is no fallback to soften it either. The operator's first signal was a
+# clinician saying the engine had stopped working.
+#
+# The probe is the cheapest authenticated call each SDK offers (list models), bounded by its
+# own short timeout — separate from ``llm_request_timeout_seconds``, because a probe that
+# takes as long as a real completion is no use to a health endpoint — and cached, so a
+# monitoring poller cannot turn a status page into provider traffic.
+
+_probe_cache: dict[str, tuple[float, bool, str | None]] = {}
+
+
+def _probe_openai_compatible(api_key: str, base_url: str | None) -> None:
+    from openai import OpenAI
+
+    # base_url=None is what the SDK already means by "use the default endpoint", so OpenAI and
+    # OpenRouter differ only in this argument.
+    OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=settings.llm_health_probe_timeout_seconds,
+    ).models.list()
+
+
+def _probe_anthropic(api_key: str) -> None:
+    import anthropic
+
+    anthropic.Anthropic(
+        api_key=api_key, timeout=settings.llm_health_probe_timeout_seconds
+    ).models.list()
+
+
+def _probe(provider: str) -> None:
+    """Make the probe call for ``provider``, raising whatever the SDK raises."""
+    if provider == "openai":
+        _probe_openai_compatible(settings.openai_api_key, None)
+    elif provider == "openrouter":
+        _probe_openai_compatible(settings.openrouter_api_key, settings.openrouter_base_url)
+    else:
+        _probe_anthropic(settings.anthropic_api_key)
+
+
+def probe_provider(provider: str) -> tuple[bool, str | None]:
+    """Whether ``provider`` answers right now, and a log-safe reason when it does not.
+
+    Cached for ``llm_health_probe_ttl_seconds`` per provider, including negative results: an
+    unreachable provider is exactly the one whose probe is slowest, so re-running it on every
+    poll would make the health endpoint hang for as long as the outage lasts.
+
+    The reason comes from :func:`~app.core.logsafe.describe_exception`. A provider's own error
+    text can quote the prompt on other paths, and while a models-list call carries no patient
+    data, this value is returned over HTTP and the rule about never laundering upstream
+    message text does not get a per-endpoint exception.
+    """
+    now = time.monotonic()
+    cached = _probe_cache.get(provider)
+    if cached is not None and now - cached[0] < settings.llm_health_probe_ttl_seconds:
+        return cached[1], cached[2]
+
+    try:
+        _probe(provider)
+        result: tuple[bool, str | None] = (True, None)
+    except Exception as exc:  # noqa: BLE001 — any failure is "not reachable"
+        logger.warning(
+            "LLM provider %r failed its reachability probe: %s", provider, describe_exception(exc)
+        )
+        result = (False, describe_exception(exc))
+    _probe_cache[provider] = (now, result[0], result[1])
+    return result
+
+
+def probe_all_providers() -> dict[str, dict[str, Any]]:
+    """Reachability for every provider in the fallback chain, configured or not.
+
+    Unconfigured providers are reported without being called — there is nothing to probe and
+    no key to authenticate with — so a deployment with one provider makes one network call.
+    """
+    report: dict[str, dict[str, Any]] = {}
+    for provider in _provider_order():
+        if not _key_for(provider):
+            report[provider] = {"configured": False, "reachable": None, "error": None}
+            continue
+        reachable, error = probe_provider(provider)
+        report[provider] = {"configured": True, "reachable": reachable, "error": error}
+    return report
+
+
+def reset_probe_cache() -> None:
+    """Forget every cached probe result. For tests, and for nothing else."""
+    _probe_cache.clear()
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end == -1:
