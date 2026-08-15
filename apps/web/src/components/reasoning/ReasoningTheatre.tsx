@@ -78,6 +78,30 @@ export function ReasoningTheatre({
       cant_miss_flag?: boolean;
     }>) ?? [];
 
+  // Whether the Verifier gate reported on this run. Critical Safety Rule #1: no clinical output
+  // reaches the clinician without passing through it, and the panels below — a ranked
+  // differential, the can't-miss list, the devil's-advocate critique — are clinical output.
+  //
+  // During a healthy run they stream in before the verdict does, which is the whole point of the
+  // theatre and is fine: the run is still going and the gate is still ahead of it. What was not
+  // fine is what happened when the run *stopped* there. `state.error` cleared `running` and put a
+  // banner at the top of the first card, and every panel below it stayed exactly as it was —
+  // agents 2, 3 and 4's output, rendered identically to a completed run's, with agent 7 never
+  // having run. A clinician scrolling past a banner they have already read finds a differential
+  // that looks finished.
+  //
+  // The can't-miss block is the worst of them, because it is the one whose *absence* carries
+  // meaning: a partial sentinel list reads as "these are the dangerous things, and nothing else",
+  // when the sentinel may have been cut off mid-scan. And this is reachable by an ordinary
+  // outage — an upstream provider going away mid-run is what `describe_exception` on that path
+  // exists for.
+  //
+  // So an errored run with no verdict withholds the conclusions and says why. An errored run
+  // that *did* get a verdict keeps them: that output passed the gate, and the banner already
+  // says the run did not finish.
+  const verified = Boolean(verifier);
+  const withheld = Boolean(state.error) && !verified;
+
   const statusLabel = state.error
     ? 'Error'
     : state.done
@@ -191,7 +215,28 @@ export function ReasoningTheatre({
           clinician left it. Nothing scrolls it into view and nothing takes focus, so it is a
           polite live region — the can't-miss block inside it is assertive on its own. */}
       <div aria-live="polite" className="space-y-4">
-        {hypotheses.length > 0 && (
+        {withheld && (
+          <div
+            role="status"
+            className="rounded-xl border-2 border-slate-300 bg-slate-50 p-5 text-sm text-slate-700"
+          >
+            <p className="font-semibold text-slate-900">
+              This run stopped before the Verifier checked it.
+            </p>
+            <p className="mt-1.5">
+              Whatever the agents had produced when it stopped is being held back rather than
+              shown: nothing has cross-checked it, and a partial differential or an interrupted
+              can&apos;t-miss scan is not safe to read as either. Reconnect above to pick the run
+              back up, or start a new one.
+            </p>
+            <p className="mt-1.5">
+              The deterministic drug-safety checks on this chart are unaffected — they do not
+              depend on the reasoning engine and are on the Safety screen.
+            </p>
+          </div>
+        )}
+
+        {!withheld && hypotheses.length > 0 && (
           <Card className="animate-slide-up">
             <div className="mb-3 flex items-center gap-2">
               <svg
@@ -226,7 +271,7 @@ export function ReasoningTheatre({
           </Card>
         )}
 
-        {cantMiss.length > 0 && (
+        {!withheld && cantMiss.length > 0 && (
           // A can't-miss diagnosis being forced onto the differential is the one event on this
           // screen that must interrupt rather than queue behind whatever else is being read.
           <div
@@ -255,7 +300,7 @@ export function ReasoningTheatre({
           </div>
         )}
 
-        {devil && (
+        {!withheld && devil && (
           <div className="animate-slide-up rounded-xl border-l-4 border-purple-500 bg-purple-50 p-5">
             <div className="mb-2 flex items-center gap-2">
               <svg

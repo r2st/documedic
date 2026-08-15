@@ -356,3 +356,120 @@ describe('ReasoningTheatre reconnect', () => {
     expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
   });
 });
+
+describe('ReasoningTheatre after a run stops mid-pipeline', () => {
+  /**
+   * Critical Safety Rule #1: clinical output reaches the clinician only through the Verifier.
+   *
+   * The theatre streams each agent's contribution as it arrives, and the Verifier is agent 7 —
+   * so a differential, a can't-miss list and a devil's-advocate critique are all on screen
+   * before the gate has said anything. That is correct while the run is going. It stops being
+   * correct the moment the run dies there: `error` cleared `running` and put a banner on the
+   * first card, and every panel below it stayed exactly as it was, indistinguishable from a run
+   * that finished. An upstream provider going away mid-run is an ordinary way to get there.
+   */
+  async function streamPartialThenFail(): Promise<void> {
+    const source = await latestSource();
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'Community-acquired pneumonia', probability_band: 'high' }],
+      });
+      source.emit('cant_miss', {
+        items: [{ diagnosis_name: 'Pulmonary embolism', why: 'Pleuritic pain with tachycardia' }],
+      });
+      source.emit('devils_advocate', { critique: { summary: 'The fever may be incidental.' } });
+      source.emit('error', { message: 'LLM provider unavailable' });
+    });
+  }
+
+  it('withholds the unverified differential when the run fails before the Verifier', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamPartialThenFail();
+
+    expect(screen.queryByText('Hypotheses (live ranking)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Community-acquired pneumonia')).not.toBeInTheDocument();
+  });
+
+  it('withholds an interrupted can-not-miss scan rather than showing a partial one', async () => {
+    // The one panel whose *absence* carries meaning. A cut-off sentinel list reads as "these are
+    // the dangerous things and nothing else", which is worse than no list at all.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamPartialThenFail();
+
+    expect(
+      screen.queryByText("Can't-miss conditions forced onto the differential"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Pulmonary embolism')).not.toBeInTheDocument();
+  });
+
+  it('withholds the devils-advocate critique of a differential it is no longer shown beside', async () => {
+    // Not a Rule #5 violation: dissent is never suppressed *from output the clinician is given*,
+    // and here there is no output. A critique of a hidden hypothesis is unreadable on its own.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamPartialThenFail();
+
+    expect(screen.queryByText("Devil's advocate")).not.toBeInTheDocument();
+  });
+
+  it('says the run stopped before the Verifier rather than just going blank', async () => {
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamPartialThenFail();
+
+    expect(
+      screen.getByText('This run stopped before the Verifier checked it.'),
+    ).toBeInTheDocument();
+    // The error itself, and the way back, both stay.
+    expect(screen.getByText('LLM provider unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
+  it('points at the deterministic safety checks, which do not depend on the engine', async () => {
+    // Rule #8: the offline checks are unaffected by an LLM outage, and a clinician staring at a
+    // failed run should be told that rather than left thinking the chart has gone quiet.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    await streamPartialThenFail();
+
+    expect(screen.getByText(/deterministic drug-safety checks/)).toBeInTheDocument();
+  });
+
+  it('keeps streaming output on screen while the run is still healthy', async () => {
+    // The withholding must key on the run having *stopped*, not on the verdict being absent —
+    // otherwise the theatre shows nothing until the last agent finishes, which is the opposite
+    // of what it is for.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'Acute bronchitis', probability_band: 'low' }],
+      });
+    });
+
+    expect(screen.getByText('Acute bronchitis')).toBeInTheDocument();
+    expect(
+      screen.queryByText('This run stopped before the Verifier checked it.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps output that did pass the Verifier before the run stopped', async () => {
+    // A failure after the gate — the commit that persists the suggestions, say — leaves output
+    // that has been cross-checked. That is publishable, and the banner already says the run did
+    // not finish, so withholding it would hide a verdict the clinician is entitled to.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('hypotheses', {
+        hypotheses: [{ diagnosis_name: 'Community-acquired pneumonia', probability_band: 'high' }],
+      });
+      source.emit('verifier', { status: 'agree', autonomy_tier: 'flag_for_review' });
+      source.emit('error', { message: 'Could not save the suggestions' });
+    });
+
+    expect(screen.getByText('Community-acquired pneumonia')).toBeInTheDocument();
+    expect(screen.getByText('Verifier verdict')).toBeInTheDocument();
+    expect(
+      screen.queryByText('This run stopped before the Verifier checked it.'),
+    ).not.toBeInTheDocument();
+  });
+});
