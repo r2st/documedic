@@ -15,17 +15,84 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import settings
 from app.core.request_context import bind_request_id, reset_request_id
-from app.exceptions import RequestTooLargeError
+from app.exceptions import AetherError, RequestTooDeeplyNestedError, RequestTooLargeError
 
 logger = logging.getLogger(__name__)
+
+# The Content-Security-Policy for an API that serves JSON and clinician-uploaded scans, and
+# never serves a page of its own. Every directive is set to the most restrictive value that is
+# still true of this application, because "no page here needs it" is exactly the argument that
+# stops being available once someone adds one.
+#
+# `default-src 'none'` rather than `'self'`: this origin has no scripts, styles, fonts or
+# frames to load, and `'self'` silently permitted all of them. What it must still allow is the
+# one thing it does serve — an uploaded image, rendered inline by the browser — so `img-src`
+# opts that back in on its own.
+#
+# `script-src 'none'` and `object-src 'none'` are the two that matter for the download route.
+# A response body from this origin that a browser is willing to treat as a document runs with
+# this origin's privileges, and this origin is where a bearer token is presented; the PDF path
+# is already forced to `attachment` for that reason (see routers/documents.py) and these say
+# the same thing declaratively, for the cases nobody thought of.
+#
+# `base-uri` and `form-action` close the two redirect-ish sinks a CSP that only sets
+# `default-src` leaves open. `frame-ancestors 'none'` duplicates X-Frame-Options for browsers
+# that honour both; the older header stays because some proxies and scanners only read it.
+_CSP = (
+    "default-src 'none'; "
+    "img-src 'self' data:; "
+    "script-src 'none'; "
+    "object-src 'none'; "
+    "style-src 'none'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+
+# Every powerful browser feature this API could ever be asked for, turned off. An API response
+# is not a page and will not ask for a camera — which is the point: if a response from this
+# origin is ever rendered as a document (an inline scan, an error page, a future export), it
+# starts with no access to the microphone, the camera, geolocation or the clipboard rather
+# than with whatever the browser's defaults happen to be that year.
+#
+# `interest-cohort=()` is retained deliberately even though FLoC is gone: it costs nothing and
+# is the only opt-out some intermediary caches still recognise. Under the DPDP Act this API's
+# responses carry patient data and must not become an input to anyone's ad profiling.
+_PERMISSIONS_POLICY = (
+    "accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), "
+    "display-capture=(), document-domain=(), encrypted-media=(), fullscreen=(), "
+    "geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), "
+    "magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), "
+    "publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), "
+    "xr-spatial-tracking=(), interest-cohort=()"
+)
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": _CSP,
+    "Permissions-Policy": _PERMISSIONS_POLICY,
+    # Blocks this API's responses from being loaded as a cross-origin *subresource* — an
+    # `<img src>` on an attacker's page pointed at a scan, a `<script src>` pointed at a JSON
+    # body. It deliberately does not affect the frontend, which reaches every endpoint through
+    # `fetch` in CORS mode: Cross-Origin-Resource-Policy is only consulted for `no-cors`
+    # requests, and a CORS request is governed by the Access-Control headers instead. So this
+    # closes the embedding paths without touching the one path that is meant to work.
+    "Cross-Origin-Resource-Policy": "same-origin",
+    # Severs the `window.opener` link if a response from this origin is ever opened in a new
+    # browsing context, so the opener cannot reach into it or be navigated by it.
+    "Cross-Origin-Opener-Policy": "same-origin",
 }
 
+# Two years, subdomains included. Deliberately *without* `preload`: that directive is a
+# request to be baked into browsers' shipped preload lists, which is close to irreversible and
+# commits every present and future subdomain of the deployment to HTTPS. That is an operator's
+# decision about a domain, not the application's to make on their behalf.
+#
+# Set only in production, so it is never applied to a developer's `http://localhost` — a
+# browser that pins HSTS for localhost pins it for every other project on that machine, and
+# there is no way to un-send it.
 HSTS_VALUE = "max-age=63072000; includeSubDomains"
 
 # What an inbound X-Request-Id may look like to be adopted as this request's correlation id.
@@ -158,20 +225,103 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# The routes that legitimately carry a body measured in megabytes. In practice this is the one
+# document-upload route; it is written as a pattern rather than a literal because the path
+# carries the patient id, and as a set rather than a flag because a second upload route (a
+# batch ingest, a bulk guideline import) must be an explicit decision to widen the ceiling
+# rather than something that inherits it by being new.
+#
+# Deliberately matched on the raw path, before routing. This middleware runs outside the
+# router — that is what lets it refuse a body without the body being read — so there is no
+# matched route to consult, and a path that resolves to nothing gets the small ceiling, which
+# is the safe direction: an unmatched address answers 404 and never needed a large body.
+_LARGE_BODY_ROUTES = (re.compile(r"\A/api/v1/patients/[^/]+/documents/?\Z"),)
+
+# Content types whose body FastAPI will hand to a recursive JSON parser. `+json` catches the
+# structured-suffix types (`application/merge-patch+json` and friends) that Starlette's
+# `Request.json()` is equally willing to parse.
+_JSON_CONTENT_TYPE = re.compile(r"\Aapplication/(?:[\w.+-]+\+)?json\b", re.IGNORECASE)
+
+
+def _is_large_body_route(path: str) -> bool:
+    return any(pattern.match(path) for pattern in _LARGE_BODY_ROUTES)
+
+
+class _DepthScanner:
+    """Streaming nesting-depth counter for a JSON body, over raw bytes.
+
+    Counts ``[`` and ``{`` against ``]`` and ``}``, skipping anything inside a string literal
+    so that a drug name of ``"{{{{"`` is text and not depth. It is not a parser and does not
+    try to be: it never allocates the document, it reads each byte once, and it is wrong only
+    for input that is not valid JSON — which the real parser rejects anyway.
+
+    Feeding it a chunk at a time is the point. The depth of a body is known while the body is
+    still arriving, so an abusive one is cut off part-way rather than measured after the whole
+    thing has been buffered and handed to ``json.loads``.
+    """
+
+    __slots__ = ("depth", "exceeded", "_in_string", "_escaped", "_limit")
+
+    _OPENERS = frozenset(b"[{")
+    _CLOSERS = frozenset(b"]}")
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self.depth = 0
+        self.exceeded = False
+        self._in_string = False
+        self._escaped = False
+
+    def feed(self, chunk: bytes) -> None:
+        for byte in chunk:
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif byte == 0x5C:  # backslash
+                    self._escaped = True
+                elif byte == 0x22:  # closing quote
+                    self._in_string = False
+                continue
+            if byte == 0x22:
+                self._in_string = True
+            elif byte in self._OPENERS:
+                self.depth += 1
+                if self.depth > self._limit:
+                    self.exceeded = True
+                    return
+            elif byte in self._CLOSERS:
+                # Clamped at zero so a body with unbalanced closers cannot drive the counter
+                # negative and buy itself extra depth further on.
+                self.depth = max(0, self.depth - 1)
+
+
 class RequestBodyLimitMiddleware:
-    """Refuse a request body larger than ``settings.max_request_bytes``, with 413.
+    """Bound what a request body may cost before the application reads a byte of it.
 
-    The upload route streams its file and aborts one chunk past 20 MB, so *that* body has been
-    bounded for a while. Every other route buffers: FastAPI reads the whole body before Pydantic
-    is handed anything to validate, so a body's cost is paid in full before the first rule that
-    could reject it runs. A 64 MB JSON body to ``POST /auth/login`` was read into memory and
-    then answered 422 — unauthenticated, so no per-account ceiling applies to it, and cheap to
-    repeat.
+    Three ceilings, all refused up here rather than after parsing:
 
-    The only thing standing in front of that was ``client_max_body_size 25m`` in the reference
-    ``nginx.conf``, which protects exactly the deployments that put nginx in front of the API
-    and left the container port unreachable. That is a deployment property, not a property of
-    this application — the same gap as ``TRUSTED_PROXY_HOPS`` — so the ceiling belongs here too.
+    **Size, on an upload route** — ``settings.max_request_bytes`` (24 MB), sized to fit a 20 MB
+    scan plus its multipart framing. The upload route also streams and aborts one chunk past
+    20 MB on its own.
+
+    **Size, on every other route** — ``settings.max_json_request_bytes`` (1 MB). The upload
+    ceiling was previously applied to all of them, which is not a ceiling at all for
+    ``POST /auth/login``: 24 MB of JSON was buffered whole and parsed before the first Pydantic
+    rule could answer 422, unauthenticated, with no per-account limit in front of it and
+    nothing to stop it being repeated. Nothing but the upload route has a legitimate body
+    within two orders of magnitude of a megabyte.
+
+    **Nesting depth** — ``settings.max_json_depth`` (32), on JSON bodies. JSON is parsed
+    recursively, and the only thing bounding ``[[[[…`` was CPython's recursion limit. That is
+    an implementation detail of the interpreter rather than a statement about what this API
+    accepts, and it surfaces as FastAPI's opaque flat 400 ("There was an error parsing the
+    body") that a client cannot match on and an operator cannot distinguish from a syntax
+    error. The deepest body this API has a use for nests three levels.
+
+    The only thing that stood in front of any of this was ``client_max_body_size 25m`` in the
+    reference ``nginx.conf``, which protects exactly the deployments that put nginx in front of
+    the API and leave the container port unreachable. That is a property of a deployment, not
+    of this application — the same gap as ``TRUSTED_PROXY_HOPS`` — so the ceilings belong here.
 
     Pure ASGI rather than ``BaseHTTPMiddleware`` because the useful check happens *before* the
     body is read: ``BaseHTTPMiddleware`` gives no way to reject one without consuming it first,
@@ -181,22 +331,25 @@ class RequestBodyLimitMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    @property
-    def limit(self) -> int:
-        """Read per request rather than captured at construction, like every other ceiling in
-        this application (see ``dependencies.limit_for``). The app is built once per process,
-        so a captured value could not be changed without rebuilding it."""
-        return settings.max_request_bytes
+    def limit_for(self, scope: Scope) -> int:
+        """The size ceiling for this request. Read per request rather than captured at
+        construction, like every other ceiling in this application (see
+        ``dependencies.limit_for``): the app is built once per process, so a captured value
+        could not be changed without rebuilding it."""
+        if _is_large_body_route(str(scope.get("path", ""))):
+            return settings.max_request_bytes
+        return settings.max_json_request_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        limit = self.limit
+        limit = self.limit_for(scope)
+        headers = Headers(scope=scope)
         # Declared length: the common case, and the only one that can be refused for free —
         # nothing has been read yet, so an oversized body costs one response.
-        declared = Headers(scope=scope).get("content-length")
+        declared = headers.get("content-length")
         if declared is not None:
             try:
                 if int(declared) > limit:
@@ -207,22 +360,36 @@ class RequestBodyLimitMiddleware:
                 # server rejects it on its own terms. Fall through to the counting path.
                 pass
 
-        # No declared length: a chunked body has told us nothing to check in advance, so it is
-        # counted as it arrives and cut off at the ceiling. Without this the header check is
-        # sidestepped by simply omitting the header.
-        state = {"exceeded": False, "answered": False}
+        # The wrappers are installed either way, not only for a chunked body. A declared length
+        # that fits still says nothing about nesting depth, and a client that sends no
+        # Content-Length has declared nothing at all — without the counting path the size check
+        # is sidestepped by simply omitting the header.
+        scanner = (
+            _DepthScanner(settings.max_json_depth)
+            if _JSON_CONTENT_TYPE.match(headers.get("content-type", ""))
+            else None
+        )
+        state: dict = {"refusal": None, "answered": False}
         await self.app(
             scope,
-            self._counted(scope, receive, limit, state),
-            self._guarded(scope, send, limit, state),
+            self._counted(scope, receive, limit, scanner, state),
+            self._guarded(scope, send, state),
         )
 
-    def _counted(self, scope: Scope, receive: Receive, limit: int, state: dict) -> Receive:
-        """Wrap ``receive`` so an oversized chunked body stops accumulating at the ceiling.
+    def _counted(
+        self,
+        scope: Scope,
+        receive: Receive,
+        limit: int,
+        scanner: _DepthScanner | None,
+        state: dict,
+    ) -> Receive:
+        """Wrap ``receive`` so an abusive body stops accumulating at the ceiling.
 
-        Past the limit the stream is cut — the application is handed an end-of-body rather than
-        the rest of the bytes — and the request is flagged. That bounds the memory, which is the
-        whole point; :meth:`_guarded` is what turns the flag into the 413.
+        Past a limit the stream is cut — the application is handed an end-of-body rather than
+        the rest of the bytes — and the reason is recorded on ``state``. That bounds the
+        memory and the parse, which is the whole point; :meth:`_guarded` is what turns the
+        recorded reason into the response.
 
         Cutting rather than raising because an exception thrown here does not survive the trip
         out. FastAPI wraps body parsing in ``except Exception`` and re-raises it as a flat 400
@@ -234,44 +401,58 @@ class RequestBodyLimitMiddleware:
         async def wrapped() -> Message:
             nonlocal total
             message = await receive()
-            if message["type"] != "http.request":
+            if message["type"] != "http.request" or state["refusal"] is not None:
                 return message
-            total += len(message.get("body", b""))
-            if total <= limit:
-                return message
-            state["exceeded"] = True
-            logger.warning(
-                "Refused an oversized request body on %s (streamed past %sB, limit %sB)",
-                scope.get("path", "?"),
-                total,
-                limit,
-            )
-            return {"type": "http.request", "body": b"", "more_body": False}
+            body = message.get("body", b"")
+            total += len(body)
+            if total > limit:
+                logger.warning(
+                    "Refused an oversized request body on %s (streamed past %sB, limit %sB)",
+                    scope.get("path", "?"),
+                    total,
+                    limit,
+                )
+                state["refusal"] = RequestTooLargeError(
+                    detail=f"streamed body exceeded limit {limit}B and was cut"
+                )
+                return _END_OF_BODY
+            if scanner is not None:
+                scanner.feed(body)
+                if scanner.exceeded:
+                    logger.warning(
+                        "Refused a deeply nested JSON body on %s (past %s levels)",
+                        scope.get("path", "?"),
+                        settings.max_json_depth,
+                    )
+                    state["refusal"] = RequestTooDeeplyNestedError(
+                        detail=f"JSON nesting exceeded {settings.max_json_depth} levels"
+                    )
+                    return _END_OF_BODY
+            return message
 
         return wrapped
 
-    def _guarded(self, scope: Scope, send: Send, limit: int, state: dict) -> Send:
-        """Wrap ``send`` so a request whose body was cut short answers 413, not whatever the
-        truncated body happened to parse as.
+    def _guarded(self, scope: Scope, send: Send, state: dict) -> Send:
+        """Wrap ``send`` so a request whose body was cut short answers the refusal, not
+        whatever the truncated body happened to parse as.
 
         The application sees a body that stops early and will say something about it — usually
         a 422, sometimes a 400. That answer describes a request the client did not send, so it
         is discarded and replaced. Substitution is safe here because a request body is read
         before a handler produces anything: by the time the first response message arrives the
-        flag is already set.
+        refusal is already recorded.
         """
 
         async def wrapped(message: Message) -> None:
-            if not state["exceeded"]:
+            refusal = state["refusal"]
+            if refusal is None:
                 await send(message)
                 return
             if state["answered"]:
                 # The application's own response messages, now superseded.
                 return
             state["answered"] = True
-            await self._send_refusal(
-                scope, send, f"streamed body exceeded limit {limit}B and was cut"
-            )
+            await self._send_refusal(scope, send, refusal)
 
         return wrapped
 
@@ -283,17 +464,22 @@ class RequestBodyLimitMiddleware:
             detail,
             limit,
         )
-        await self._send_refusal(scope, send, detail)
+        await self._send_refusal(scope, send, RequestTooLargeError(detail=detail))
 
-    async def _send_refusal(self, scope: Scope, send: Send, detail: str) -> None:
-        """Write the 413 itself, in the same ``{code, message}`` shape as every other error."""
-        error = RequestTooLargeError(detail=detail)
+    async def _send_refusal(self, scope: Scope, send: Send, error: AetherError) -> None:
+        """Write the refusal itself, in the same ``{code, message}`` shape as every other
+        error."""
         response = JSONResponse(
             status_code=error.status_code,
             content={"code": error.code, "message": error.message},
         )
         apply_security_headers(response)
         await response(scope, receive_noop, send)
+
+
+# The message handed to the application in place of the rest of a body that was cut. Shared
+# rather than rebuilt per refusal: it is read, never mutated.
+_END_OF_BODY: Message = {"type": "http.request", "body": b"", "more_body": False}
 
 
 async def receive_noop() -> Message:

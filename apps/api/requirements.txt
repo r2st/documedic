@@ -1,7 +1,36 @@
+# Every pin here is checked against the advisory database by `scripts/audit-deps.sh`, and the
+# ones that sit on the untrusted-input path have a floor asserted in
+# `tests/test_dependency_security_floor.py` so a future edit cannot quietly walk one back.
+
 # --- Web framework ---
-fastapi==0.115.6
+# fastapi moves 0.115.6 -> 0.121.3 to widen the starlette range; starlette is then pinned
+# directly, because it is the dependency that matters here and leaving it to the resolver
+# makes the audit non-reproducible.
+#
+# Starlette is this API's multipart parser and response layer, and 0.41.3 carried two
+# advisories live on routes this application serves: a DoS parsing multi-part forms with files
+# over the spool size — the document upload route — (PYSEC-2026-1941, fixed 0.47.2) and
+# quadratic-time Range header parsing in FileResponse (PYSEC-2026-1942, fixed 0.49.1).
+#
+# Deliberately *not* going to the 1.x line, which is what the remaining starlette advisories
+# require. Those are: Host and path not validated before `request.url` is reconstructed
+# (PYSEC-2026-161, -248), `HTTPEndpoint` selecting a handler by lowercasing the method
+# (PYSEC-2026-2280), `StaticFiles` UNC paths on Windows (PYSEC-2026-2281), and `form()`
+# bounds (PYSEC-2026-249). None of them has a sink in this application: nothing reads
+# `request.url`, `request.base_url` or the Host header — grep says so — there is no
+# `HTTPEndpoint` and no `StaticFiles`, and the one multipart route enforces its own byte
+# ceiling before Starlette's. Starlette 1.0 is a major release, and taking it under a clinical
+# deploy to close advisories with no reachable sink is the wrong trade; it is a round of its
+# own, with the compatibility work done properly.
+fastapi==0.121.3
+starlette==0.50.0
 uvicorn[standard]==0.34.0
-python-multipart==0.0.20
+# 0.0.20 -> 0.0.32. Three of the six advisories against 0.0.20 are denial of service in the
+# multipart parser itself — a crafted preamble/epilogue (PYSEC-2026-3038), part-header parsing
+# (PYSEC-2026-3039), and an unvalidated negative Content-Length (PYSEC-2026-3040). This is the
+# code that reads every clinical scan uploaded to the API, so it is the most directly exposed
+# dependency in the file after pypdf.
+python-multipart==0.0.32
 
 # --- Settings / validation ---
 pydantic==2.10.4
@@ -16,10 +45,27 @@ greenlet==3.1.1
 
 # --- Auth ---
 bcrypt==4.2.1
-pyjwt==2.10.1
+# 2.10.1 -> 2.13.0. PYSEC-2026-176 is a verifier-side algorithm allow-list bypass in
+# `jwt.decode()`, which is the function that authenticates every request to this API;
+# PYSEC-2026-120 is unvalidated `crit` header handling. Neither is exploitable in this
+# application's configuration as written — a single HMAC algorithm, a secret key, no JWKS —
+# but "our current call site happens to be safe" is not a reason to stay on the vulnerable
+# version of the library that guards the session.
+pyjwt==2.13.0
 
 # --- Field-level encryption (patient PII at rest) ---
-cryptography==44.0.0
+# 44.0.0 -> 50.0.0. This library is what encrypts patient PII at rest, so it is not one to
+# leave behind on a known-vulnerable release. The two that decide it are the statically
+# linked OpenSSL in the wheels: the copy shipped in 42.0.0-44.0.0 is vulnerable
+# (PYSEC-2026-1284) and so is every copy before 48.0.1 (GHSA-537c-gmf6-5ccf).
+#
+# Taken all the way to current rather than to the minimum that clears those. The remaining
+# advisories in between are in the X.509 path-validation and PKCS#7 decryption APIs, which
+# this application never calls — it uses Fernet and nothing else — but this codebase only
+# uses the stable half of the library's surface, the suite exercises every encrypt/decrypt
+# path it has, and stopping at a version that still shows up in the audit means every future
+# audit starts by re-deciding the same question.
+cryptography==50.0.0
 
 # --- Cache / queue ---
 redis==5.2.1
@@ -28,13 +74,40 @@ redis==5.2.1
 # OpenAI (GPT) is the primary provider; Anthropic Claude is the configurable fallback.
 openai==1.59.6
 anthropic==0.42.0
-pypdf==5.1.0
+# 5.1.0 -> 6.16.1, and this is the most exposed pin in the file. pypdf parses the PDFs
+# clinicians upload, inline in the upload request, and 5.1.0 carries thirty-seven advisories —
+# every one of them "an attacker can craft a PDF which leads to an infinite loop / RAM
+# exhaustion / long runtimes". A prescription PDF is untrusted input by definition, and an
+# infinite loop in the extraction path holds a worker forever.
+#
+# The 5 -> 6 major bump is safe for this codebase's use of it, which is the whole of
+# `PdfReader(BytesIO(...))` and `page.extract_text()` in `services/extraction/pipeline.py`:
+# both are unchanged in 6.x, and a parse failure there already degrades to OCR rather than
+# raising.
+pypdf==6.16.1
 
-# --- Reasoning engine + RAG (Phase 2/3) ---
-# Optional at runtime: the orchestrator and retriever degrade to a deterministic, offline
-# path when these are absent (guarded imports). Install for the full production stack.
-langgraph==0.2.60
+# --- RAG (Phase 3) ---
+# Optional at runtime: the retriever degrades to a deterministic, offline path when these are
+# absent (guarded imports). Install for the full production stack.
+#
+# `langgraph` was pinned here and is *not* installed any more. Nothing imports it: the
+# orchestrator in `app/agents/` is hand-written, and the only occurrence of the name left in
+# the tree is a comment in `app/agents/__init__.py` noting that langgraph *could* drive the
+# same node functions. Carrying it pulled langgraph, langgraph-checkpoint, langgraph-sdk and
+# langchain-core into the production image — four packages, ten advisories between them,
+# three of which are remote code execution through checkpoint deserialization — to run no
+# code at all. Removing an unused dependency is the cheapest security fix available; if the
+# graph is ever actually wired up, it comes back at a current version.
 qdrant-client==1.12.1
+# sentence-transformers pulls `transformers`, which is the last package still reporting
+# advisories after this round and is staying where it is. All five are remote code execution
+# through *model loading* — a `Trainer` RNG-state unpickle, an X-CLIP checkpoint conversion, a
+# LightGlue loading path — and every one of them requires an attacker-controlled model
+# repository. This application loads exactly one model, by a constant name
+# (`all-MiniLM-L6-v2`, see services/dense_retrieval), never from user input, and falls back to
+# lexical retrieval when the load fails. Two of the five have no fix at any version, and the
+# rest want transformers 5.x, which is a breaking change to the embedding stack. Re-check this
+# when an advisory lands that does not depend on choosing the repository.
 sentence-transformers==3.3.1
 
 # --- Utilities ---
@@ -43,10 +116,9 @@ python-dateutil==2.9.0.post0
 rapidfuzz==3.11.0
 
 # --- Dev / test ---
-pytest==8.3.4
-pytest-asyncio==0.25.0
-pytest-cov==6.0.0
-aiosqlite==0.20.0
-ruff==0.16.3
-mypy==1.14.0
-types-python-dateutil==2.9.0.20241206
+# Moved to requirements-dev.txt. The Dockerfile installs this file and only this file, so
+# every line here ships in the production image: pytest, ruff, mypy and their trees were all
+# being installed into a container that runs uvicorn and nothing else. That is image weight
+# and a wider attack surface for no purpose — pytest 8.3.4 carries an advisory of its own
+# (PYSEC-2026-1845) whose only reason to be in a clinical deployment was that it was in this
+# file.

@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.text_sanitize import clean_free_text, clean_identifier
+
 Sex = Literal["male", "female", "other", "unknown"]
 
 # Loose but sane guard against OCR/typo garbage: digits, spaces, and + - ( ) separators only.
@@ -26,15 +28,8 @@ _MAX_PLAUSIBLE_AGE_YEARS = 130
 # two of them cause real damage downstream rather than just looking odd: U+0000 cannot be
 # stored in a PostgreSQL text column at all (asyncpg raises, SQLite accepts it, which is why
 # the suite never noticed), and CR/LF turn one field into two in any CSV or plain-text export
-# of a chart. Cleaned rather than rejected -- see _clean_identifier.
-# The C0/C1 range excluding \t \n \v \f \r, which Python's ``\s`` already matches and which
-# _WHITESPACE_RUN therefore folds into a single space. Splitting the range this way is what
-# keeps "Ramesh\tKumar" two words: deleting the whole control range would join them into one
-# unsearchable token, the very defect this normalisation exists to prevent.
-_NON_SPACING_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0e-\x1f\x7f-\x9f]")
-# For multi-line free text, where tab and newline are content rather than separators.
-_CONTROL_CHARS_KEEPING_LINES = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-_WHITESPACE_RUN = re.compile(r"\s+")
+# of a chart. Cleaned rather than rejected — see app.core.text_sanitize, which is where the
+# rules now live so that every other clinician-writable text field in the API gets them too.
 
 
 def _validate_dob(value: date | None) -> date | None:
@@ -54,27 +49,6 @@ def _validate_dob(value: date | None) -> date | None:
     return value
 
 
-def _clean_identifier(value: str) -> str:
-    """Normalise a single-line identifying field: no control characters, no stray whitespace.
-
-    Cleaning rather than rejecting, deliberately. A control character or a doubled space in a
-    pasted name is not a clinical error and not something the clinician can usefully be asked to
-    find; refusing the whole chart creation over one would be a worse outcome than quietly
-    fixing it. What *is* rejected is a value that turns out to be empty once cleaned, because
-    that is not a recoverable typo — see :func:`_validate_full_name`.
-
-    Whitespace runs collapse because patient search is a substring match over the decrypted
-    name (``PatientService.list``): a chart stored as "Ramesh  Kumar" is invisible to a search
-    for "Ramesh Kumar", which for an encrypted-at-rest name is the only way to find it.
-
-    Only the non-spacing control characters are deleted; tab, newline and friends are left for
-    the whitespace collapse to fold into a single space. Deleting the whole control range would
-    have turned a tab-separated "Ramesh\\tKumar" into "RameshKumar" — one unsearchable token,
-    which is the same defect this function exists to prevent.
-    """
-    return _WHITESPACE_RUN.sub(" ", _NON_SPACING_CONTROL_CHARS.sub("", value)).strip()
-
-
 def _validate_full_name(value: str | None) -> str | None:
     """Reject a name that is not a name; normalise one that is.
 
@@ -85,7 +59,7 @@ def _validate_full_name(value: str | None) -> str | None:
     """
     if value is None:
         return value
-    cleaned = _clean_identifier(value)
+    cleaned = clean_identifier(value)
     if not cleaned:
         raise ValueError(
             "full_name cannot be blank — a chart with no readable name cannot be identified "
@@ -97,7 +71,7 @@ def _validate_full_name(value: str | None) -> str | None:
 def _validate_phone(value: str | None) -> str | None:
     if value is None:
         return None
-    cleaned = _clean_identifier(value)
+    cleaned = clean_identifier(value)
     # A phone field holding only whitespace is an empty phone field. It used to be returned
     # verbatim -- so a chart was stored with phone="      ", which reads as "a number we have"
     # everywhere it is displayed and matches a search for a single space.
@@ -125,7 +99,7 @@ def _validate_free_text(value: str | None) -> str | None:
         return value
     # CRLF first, so a Windows-pasted address keeps its line structure rather than losing the
     # break along with the CR.
-    return _CONTROL_CHARS_KEEPING_LINES.sub("", value.replace("\r\n", "\n"))
+    return clean_free_text(value)
 
 
 class PatientCreate(BaseModel):
@@ -178,6 +152,16 @@ class PatientSearchRequest(BaseModel):
     search: str | None = Field(default=None, max_length=200)
     limit: int = Field(default=25, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
+
+    # Normalised the same way the stored name is, because the two are compared to each other.
+    # ``full_name`` is stored with its whitespace runs collapsed, so a term pasted as
+    # "Ramesh  Kumar" matched no chart at all until it was collapsed here too.
+    @field_validator("search")
+    @classmethod
+    def _clean_search(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return clean_identifier(value) or None
 
 
 class PatientResponse(BaseModel):

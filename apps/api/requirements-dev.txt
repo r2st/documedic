@@ -1,0 +1,25 @@
+# Development and CI dependencies. Deliberately NOT installed by the Dockerfile.
+#
+# These used to live at the bottom of requirements.txt, which the Dockerfile installs whole —
+# so pytest, ruff, mypy and their dependency trees were being built into the production image
+# alongside uvicorn. Splitting them out is both smaller and narrower: the running container no
+# longer carries a test runner, a linter, a type checker, or pytest's own advisory
+# (PYSEC-2026-1845, a /tmp directory-permissions issue that has no business being reachable in
+# a clinical deployment).
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
+aiosqlite==0.20.0
+ruff==0.16.3
+mypy==1.14.0
+types-python-dateutil==2.9.0.20241206
+
+# Reads requirements.txt against the PyPI advisory database. Driven by scripts/audit-deps.sh;
+# see tests/test_dependency_security_floor.py for the offline half, which pins the floors this
+# round established so a later edit cannot walk one back without failing a test.
+pip-audit==2.9.0

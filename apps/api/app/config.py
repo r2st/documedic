@@ -401,6 +401,23 @@ class Settings(BaseSettings):
     # memory backstop for the unauthenticated routes, not an upload rule — the upload route
     # enforces its own 20 MB. See app.middleware.RequestBodyLimitMiddleware.
     max_request_bytes: int = 24 * 1024 * 1024  # 24 MB
+    # ...and the ceiling for every route that is *not* an upload, which is all but one of them.
+    #
+    # A single ceiling sized for a 20 MB scan is not a ceiling for `POST /auth/login`. Before
+    # this, an unauthenticated client could put 24 MB of JSON on the sign-in route and have it
+    # buffered whole and parsed before the first Pydantic rule rejected it — under the global
+    # limit, so nothing refused it, and repeatable as fast as the socket allows. The largest
+    # legitimate non-upload body in this API is an extraction approval carrying 500 field
+    # corrections of 500 characters each, which is well under 1 MB.
+    max_json_request_bytes: int = 1024 * 1024  # 1 MB
+    # How deeply a JSON request body may nest before it is refused unparsed.
+    #
+    # Nothing this API accepts is deeper than a handful of levels: the deepest is an approval's
+    # `corrections[i].value`, at three. The guard exists because JSON nesting is parsed
+    # recursively and the only thing that was bounding it was CPython's own recursion limit —
+    # an interpreter implementation detail that surfaces as an opaque 400 and that says nothing
+    # about what this application is willing to accept. See app.middleware.
+    max_json_depth: int = 32
     confirmation_confidence_threshold: float = 0.85
     ocr_fallback_threshold: float = 0.50
     # How long a document may sit in `processing` before it is treated as abandoned.

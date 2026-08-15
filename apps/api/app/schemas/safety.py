@@ -7,6 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.text_sanitize import clean_free_text, clean_identifier
+
 # The longest INN in the WHO list is around 60 characters; Indian brand names with a strength
 # qualifier ("Augmentin Duo 625 Tablet") are shorter still. 200 is generous for anything a
 # clinician or an OCR pass produces, and short enough that neither of the two things this
@@ -44,6 +46,20 @@ class SafetyCheckRequest(BaseModel):
         max_length=MAX_DRUG_NAME_CHARS,
         description="Brand or generic name; resolved via DrugVocabulary",
     )
+
+    # Both are single-line identifiers, so they get the identifier cleaning: control characters
+    # out, whitespace runs collapsed. Two reasons beyond tidiness. An unresolved name is quoted
+    # back verbatim in the "could not be matched" message, so a C1 escape in it is reflected
+    # into a clinician-facing toast and into every log line that records the miss. And the
+    # resolver matches on the string: "Amoxi  cillin" resolved to nothing that "Amoxi cillin"
+    # would have found, which on this endpoint means a silent no-match rather than a safety
+    # check.
+    @field_validator("drug_reference_id", "drug_name")
+    @classmethod
+    def _clean_drug_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return clean_identifier(value) or None
 
     @model_validator(mode="after")
     def _require_a_drug(self) -> SafetyCheckRequest:
@@ -133,7 +149,12 @@ class DrugSafetyOverrideRequest(BaseModel):
         stored value the same string; the service's own ``.strip()`` is now a no-op it can keep
         for the non-HTTP callers.
         """
-        stripped = value.strip()
+        # Control characters come out before the floor is applied, not after. Otherwise a
+        # justification made of NULs cleared a length check it should not have, and then could
+        # not be written at all: PostgreSQL refuses U+0000 in a text column, so the flush
+        # raised and the override — the one audited path past an allergy hard block, per
+        # Critical Safety Rule #3 — died as a 500 with no record of the attempt.
+        stripped = clean_free_text(value).strip()
         if len(stripped) < MIN_OVERRIDE_REASONING_CHARS:
             raise ValueError(
                 f"reasoning must be at least {MIN_OVERRIDE_REASONING_CHARS} characters of "

@@ -5,8 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.text_sanitize import clean_free_text
 from app.schemas.common import (
     AutonomyTier,
     ClinicalOutputType,
@@ -16,8 +17,39 @@ from app.schemas.common import (
 )
 
 
+def _validate_clinical_prose(value: str | None) -> str | None:
+    """Clean a clinician-written free-text field, and refuse one that is empty once cleaned.
+
+    The cleaning is :func:`app.core.text_sanitize.clean_free_text` — the same rules the patient
+    chart's ``notes`` field has always had, which the reasoning-engine fields did not. Two
+    consequences, both real:
+
+    * A U+0000 anywhere in the string cannot be written to a PostgreSQL text column. The
+      presenting complaint is the first thing a run stores, so a NUL in it fails the flush and
+      the run never starts; in an intake answer it kills the answer *and* the run state written
+      alongside it.
+    * The presenting complaint and every intake answer are interpolated into agent prompts and
+      streamed to the Reasoning Theatre. A C1 escape survives that whole path into whatever
+      renders it.
+
+    The emptiness check has to happen *after* cleaning, and it is why this is a validator
+    rather than a bare cleaner. ``min_length`` counts raw characters, so a complaint of
+    ``"\\x00\\x01"`` satisfied ``min_length=2`` and then cleaned down to ``""`` — an empty
+    complaint the panel is asked to reason about, which is the input the length floor exists
+    to prevent.
+    """
+    if value is None:
+        return None
+    cleaned = clean_free_text(value).strip()
+    if not cleaned:
+        raise ValueError("must contain some text once control characters are removed")
+    return cleaned
+
+
 class StartReasoningRequest(BaseModel):
     presenting_complaint: str = Field(..., min_length=2, max_length=4000)
+
+    _check_complaint = field_validator("presenting_complaint")(_validate_clinical_prose)
 
 
 class IntakeQuestionOut(BaseModel):
@@ -35,6 +67,8 @@ class IntakeQuestionOut(BaseModel):
 class IntakeAnswerIn(BaseModel):
     question_id: uuid.UUID
     answer_text: str = Field(..., min_length=1, max_length=4000)
+
+    _check_answer = field_validator("answer_text")(_validate_clinical_prose)
 
 
 class SubmitAnswersRequest(BaseModel):
@@ -121,6 +155,15 @@ class ReasoningResultOut(BaseModel):
 class DecisionRequest(BaseModel):
     decision: ClinicianDecision
     reason: str | None = Field(default=None, max_length=4000)
+
+    # Optional, unlike the two above, so an all-control-character reason becomes None rather
+    # than a 422: the field is not required, and there is nothing for the clinician to fix.
+    @field_validator("reason")
+    @classmethod
+    def _clean_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return clean_free_text(value).strip() or None
 
 
 class DecisionOut(BaseModel):

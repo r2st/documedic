@@ -9,7 +9,9 @@ docker compose up -d postgres redis qdrant minio
 echo "==> Creating Python venv and installing backend deps…"
 python3.12 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
-.venv/bin/pip install -q -r apps/api/requirements.txt
+# Dev setup wants the test/lint tooling too; the Dockerfile deliberately installs only
+# requirements.txt so none of it ships in the production image.
+.venv/bin/pip install -q -r apps/api/requirements-dev.txt
 
 echo "==> Applying database migrations…"
 export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://aether:aether@localhost:5432/aether_clinician}"

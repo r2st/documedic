@@ -6,7 +6,9 @@ import uuid
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from app.core.text_sanitize import clean_identifier
 
 
 class DocumentResponse(BaseModel):
@@ -90,6 +92,33 @@ class FieldCorrection(BaseModel):
     value: CorrectedValue = Field(
         ..., description="Scalar replacement value; see CorrectedValue for the bounds and why."
     )
+
+    @field_validator("value")
+    @classmethod
+    def _clean_value(cls, value: object) -> object:
+        """Normalise a corrected string the way every other single-line clinical value is.
+
+        This is the widest clinician-writable path into the patient graph — a correction lands
+        as a medication's brand or generic name, a dose, a lab marker or its unit, a condition,
+        an allergen — and it was the one that took the string exactly as sent. The chart's own
+        ``full_name`` and ``notes`` have been control-character cleaned since they were
+        written; a drug name arriving through document review was not.
+
+        A U+0000 in any of these is the sharp edge. PostgreSQL cannot store it in a text
+        column: asyncpg raises at flush, and because approval merges the whole document in one
+        transaction the clinician loses the entire reviewed extraction — every other entity on
+        the page included — to a 500. SQLite keeps it, which is why the suite never saw it.
+
+        Whitespace collapse matters for a second reason here that it does not elsewhere: these
+        values are *resolved*, not just stored. A corrected "Amoxi  cillin" is looked up
+        through the DrugVocabulary, and a doubled space is the difference between a drug that
+        cross-checks against the patient's allergies and one that resolves to nothing.
+
+        Non-strings (a numeric lab value, a boolean) pass through untouched.
+        """
+        if not isinstance(value, str):
+            return value
+        return clean_identifier(value)
 
 
 class ExtractionApproval(BaseModel):

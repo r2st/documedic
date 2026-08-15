@@ -381,6 +381,25 @@ class RequestTooLargeError(AetherError):
     code = "request_too_large"
 
 
+class RequestTooDeeplyNestedError(AetherError):
+    """That request could not be read because its structure was nested too deeply, so nothing
+    was changed. Reload the page and try again.
+
+    400 rather than 413: the body was within its size ceiling, so this is not a complaint
+    about how much was sent. It is refused unparsed, while the body is still arriving, because
+    JSON nesting is parsed recursively and the depth is knowable from the raw bytes.
+
+    Distinct from the flat 400 FastAPI produces for a body it failed to parse, which is what a
+    deeply nested body used to become: that answer is indistinguishable from a syntax error,
+    carries no ``code`` for a client to match on, and only happened at all because CPython's
+    recursion limit ran out first. Nothing this API accepts nests past three levels, so a body
+    that nests past ``settings.max_json_depth`` is not a client this endpoint has.
+    """
+
+    status_code = 400
+    code = "request_too_nested"
+
+
 class NotReadyError(AetherError):
     """This server is not currently able to serve requests. Try again in a moment.
 
