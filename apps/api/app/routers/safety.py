@@ -84,12 +84,22 @@ async def check_medication(
     `is_hard_block` means an allergy or absolute contraindication. It is not advisory — the
     action is blocked until a clinician records an override at `POST ../override` with written
     reasoning. Flags carry the `id` that override needs.
+
+    Supply `dose`, `dose_unit` and `frequency` to have the *dose* checked as well, against the
+    curated therapeutic range for the drug and against this patient's age, weight and renal
+    function. Omitting them checks the drug and not the dose — which is the ordinary request
+    while a clinician is still choosing between drugs, and raises nothing on its own. A dose
+    finding is never a hard block: dose ceilings are exceeded deliberately and routinely, for
+    reasons this record does not hold.
     """
     vocab, ctx, flags, check_ids = await SafetyService(db).check_medication(
         account_id=account.id,
         patient_id=patient_id,
         drug_reference_id=body.drug_reference_id,
         drug_name=body.drug_name,
+        dose=body.dose,
+        dose_unit=body.dose_unit,
+        frequency=body.frequency,
     )
     blocked = has_hard_block(flags)
     return SafetyCheckResponse(

@@ -28,6 +28,14 @@ recommendation escalated to flag-for-review, which is how a tier stops being rea
 detector answers only for the canonical prescription shape (a name immediately followed by a
 dose) and stays silent whenever the sentence is arranged any other way.
 
+The unit vocabulary is public
+-----------------------------
+``TO_MILLIGRAMS``, ``UNIT_SPELLINGS``, ``NUMBER``, ``UNIT_ALTERNATION``, ``canonical_unit`` and
+``to_float`` are exported for :mod:`app.core.dose_range`, which judges a *charted* dose against
+a curated therapeutic range. The two modules read the same kind of number off two different
+sources — model-written prose here, a clinician-entered ``medication_events.dose`` there — and a
+second spelling table would be a second answer to "is µg the same as mcg", drifting silently.
+
 What is NOT attempted
 ---------------------
 No judgement about whether a dose is *right* for this patient. That needs indication, weight,
@@ -56,7 +64,7 @@ IMPLAUSIBLE_STRENGTH_MULTIPLE = 100.0
 # the largest single doses in ordinary practice.
 ABSOLUTE_MAX_SINGLE_DOSE_MG = 100_000.0
 
-_TO_MILLIGRAMS: dict[str, float] = {
+TO_MILLIGRAMS: dict[str, float] = {
     "mcg": 0.001,
     "mg": 1.0,
     "g": 1000.0,
@@ -65,7 +73,7 @@ _TO_MILLIGRAMS: dict[str, float] = {
 
 # Spelling -> canonical unit. Longest spellings must be tried first in the alternation below, so
 # "micrograms" is not matched as "mg" would never be, but "milligrams" is not truncated to "mill".
-_UNIT_SPELLINGS: tuple[tuple[str, str], ...] = (
+UNIT_SPELLINGS: tuple[tuple[str, str], ...] = (
     ("micrograms", "mcg"),
     ("microgram", "mcg"),
     ("milligrams", "mg"),
@@ -87,14 +95,14 @@ _UNIT_SPELLINGS: tuple[tuple[str, str], ...] = (
     ("g", "g"),
 )
 
-_NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
-_UNIT_ALTERNATION = "|".join(re.escape(spelling) for spelling, _ in _UNIT_SPELLINGS)
+NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+UNIT_ALTERNATION = "|".join(re.escape(spelling) for spelling, _ in UNIT_SPELLINGS)
 
 _DOSE_RE = re.compile(
-    rf"(?P<amount>{_NUMBER})"
+    rf"(?P<amount>{NUMBER})"
     # A range ("500-1000 mg", "1 to 2 g") is one dose expression, judged at its upper end.
-    rf"(?:\s*(?:-|–|—|to)\s*(?P<upper>{_NUMBER}))?"
-    rf"\s*(?P<unit>{_UNIT_ALTERNATION})"
+    rf"(?:\s*(?:-|–|—|to)\s*(?P<upper>{NUMBER}))?"
+    rf"\s*(?P<unit>{UNIT_ALTERNATION})"
     # A plural "s" is part of the unit; any other letter means this was never a unit. "10 mgs"
     # is a dose, "5 gastric" is not 5 g, and "10 mgx" is not a unit this recognises.
     r"s?(?![A-Za-z])"
@@ -275,13 +283,13 @@ class DoseFinding:
     """The strength the ceiling was derived from, quoted in the flag so it can be checked."""
 
 
-def _to_float(raw: str) -> float:
+def to_float(raw: str) -> float:
     return float(raw.replace(",", ""))
 
 
-def _canonical_unit(raw: str) -> str:
+def canonical_unit(raw: str) -> str:
     lowered = raw.lower()
-    for spelling, canonical in _UNIT_SPELLINGS:
+    for spelling, canonical in UNIT_SPELLINGS:
         if lowered == spelling.lower():
             return canonical
     return lowered
@@ -309,8 +317,8 @@ def find_dose_mentions(text: str) -> list[DoseMention]:
                 # else unrecognised: a denominator this module cannot read makes the number's
                 # meaning unknown, and an unknown number is not evidence of anything.
                 continue
-        unit = _canonical_unit(match.group("unit"))
-        amount = _to_float(match.group("upper") or match.group("amount"))
+        unit = canonical_unit(match.group("unit"))
+        amount = to_float(match.group("upper") or match.group("amount"))
         raw.append((match, unit, amount, per_body_weight))
 
     mentions: list[DoseMention] = []
@@ -328,7 +336,7 @@ def find_dose_mentions(text: str) -> list[DoseMention]:
                 text=match.group(0).strip(),
                 amount=amount,
                 unit=unit,
-                milligrams=(amount * _TO_MILLIGRAMS[unit] if unit in _TO_MILLIGRAMS else None),
+                milligrams=(amount * TO_MILLIGRAMS[unit] if unit in TO_MILLIGRAMS else None),
                 per_body_weight=per_body_weight,
                 context=(before + match.group(0) + after),
                 name_candidate=name,
@@ -354,7 +362,7 @@ def _trailing_window(tail: str) -> str:
 
 
 _STRENGTH_COMPONENT_RE = re.compile(
-    rf"(?P<amount>{_NUMBER})\s*(?P<unit>{_UNIT_ALTERNATION})s?(?![A-Za-z])",
+    rf"(?P<amount>{NUMBER})\s*(?P<unit>{UNIT_ALTERNATION})s?(?![A-Za-z])",
     re.IGNORECASE,
 )
 
@@ -374,9 +382,9 @@ def max_milligrams_in_strength(strength: str | None) -> float | None:
     if not strength:
         return None
     milligrams = [
-        _to_float(match.group("amount")) * _TO_MILLIGRAMS[unit]
+        to_float(match.group("amount")) * TO_MILLIGRAMS[unit]
         for match in _STRENGTH_COMPONENT_RE.finditer(strength)
-        if (unit := _canonical_unit(match.group("unit"))) in _TO_MILLIGRAMS
+        if (unit := canonical_unit(match.group("unit"))) in TO_MILLIGRAMS
     ]
     return max(milligrams) if milligrams else None
 

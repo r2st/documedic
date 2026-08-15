@@ -21,6 +21,7 @@ from app.core.dose_text import DoseFinding, find_dose_mentions, implausible_dose
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
     CONDITION_RESOLVED_STATUSES,
+    ChartedDose,
     ChartedMedication,
     ContraindicationRule,
     DrugRef,
@@ -31,8 +32,10 @@ from app.core.safety import (
     SafetyContext,
     SafetyFlag,
     check_dose_integrity,
+    check_dose_ranges,
     check_duplicate_orders,
     check_hepatic_severity,
+    check_proposed_dose,
     check_stale_medications,
     check_unevaluated_allergies,
     check_unevaluated_conditions,
@@ -258,36 +261,56 @@ class SafetyService:
             med_rows = await self._current_medication_rows(patient_id)
             allergy_rows = await self._active_allergy_rows(patient_id)
             vocab_by_id = await self._vocabulary_by_id(med_rows, allergy_rows)
-            current_meds, unresolved = await self._current_meds(med_rows, vocab_by_id)
+            current_meds, unresolved, charted_doses = await self._current_meds(
+                med_rows, vocab_by_id
+            )
             allergies, unidentified_allergies = await self._allergies(allergy_rows, vocab_by_id)
+            age_years, weight_kg = await self._age_and_weight(patient_id)
             self._facts[patient_id] = SafetyContext(
                 current_meds=current_meds,
                 unresolved_current_meds=unresolved,
                 charted_current_meds=_charted_current_meds(med_rows),
+                charted_doses=charted_doses,
                 allergies=allergies,
                 unresolved_allergies=unidentified_allergies,
                 conditions=await self._conditions(patient_id),
                 egfr=await self._latest_egfr(patient_id),
                 hepatic=await self._hepatic_panel(patient_id),
-                age_years=await self._age_years(patient_id),
+                age_years=age_years,
+                weight_kg=weight_kg,
             )
         return self._facts[patient_id]
 
-    async def _age_years(self, patient_id: uuid.UUID) -> int | None:
-        """The patient's age in whole years today, or None when the record cannot say.
+    async def _age_and_weight(self, patient_id: uuid.UUID) -> tuple[int | None, float | None]:
+        """The patient's age in whole years today and their recorded weight, or None for either.
 
-        None for a missing date of birth and for one that is not a date this patient could have
-        been born on — an OCR'd "2126" or a DOB in the future. ``check_geriatric_cautions``
-        reports a None as a check that did not run rather than as a check that passed, so the
-        honest answer here is the safe one; deriving an age from an implausible date would put a
-        confident number underneath a clinical caution.
+        One query for two columns of one row. They are read together because the two are read
+        together — ``dose_range`` needs both to judge a child's dose, and a second round-trip for
+        a second column of the same row is a round-trip in front of a clinician waiting on a
+        safety screen.
+
+        Age is None for a missing date of birth and for one that is not a date this patient
+        could have been born on — an OCR'd "2126" or a DOB in the future.
+        ``check_geriatric_cautions`` reports a None as a check that did not run rather than as
+        one that passed, so the honest answer here is the safe one; deriving an age from an
+        implausible date would put a confident number underneath a clinical caution.
+
+        Weight is None when nothing has recorded one, and ``ck_patients_weight_kg_plausible``
+        is what keeps a zero or a negative out of the column — a weight of 0 kg divides into a
+        mg/kg figure of infinity.
         """
-        row = await self.db.execute(select(Patient.date_of_birth).where(Patient.id == patient_id))
-        dob = row.scalars().first()
+        row = await self.db.execute(
+            select(Patient.date_of_birth, Patient.weight_kg).where(Patient.id == patient_id)
+        )
+        record = row.first()
+        if record is None:
+            return None, None
+        dob, weight = record
+        weight_kg = float(weight) if weight is not None else None
         if dob is None or not is_plausible_clinical_date(dob):
-            return None
+            return None, weight_kg
         age = age_from_dob(dob, datetime.now(UTC).date())
-        return age if age >= 0 else None
+        return (age if age >= 0 else None), weight_kg
 
     async def _current_medication_rows(self, patient_id: uuid.UUID) -> list[MedicationEvent]:
         result = await self.db.execute(
@@ -358,8 +381,16 @@ class SafetyService:
 
     async def _current_meds(
         self, med_rows: list[MedicationEvent], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
-    ) -> tuple[list[DrugRef], list[str]]:
-        """The chart's current medications as evaluable drugs, and the names that are not.
+    ) -> tuple[list[DrugRef], list[str], list[ChartedDose]]:
+        """The chart's current medications as evaluable drugs, the names that are not, and the
+        doses written beside the ones that resolved.
+
+        The third list is built here rather than by a second pass over ``med_rows`` because the
+        pairing is only available here: the resolution of a row to a drug happens in this loop,
+        and outside it there is nothing left that knows which ``MedicationEvent`` became which
+        ``DrugRef``. Its membership is the resolved rows only — a row nothing resolved has no
+        drug to look a range up for, and is already reported by
+        ``check_unevaluated_medications``.
 
         The second half is not bookkeeping. A row that resolves to nothing is absent from every
         rule evaluated against ``current_meds``, and until it was carried out of here that
@@ -389,10 +420,20 @@ class SafetyService:
         )
         out: list[DrugRef] = []
         unresolved: list[str] = []
+        charted: list[ChartedDose] = []
+
+        def _charted(drug: DrugRef, med: MedicationEvent) -> None:
+            charted.append(
+                ChartedDose(
+                    drug=drug, dose=med.dose, dose_unit=med.dose_unit, frequency=med.frequency
+                )
+            )
+
         for med in med_rows:
             vocab = vocab_by_id.get(med.drug_vocabulary_id) if med.drug_vocabulary_id else None
             if vocab is not None:
                 out.append(_drug_ref(vocab))
+                _charted(out[-1], med)
                 continue
             # Unlinked row (e.g. imported before the vocabulary knew the brand): fall back to
             # name resolution so the drug still participates in the safety evaluation. Retried
@@ -406,9 +447,10 @@ class SafetyService:
                     break
             if resolved:
                 out.append(_drug_ref(resolved))
+                _charted(out[-1], med)
             else:
                 unresolved.append(names[0] if names else _UNNAMED_MEDICATION)
-        return out, unresolved
+        return out, unresolved, charted
 
     async def _allergies(
         self, allergy_rows: list[Allergy], vocab_by_id: dict[uuid.UUID, DrugVocabulary]
@@ -714,6 +756,9 @@ class SafetyService:
         patient_id: uuid.UUID,
         drug_reference_id: str | None,
         drug_name: str | None,
+        dose: str | None = None,
+        dose_unit: str | None = None,
+        frequency: str | None = None,
     ) -> tuple[DrugVocabulary, SafetyContext, list[SafetyFlag], list[uuid.UUID]]:
         await self._patient(account_id, patient_id)
 
@@ -758,11 +803,18 @@ class SafetyService:
         # no clinician sees.
         flags = (
             evaluate_drug_safety(proposed, ctx)
+            # The dose the caller is proposing, if they supplied one — a judgement about this
+            # request rather than about the chart, so it sits with the proposed drug's own
+            # checks and above the chart-level notes.
+            + check_proposed_dose(
+                proposed, ctx, dose=dose, dose_unit=dose_unit, frequency=frequency
+            )
             + check_unevaluated_medications(ctx)
             + check_unevaluated_allergies(ctx)
             + check_unevaluated_conditions(ctx)
             + check_stale_medications(ctx)
             + check_duplicate_orders(ctx)
+            + check_dose_ranges(ctx)
             + check_hepatic_severity(ctx)
         )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
@@ -789,6 +841,10 @@ class SafetyService:
             + check_unevaluated_conditions(facts)
             + check_stale_medications(facts)
             + check_duplicate_orders(facts)
+            # A statement about the doses already on the chart, so it belongs with the other
+            # chart-level notes: once for the whole medication list, not once per drug
+            # evaluated against it.
+            + check_dose_ranges(facts)
             + check_hepatic_severity(facts)
         )
 

@@ -43,7 +43,15 @@ export type SafetyCheckType =
   // the drug it named. See app.core.dose_text — the option text is model-written, and both
   // failures are fluent, plausible and otherwise silent all the way to this screen.
   | 'unverified_drug_name'
-  | 'implausible_dose';
+  | 'implausible_dose'
+  // The dose axis. Three types rather than one because the clinician's next action differs for
+  // each: an out-of-range dose is a number to confirm, a unit mismatch is a *line to re-read
+  // against the source document*, and an unevaluated dose is a gap in the chart — a child on a
+  // weight-dosed drug with no weight recorded — rather than a finding about the prescription.
+  // See app.core.dose_range.
+  | 'dose_out_of_range'
+  | 'dose_unit_mismatch'
+  | 'unevaluated_dose';
 
 export type ReasoningStatus =
   | 'created'

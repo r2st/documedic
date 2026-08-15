@@ -32,6 +32,10 @@ class PatientService:
             notes=data.notes,
             consent_given=True,
             consent_given_at=datetime.now(UTC),
+            weight_kg=data.weight_kg,
+            # Stamped only when a weight actually arrived. A NULL weight with a timestamp beside
+            # it would read, later, as "weighed, and the result was nothing".
+            weight_recorded_at=datetime.now(UTC) if data.weight_kg is not None else None,
         )
         self.db.add(patient)
         await self.db.flush()
@@ -259,6 +263,17 @@ class PatientService:
                     patient.consent_given_at = datetime.now(UTC)
                 patient.consent_given = bool(value)
                 changed["consent_given"] = bool(value)
+                continue
+            if field_name == "weight_kg":
+                # The measurement and its date move together, in both directions. A weight sent
+                # as null is a weight being withdrawn — entered against the wrong chart, most
+                # likely — and leaving the old timestamp behind would date a measurement that no
+                # longer exists. Re-sending the same number still re-stamps: a clinician
+                # confirming today's weight has weighed the patient today, and the value being
+                # unchanged is a fact about the patient rather than about the record.
+                patient.weight_kg = value
+                patient.weight_recorded_at = datetime.now(UTC) if value is not None else None
+                changed["weight_kg"] = value
                 continue
             setattr(patient, field_name, value)
             changed[field_name] = value

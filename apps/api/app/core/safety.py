@@ -54,6 +54,7 @@ from datetime import date
 from functools import lru_cache
 from typing import Literal
 
+from app.core.dose_range import AssessmentKind, DoseAssessment, assess_dose
 from app.core.dose_text import DoseFinding
 from app.core.hepatic import HepaticSeverity, assess_hepatic_severity
 
@@ -81,6 +82,14 @@ CheckType = Literal[
     # ``check_dose_integrity`` and ``app.core.dose_text``.
     "unverified_drug_name",
     "implausible_dose",
+    # A charted dose measured against the curated therapeutic range for the drug — see
+    # ``app.core.dose_range`` and ``check_dose_ranges``. Three types rather than one because the
+    # clinician's next action differs: an out-of-range dose is a number to confirm, a unit
+    # mismatch is a *line to re-read against the source*, and an unevaluated dose is a gap in
+    # the chart to fill.
+    "dose_out_of_range",
+    "dose_unit_mismatch",
+    "unevaluated_dose",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -369,6 +378,29 @@ class ChartedMedication:
 
 
 @dataclass(frozen=True)
+class ChartedDose:
+    """A current medication *and* what the chart says the dose is.
+
+    Kept apart from both ``current_meds`` (the evaluable drugs) and ``charted_current_meds`` (the
+    rows, with their dates) because it has a third membership again: only the rows that both
+    resolved to a drug and carry a dose the record wrote down. A row charted as "1 tablet" is in
+    the first two lists and not in this one, and that is correct — a tablet count with no
+    strength beside it is not a quantity of drug, and guessing one is how a dose check invents a
+    finding.
+
+    The three fields are ``medication_events.dose``, ``.dose_unit`` and ``.frequency`` verbatim,
+    unparsed. Parsing is :mod:`app.core.dose_range`'s job and it happens at the point of
+    judgement, so this dataclass carries what the chart holds rather than what one reader made
+    of it.
+    """
+
+    drug: DrugRef
+    dose: str | None = None
+    dose_unit: str | None = None
+    frequency: str | None = None
+
+
+@dataclass(frozen=True)
 class InteractionRule:
     drug_a_reference_id: str
     drug_b_reference_id: str
@@ -454,6 +486,16 @@ class SafetyContext:
     # Names of documented *drug* allergies the vocabulary could not identify, so the entry
     # carries no reference id and no drug class. See ``check_unevaluated_allergies``.
     unresolved_allergies: list[str] = field(default_factory=list)
+    # Body weight in kilograms, or None when the chart has never recorded one. The paediatric
+    # half of ``check_dose_ranges`` is a function of it, and None there produces an explicit
+    # "could not be checked" note rather than a pass — a child's dose is calculated from weight,
+    # so a missing weight is a missing check and not a missing risk. See
+    # ``app.core.dose_range._paediatric``.
+    weight_kg: float | None = None
+    # Current medications paired with the dose and frequency the chart wrote for them. A third
+    # list beside ``current_meds`` and ``charted_current_meds``; see ``ChartedDose`` for why the
+    # membership differs from both.
+    charted_doses: list[ChartedDose] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -2872,6 +2914,107 @@ def check_dose_integrity(findings: list[DoseFinding]) -> list[SafetyFlag]:
                     "reason": finding.reason,
                     "largest_listed_strength": finding.ceiling_text,
                 },
+            )
+        )
+    return flags
+
+
+# What each kind of dose finding is worth, and whether it can be escalated by magnitude. None of
+# them is a hard block: see the "Deliberately not a hard block" section of
+# ``app.core.dose_range``. ``below_minimum`` is info because a sub-therapeutic dose is very often
+# deliberate — a titration step, a frailty reduction — and the note exists to be noticed rather
+# than answered.
+_DOSE_KIND_SEVERITY: dict[AssessmentKind, tuple[CheckType, Severity, Severity]] = {
+    # kind -> (check type, ordinary severity, severity when ``severe``)
+    "above_maximum": ("dose_out_of_range", "warning", "critical"),
+    "below_minimum": ("dose_out_of_range", "info", "info"),
+    "unit_mismatch": ("dose_unit_mismatch", "critical", "critical"),
+    "interval_mismatch": ("dose_out_of_range", "critical", "critical"),
+    "not_evaluated": ("unevaluated_dose", "warning", "warning"),
+}
+
+
+def _dose_flag(assessment: DoseAssessment, drug: DrugRef | None = None) -> SafetyFlag:
+    check_type, ordinary, severe = _DOSE_KIND_SEVERITY[assessment.kind]
+    return SafetyFlag(
+        check_type=check_type,
+        severity=severe if assessment.severe else ordinary,
+        is_hard_block=False,
+        summary=assessment.message,
+        details={
+            "drug": assessment.generic_name,
+            **({"reference_id": drug.reference_id} if drug else {}),
+            "finding": assessment.kind,
+            **assessment.details,
+        },
+    )
+
+
+def check_dose_ranges(ctx: SafetyContext) -> list[SafetyFlag]:
+    """Every charted dose measured against the curated therapeutic range for its drug.
+
+    A statement about the medication list rather than about any proposed drug, so it sits with
+    ``check_unevaluated_medications`` and the other chart-level checks and is appended once by
+    the callers that answer about a chart — not folded into ``evaluate_drug_safety``, which runs
+    once per drug and would repeat every finding as many times as the chart has medications.
+
+    Ordered by drug name so two calls against an unchanged chart produce the same list in the
+    same order. The alternative is the order the medication rows happened to load in, which is
+    unspecified and would make the safety screen reshuffle itself between refreshes.
+    """
+    flags: list[SafetyFlag] = []
+    for charted in sorted(ctx.charted_doses, key=lambda c: _norm(c.drug.generic_name)):
+        for ingredient in _ingredients(charted.drug):
+            flags.extend(
+                _dose_flag(assessment, charted.drug)
+                for assessment in assess_dose(
+                    generic_name=ingredient.drug.generic_name,
+                    dose=charted.dose,
+                    dose_unit=charted.dose_unit,
+                    frequency=charted.frequency,
+                    age_years=ctx.age_years,
+                    weight_kg=ctx.weight_kg,
+                    egfr=ctx.egfr,
+                )
+            )
+    return flags
+
+
+def check_proposed_dose(
+    proposed: DrugRef,
+    ctx: SafetyContext,
+    *,
+    dose: str | None,
+    dose_unit: str | None = None,
+    frequency: str | None = None,
+) -> list[SafetyFlag]:
+    """The same judgement, applied to a dose the clinician is about to prescribe.
+
+    Separate from ``check_dose_ranges`` and not called from ``evaluate_drug_safety``, because
+    the dose is not a property of the drug: every other check in this module answers "does this
+    *drug* conflict with this chart" from the drug's identity alone, and only this one needs a
+    number the caller supplies. Folding it in would give every caller of ``evaluate_drug_safety``
+    a parameter almost none of them have.
+
+    Returns nothing at all when no dose was supplied. A safety check without a dose is a
+    perfectly ordinary request — it is what the screen does when a clinician is choosing between
+    drugs — and answering it with "the dose could not be checked" would put a warning on every
+    such call.
+    """
+    if not dose or not dose.strip():
+        return []
+    flags: list[SafetyFlag] = []
+    for ingredient in _ingredients(proposed):
+        flags.extend(
+            _dose_flag(assessment, proposed)
+            for assessment in assess_dose(
+                generic_name=ingredient.drug.generic_name,
+                dose=dose,
+                dose_unit=dose_unit,
+                frequency=frequency,
+                age_years=ctx.age_years,
+                weight_kg=ctx.weight_kg,
+                egfr=ctx.egfr,
             )
         )
     return flags

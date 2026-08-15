@@ -41,6 +41,13 @@ _OFFLINE_ROOTS = (
     # are exactly the failures that must still be caught when the network is down — the provider
     # that wrote them may be the thing that is failing.
     "app.core.dose_text",
+    # The curated therapeutic ranges, reached from ``app.core.safety`` by ``check_dose_ranges``.
+    # A per-drug maximum is the shape of thing that most wants to become configuration — a table
+    # of numbers someone will eventually want to edit without a deploy — and the moment it does,
+    # the dose check acquires a file read and a parse failure. It is a Python literal reached
+    # only through ``re``, ``dataclasses`` and ``app.core.dose_text``, and this line is what
+    # keeps it that way.
+    "app.core.dose_range",
 )
 
 # Everything the standard library gives these modules today. An addition here is not forbidden,

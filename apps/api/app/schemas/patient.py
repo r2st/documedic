@@ -24,6 +24,15 @@ _MIN_PHONE_DIGITS = 6
 # Age-based clinical computations (eGFR, renal dosing thresholds) depend on a plausible DOB.
 _MAX_PLAUSIBLE_AGE_YEARS = 130
 
+# Body weight, in kilograms. The bounds match ``ck_patients_weight_kg_plausible`` on the table —
+# stated in both places because a 422 naming the field is a better answer to a typo than a 500
+# from a constraint violation, and because the constraint has to hold whatever writes to the
+# table. Two decimal places is what a paediatric scale reports; more is precision the
+# measurement does not have, and Numeric(6, 2) would silently round it away.
+_MIN_WEIGHT_KG = 0.1
+_MAX_WEIGHT_KG = 650.0
+_WEIGHT_DECIMAL_PLACES = 2
+
 # C0/C1 control characters. None of them belong in a name, an address or a phone number, and
 # two of them cause real damage downstream rather than just looking odd: U+0000 cannot be
 # stored in a PostgreSQL text column at all (asyncpg raises, SQLite accepts it, which is why
@@ -102,6 +111,23 @@ def _validate_free_text(value: str | None) -> str | None:
     return clean_free_text(value)
 
 
+def _validate_weight(value: float | None) -> float | None:
+    """A weight the arithmetic can use, or a 422 saying which end it fell off.
+
+    Weight is a *divisor* — a paediatric dose is milligrams per kilogram per day — so zero and
+    negatives are refused rather than stored and worked around at every read. The upper bound is
+    a transcription guard: past 650 kg the number is grams entered as kilograms, or a height
+    typed into the wrong field.
+    """
+    if value is None:
+        return None
+    if not _MIN_WEIGHT_KG <= value <= _MAX_WEIGHT_KG:
+        raise ValueError(
+            f"weight_kg must be between {_MIN_WEIGHT_KG} and {_MAX_WEIGHT_KG} kilograms"
+        )
+    return round(value, _WEIGHT_DECIMAL_PLACES)
+
+
 class PatientCreate(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=500)
     date_of_birth: date | None = None
@@ -112,8 +138,16 @@ class PatientCreate(BaseModel):
     consent_given: bool = Field(
         ..., description="Must be true before clinical data is stored (DPDP Act)."
     )
+    weight_kg: float | None = Field(
+        default=None,
+        description=(
+            "Body weight in kilograms. Read by the deterministic dose-range check, which "
+            "cannot judge a child's dose without it."
+        ),
+    )
 
     _check_dob = field_validator("date_of_birth")(_validate_dob)
+    _check_weight = field_validator("weight_kg")(_validate_weight)
     _check_name = field_validator("full_name")(_validate_full_name)
     _check_phone = field_validator("phone")(_validate_phone)
     _check_free_text = field_validator("address_text", "notes")(_validate_free_text)
@@ -127,8 +161,16 @@ class PatientUpdate(BaseModel):
     address_text: str | None = Field(default=None, max_length=2000)
     notes: str | None = Field(default=None, max_length=10000)
     consent_given: bool | None = None
+    weight_kg: float | None = Field(
+        default=None,
+        description=(
+            "Body weight in kilograms. Sending it stamps `weight_recorded_at`; sending null "
+            "clears both, which is how a weight entered against the wrong chart is undone."
+        ),
+    )
 
     _check_dob = field_validator("date_of_birth")(_validate_dob)
+    _check_weight = field_validator("weight_kg")(_validate_weight)
     # Same rules on update as on create: an edit that blanks the name leaves exactly the
     # unidentifiable chart that create now refuses to make.
     _check_name = field_validator("full_name")(_validate_full_name)
@@ -176,6 +218,8 @@ class PatientResponse(BaseModel):
     notes: str | None
     consent_given: bool
     consent_given_at: datetime | None
+    weight_kg: float | None
+    weight_recorded_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

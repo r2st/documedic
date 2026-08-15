@@ -20,6 +20,14 @@ MAX_DRUG_REFERENCE_ID_CHARS = 64
 # The floor on a hard-block override's documented justification, counted after stripping.
 MIN_OVERRIDE_REASONING_CHARS = 10
 
+# The three dose columns, bounded to what ``medication_events`` holds so a dose that passes this
+# check is a dose that could be charted. Same reasoning as the drug-name cap: the values are
+# quoted back inside flag summaries, and an unbounded frequency would be reflected into a
+# clinician-facing card at whatever size it arrived.
+MAX_DOSE_CHARS = 100
+MAX_DOSE_UNIT_CHARS = 50
+MAX_FREQUENCY_CHARS = 100
+
 
 class SafetyCheckRequest(BaseModel):
     """Check a proposed medication against the patient's record.
@@ -46,6 +54,27 @@ class SafetyCheckRequest(BaseModel):
         max_length=MAX_DRUG_NAME_CHARS,
         description="Brand or generic name; resolved via DrugVocabulary",
     )
+    # The dose being proposed, in the three columns a prescription is written in and a
+    # ``medication_events`` row stores. All optional, and their absence is not a warning: a
+    # check with no dose is what the screen does while a clinician is still choosing between
+    # drugs, and answering it with "the dose could not be checked" would put a flag on every
+    # one of those. Supplied, they are measured against the curated therapeutic range for the
+    # drug — see ``app.core.dose_range``.
+    dose: str | None = Field(
+        default=None,
+        max_length=MAX_DOSE_CHARS,
+        description='Amount per administration, as written: "500", "500 mg", "1-2 g".',
+    )
+    dose_unit: str | None = Field(
+        default=None,
+        max_length=MAX_DOSE_UNIT_CHARS,
+        description="Unit for `dose`, when `dose` does not carry one itself.",
+    )
+    frequency: str | None = Field(
+        default=None,
+        max_length=MAX_FREQUENCY_CHARS,
+        description='How often: "BD", "1-0-1", "q8h", "twice daily", "once weekly", "SOS".',
+    )
 
     # Both are single-line identifiers, so they get the identifier cleaning: control characters
     # out, whitespace runs collapsed. Two reasons beyond tidiness. An unresolved name is quoted
@@ -54,7 +83,7 @@ class SafetyCheckRequest(BaseModel):
     # resolver matches on the string: "Amoxi  cillin" resolved to nothing that "Amoxi cillin"
     # would have found, which on this endpoint means a silent no-match rather than a safety
     # check.
-    @field_validator("drug_reference_id", "drug_name")
+    @field_validator("drug_reference_id", "drug_name", "dose", "dose_unit", "frequency")
     @classmethod
     def _clean_drug_identifier(cls, value: str | None) -> str | None:
         if value is None:

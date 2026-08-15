@@ -91,6 +91,14 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   geriatric_caution: 'Age-based caution — older adult',
   paediatric_caution: 'Age-based caution — child',
   guideline_deviation: 'Guideline deviation',
+  // Three dose labels rather than one, because the clinician's next action differs for each.
+  // An out-of-range dose is a number to confirm; a unit mismatch is a *line to re-read against
+  // the source document*, which is a different task and often a different person's; and an
+  // unevaluated dose is a gap in the chart (no recorded weight) rather than a finding about the
+  // prescription at all. One shared "Dose" label would have collapsed the three.
+  dose_out_of_range: 'Dose outside usual range',
+  dose_unit_mismatch: 'Dose unit may be wrong',
+  unevaluated_dose: 'Not checked — dose',
   hepatic_dose: 'Hepatic dosing',
   hepatic_severity: 'Liver function',
   hepatotoxic_burden: 'Hepatotoxic burden',
