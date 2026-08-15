@@ -368,9 +368,62 @@ _INTERACTION_SEVERITY_MAP: dict[str, tuple[Severity, bool]] = {
     "minor": ("info", False),
 }
 
+# What an interaction rule whose severity this engine cannot read is worth. Deliberately not
+# "info" and deliberately not a hard block — see
+# ``test_a_severity_the_engine_does_not_know_is_graded_as_a_warning`` for the argument, which
+# ``ck_drug_interactions_severity`` makes unreachable through the supported write path anyway.
+_UNRECOGNISED_INTERACTION_SEVERITY: tuple[Severity, bool] = ("warning", False)
+
 
 def _norm(text: str | None) -> str:
     return (text or "").strip().lower()
+
+
+# --- Curated enumerated tokens ------------------------------------------------------------------
+#
+# Three comparisons in this module decide whether a rule produces a hard block, and every one of
+# them was an ``==`` against an exact lowercase literal:
+#
+#   * ``_INTERACTION_SEVERITY_MAP[severity]``  — the interaction hard block
+#   * ``rule.severity == "absolute"``          — the contraindication hard block
+#   * ``action == "contraindicated"``          — the renal and hepatic hard blocks
+#
+# The first two read a column with a CHECK constraint behind it
+# (``ck_drug_interactions_severity``, ``ck_contraindications_severity``), so the database will
+# not accept a value they cannot read, and normalising them is defence in depth for the day a
+# second data source arrives spelling its bands ``"Major"`` — the case the interaction-severity
+# test already contemplates as "if that constraint is ever relaxed".
+#
+# The third has nothing behind it at all. ``renal_threshold`` and ``hepatic_threshold`` are
+# untyped JSON columns; ``action`` is a free-text key inside them; ``data/drugs/schema.json``
+# declares no enum for it and no loader validates against that schema anyway — ``db.seed`` inserts
+# whatever the file says. So a curated rule written ``"action": "Contraindicated"`` loaded
+# cleanly, and the metformin-below-eGFR-30 rule that is this engine's canonical hard block came
+# back as a dismissible warning. That is CLAUDE.md Rule #3 defeated by a capital letter, and it
+# is the same shape as the R44 defect where the same block was defeated by condition wording.
+#
+# Normalising at every read point is what makes the vocabulary a property of the value rather
+# than of how it was typed.
+def _token(value: object) -> str:
+    """A curated enumerated value, normalised for comparison against this module's literals.
+
+    Case-folded and stripped of every space, hyphen and underscore, so ``"Contraindicated"``,
+    ``"contra-indicated"`` and ``"CONTRA INDICATED"`` are one token. Removing separators rather
+    than collapsing them is safe because every literal compared against this is a single word
+    (``absolute``, ``contraindicated``, and the four interaction bands) — there is no pair of
+    them that de-separating could conflate — and hyphenating a compound word is the commonest
+    way a second data source spells the same value.
+
+    A non-string (a JSON null, a number a curator left in the ``action`` field) normalises to
+    ``""``, which matches no literal and therefore takes each caller's unrecognised-value path
+    rather than raising inside an offline check that must not be able to fail.
+    """
+    if not isinstance(value, str):
+        return ""
+    return _TOKEN_SEPARATOR_RE.sub("", value.strip().lower())
+
+
+_TOKEN_SEPARATOR_RE = re.compile(r"[\s\-_]+")
 
 
 def _interaction_key(a: str, b: str) -> tuple[str, str]:
@@ -562,7 +615,9 @@ def check_interactions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag
                 if rule is None:
                     continue
                 seen.add(key)
-                severity, hard = _INTERACTION_SEVERITY_MAP.get(rule.severity, ("warning", False))
+                severity, hard = _INTERACTION_SEVERITY_MAP.get(
+                    _token(rule.severity), _UNRECOGNISED_INTERACTION_SEVERITY
+                )
                 flags.append(
                     SafetyFlag(
                         check_type="drug_interaction",
@@ -990,7 +1045,7 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
                 flags.append(_near_miss_flag(ing, rule, match))
                 continue
 
-            if rule.is_absolute or rule.severity == "absolute":
+            if rule.is_absolute or _token(rule.severity) == "absolute":
                 flags.append(
                     SafetyFlag(
                         check_type="contraindication",
@@ -1047,7 +1102,10 @@ def _evaluate_renal(
     if below is None:
         return None
 
-    action = threshold.get("action", "review")
+    # ``or`` rather than a ``get`` default: a curated threshold carrying an explicit JSON null
+    # for ``action`` returned None from the default form and printed "action: None" into a
+    # clinician-facing summary. An absent action and a null one mean the same thing here.
+    action = threshold.get("action") or "review"
 
     if ctx.egfr is None:
         # A renal rule exists for this drug and there is no eGFR to apply it to. Returning None
@@ -1097,7 +1155,9 @@ def _evaluate_renal(
         # A more severe (lower) band rule should handle this; skip the dose-reduction band.
         return None
 
-    is_hard = action == "contraindicated"
+    # ``_token`` rather than ``==``: this one comparison is the whole renal/hepatic hard block,
+    # and ``action`` is a free-text key inside an untyped JSON column. See ``_token``.
+    is_hard = _token(action) == "contraindicated"
     return SafetyFlag(
         check_type="renal_dose",
         severity="hard_block" if is_hard else "warning",
@@ -1158,7 +1218,10 @@ def _evaluate_hepatic(
     if not stated:
         return None
 
-    action = threshold.get("action", "review")
+    # ``or`` rather than a ``get`` default: a curated threshold carrying an explicit JSON null
+    # for ``action`` returned None from the default form and printed "action: None" into a
+    # clinician-facing summary. An absent action and a null one mean the same thing here.
+    action = threshold.get("action") or "review"
 
     # Not "is the panel empty" but "does the chart measure anything *this rule* is written on".
     # The panel carries five values now (the two dose-adjustment markers plus the Child-Pugh and
@@ -1211,7 +1274,9 @@ def _evaluate_hepatic(
     if not breached:
         return None
 
-    is_hard = action == "contraindicated"
+    # ``_token`` rather than ``==``: this one comparison is the whole renal/hepatic hard block,
+    # and ``action`` is a free-text key inside an untyped JSON column. See ``_token``.
+    is_hard = _token(action) == "contraindicated"
     measured = "; ".join(
         f"{label} {value} {unit} (threshold {limit})" for label, value, limit, unit in breached
     )
