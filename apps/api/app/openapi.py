@@ -49,7 +49,10 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "same document merged first and this one was rolled back untouched (safe to retry), "
         "`reasoning_in_progress` when a pipeline run already holds that session (wait for it "
         "rather than starting a second — two runs write two sets of immutable suggestions "
-        "against one session), `conflict` otherwise."
+        "against one session), `concurrent_answer` when another submission recorded an answer "
+        "to one of the same intake questions first (reload the intake and re-enter anything "
+        "missing — a clarifying question has exactly one answer of record), `conflict` "
+        "otherwise."
     ),
     429: (
         "Rate limited. `code` is `rate_limited` when a per-account ceiling on work that costs "

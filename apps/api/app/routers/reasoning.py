@@ -39,11 +39,13 @@ router = APIRouter(tags=["reasoning"])
 # Every route here is scoped to one session or one patient, and a session belonging to another
 # account is a 404 rather than a 403 — the same rule the patient routes follow.
 _SESSION_ERRORS = errors(401, 404)
-# The routes that spend an LLM call also advertise the 429 their rate limit can return.
-_METERED_SESSION_ERRORS = errors(401, 404, 429)
-# The two routes that start the panel add a 409: one run at a time per session. See
+# The two routes that start the panel spend an LLM call, so they advertise the 429 their rate
+# limit can return, and a 409: one run at a time per session. See
 # ``ReasoningService._claim_for_run``.
 _RUN_ERRORS = errors(401, 404, 409, 429)
+# Submitting answers is metered the same way and has its own 409, for a different reason: one
+# answer of record per question, and the database refuses a second. See ``ConcurrentAnswerError``.
+_ANSWER_ERRORS = errors(401, 404, 409, 429)
 # Opening a session is the one route here that checks consent, so it is the only one that can
 # 403 — the later steps of a session that was lawfully opened stay available. See
 # ``ReasoningService.start``.
@@ -127,7 +129,9 @@ async def get_intake(
     "/reasoning/{session_id}/intake/answers",
     response_model=IntakeStateOut,
     summary="Answer clarifying questions",
-    responses=_METERED_SESSION_ERRORS,
+    # 409 too: one answer of record per question, and two submissions that overlap in the
+    # read-then-insert window cannot both write one. See ``ConcurrentAnswerError``.
+    responses=_ANSWER_ERRORS,
     dependencies=[Depends(rate_limit("reasoning_intake"))],
 )
 async def submit_answers(

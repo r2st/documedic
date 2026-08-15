@@ -9,6 +9,7 @@ produced by ``graph.run_reasoning``, which always routes through the Verifier (R
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -16,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import graph, synthesis
@@ -27,6 +28,7 @@ from app.agents.state import CaseState, IntakeQuestionState, more_conservative_t
 from app.config import settings
 from app.core.logsafe import describe_exception
 from app.exceptions import (
+    ConcurrentAnswerError,
     NotFoundError,
     ReasoningRunInProgressError,
     ReasoningRunSupersededError,
@@ -42,6 +44,13 @@ from app.services.record_service import REASONING_SNAPSHOT_LIMIT, RecordService
 from app.services.safety_service import SafetyFlag, SafetyService
 
 logger = logging.getLogger(__name__)
+
+# How many times ``submit_answers`` re-reads the stored answers after losing the insert race on
+# ``uq_intake_answers_question``. Each retry only loses to a submission that succeeded, so the
+# loop makes progress; the bound turns a pathological repeat into a 409 rather than a hung
+# request. Same shape as ``AuditService._MAX_SEQUENCE_ATTEMPTS``, and much smaller because there
+# is one contender per question rather than one per request in the whole system.
+_ANSWER_WRITE_ATTEMPTS = 2
 
 # Re-exported: the claim reads and writes this status, and it is defined next to the lease rule
 # that interprets it. Importers of this module keep their existing spelling.
@@ -292,28 +301,73 @@ class ReasoningService:
         self, account_id: uuid.UUID, session_id: uuid.UUID, answers: list[dict]
     ) -> tuple[ReasoningSession, list[IntakeQuestion]]:
         session = await self._session(account_id, session_id)
-        if session.intake_complete:
-            return session, []
+        # One answer of record per question, and the loop is how a submission that *lost* the
+        # race still lands. ``_record_answers`` decides between updating and inserting from a
+        # read of the answers already stored, so two overlapping submissions both read no answer
+        # to a question and both insert — the read-then-insert window that
+        # ``uq_intake_answers_question`` now refuses. The loser's flush raises, its transaction
+        # is rolled back, and it re-reads: the winner's row is committed by then, so the second
+        # attempt takes the *update* path and the clinician's answer is applied as the correction
+        # it was rather than dropped or written beside the other one.
+        #
+        # Bounded at two attempts. Each retry only loses to a submission that succeeded, so the
+        # loop makes progress; the bound turns a pathological repeat into a 409 the client can
+        # act on rather than a request that spins. See ``ConcurrentAnswerError`` for why the
+        # duplicate must not simply be allowed.
+        for remaining in reversed(range(_ANSWER_WRITE_ATTEMPTS)):
+            if session.intake_complete:
+                return session, []
+            try:
+                await self._record_answers(session_id, answers)
+                break
+            except IntegrityError as exc:
+                await self.db.rollback()
+                if not remaining:
+                    raise ConcurrentAnswerError(detail=str(exc.orig)) from exc
+                # The rollback expired every loaded object, this one included.
+                session = await self._session(account_id, session_id)
 
+        # Rebuild CaseState with answered questions, run the next triage round.
+        state = await self._rebuild_intake_state(session)
+        ctx = await self._build_context(account_id, session.patient_id)
+        await graph.run_triage_round(state, ctx)
+        new_questions = await self._persist_questions(session, state)
+        await self._sync_intake_state(session, state)
+
+        await self.audit.record(
+            action="reasoning_intake_answered",
+            account_id=account_id,
+            patient_id=session.patient_id,
+            entity_type="reasoning_session",
+            entity_id=session.id,
+            payload={"answered": len(answers), "intake_complete": session.intake_complete},
+        )
+        await self.db.commit()
+        return session, new_questions
+
+    async def _record_answers(self, session_id: uuid.UUID, answers: list[dict]) -> None:
+        """Write this submission's answers, one row of record per question.
+
+        A second answer to a question rewrites the first rather than adding a row beside it.
+        ``_rebuild_intake_state`` collapses answers with
+        ``answers_by_q[a.question_id] = a.answer_text`` over an unordered query — so with two
+        rows for one question, which one reaches the engine is whatever order the database
+        returned. That is clinical *input*: ``agents.util.text_blob`` feeds affirmative answers
+        to the can't-miss sentinel and drops the keywords of anything answered "no", so a
+        ``red_flag`` answer decides whether a time-critical diagnosis is screened in or out, and
+        a clinician correcting "yes" to "no" could be silently ignored.
+
+        Three ordinary things produce a second answer: a correction, a retried or double-clicked
+        submission, and one payload carrying the same question_id twice (``SubmitAnswersRequest``
+        validates a list, not a set). Resolving them by "latest wins" would need a tiebreak the
+        schema cannot supply — rows written in one transaction share a ``created_at``, and the
+        primary key is a random UUID rather than a sequence — so the duplicate is not created in
+        the first place. Last answer wins, and re-submitting the same payload is idempotent.
+
+        Raises ``IntegrityError`` when a concurrent submission got there first; the caller
+        re-reads and applies the answer over the winner's row. See :meth:`submit_answers`.
+        """
         q_map = {q.id: q for q in await self._questions(session_id)}
-        # One answer of record per question: a second answer rewrites the first rather than
-        # adding a row beside it.
-        #
-        # Answers used to be appended unconditionally, and ``_rebuild_intake_state`` collapsed
-        # them with ``answers_by_q[a.question_id] = a.answer_text`` over an unordered query — so
-        # with two rows for one question, which one reached the engine was whatever order the
-        # database returned. That is clinical *input*: ``agents.util.text_blob`` feeds
-        # affirmative answers to the can't-miss sentinel and drops the keywords of anything
-        # answered "no", so a ``red_flag`` answer decides whether a time-critical diagnosis is
-        # screened in or out, and a clinician correcting "yes" to "no" could be silently ignored.
-        #
-        # Three ordinary things produce a second answer: a correction, a retried or
-        # double-clicked submission, and one payload carrying the same question_id twice
-        # (``SubmitAnswersRequest`` validates a list, not a set). Resolving them by "latest wins"
-        # would need a tiebreak the schema cannot supply — rows written in one transaction share
-        # a ``created_at``, and the primary key is a random UUID rather than a sequence — so the
-        # duplicate is not created in the first place. Last answer wins, and re-submitting the
-        # same payload is idempotent.
         existing = {
             a.question_id: a
             for a in (
@@ -345,24 +399,6 @@ class ReasoningService:
                 existing[qid] = row
             question.answered_at = now
         await self.db.flush()
-
-        # Rebuild CaseState with answered questions, run the next triage round.
-        state = await self._rebuild_intake_state(session)
-        ctx = await self._build_context(account_id, session.patient_id)
-        await graph.run_triage_round(state, ctx)
-        new_questions = await self._persist_questions(session, state)
-        await self._sync_intake_state(session, state)
-
-        await self.audit.record(
-            action="reasoning_intake_answered",
-            account_id=account_id,
-            patient_id=session.patient_id,
-            entity_type="reasoning_session",
-            entity_id=session.id,
-            payload={"answered": len(answers), "intake_complete": session.intake_complete},
-        )
-        await self.db.commit()
-        return session, new_questions
 
     async def _questions(self, session_id: uuid.UUID) -> list[IntakeQuestion]:
         result = await self.db.execute(
@@ -1032,8 +1068,30 @@ class ReasoningService:
                     break
                 yield item
         finally:
-            if not task.done():
-                task.cancel()
+            task.cancel()
+            # Cancelled *and waited for*. Cancelling only schedules the CancelledError: the
+            # worker is left in the "cancelling" state and does not unwind until it next reaches
+            # the event loop, which is after this generator has returned. And returning is what
+            # ends the request — ``get_db`` closes the session on the way out — so the worker was
+            # being handed a ``CancelledError`` at some await inside ``run`` at the same moment
+            # the ``AsyncSession`` it is using was being torn down under it.
+            #
+            # That is not a theoretical overlap. Closing the Reasoning Theatre tab is the ordinary
+            # way a run ends (see ``ReasoningSession.run_in_progress``), and the worker spends
+            # almost all of its life inside ``self.db`` — the snapshot, the safety evaluation, the
+            # suggestion inserts, the audit appends, the final commit. An ``AsyncSession`` is not
+            # safe for concurrent use, and on asyncpg two operations on one connection is an
+            # ``InterfaceError``; a connection interrupted mid-statement and then closed goes back
+            # to the pool in a state the next request inherits. Waiting costs one scheduler turn
+            # in the common case and makes "the request is over" mean the worker is done.
+            #
+            # Only ``CancelledError`` is suppressed, and only the one this cancel just caused:
+            # ``worker`` catches ``Exception`` itself and relays it to the stream, so nothing else
+            # comes out of the await. If this generator is being closed *because* the enclosing
+            # request task was cancelled, that cancellation is still pending on the outer task and
+            # resumes at its next await — suppressing here ends the worker, not the outer unwind.
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     # --------------------------------------------------------------- queries
     async def get_session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> ReasoningSession:

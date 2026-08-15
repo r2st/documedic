@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID
@@ -37,12 +37,41 @@ class IntakeQuestion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
 
 class IntakeAnswer(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
-    """Clinician's response to an IntakeQuestion."""
+    """Clinician's response to an IntakeQuestion. **One per question, enforced here.**
+
+    ``ReasoningService.submit_answers`` already treats a second answer to a question as a
+    correction that rewrites the first, and says why at length: ``_rebuild_intake_state``
+    collapses answers with ``answers_by_q[a.question_id] = a.answer_text`` over an *unordered*
+    query, so with two rows for one question the one that reaches the engine is whatever order
+    the database returned. That is clinical input — ``agents.util.text_blob`` feeds affirmative
+    answers to the can't-miss sentinel and drops the keywords of anything answered "no" — so on a
+    ``red_flag`` question it decides whether a time-critical diagnosis is screened in or out, and
+    the two rows cannot be told apart afterwards: rows written in one transaction share a
+    ``created_at`` and the primary key is a random UUID rather than a sequence.
+
+    That rule was enforced only in Python, by reading the existing answers and updating the row
+    it found. Read-then-insert, so two submissions that overlap in the window both read no
+    existing answer and both insert — and the ordinary ways to produce a second submission are a
+    double-clicked Submit, a retried request, and the same case open in two rooms. A "yes" and a
+    "no" to one red-flag question then sat in the table together with nothing to choose between
+    them.
+
+    So the invariant is the database's. The loser of the race is refused rather than written, and
+    ``submit_answers`` re-reads and applies its answer as the correction it was.
+    """
 
     __tablename__ = "intake_answers"
+    __table_args__ = (
+        # A unique *index* rather than a UniqueConstraint so the schema the ORM builds and the
+        # one migration 0024 builds are the same object under the same name — the same reason
+        # ``uq_lab_results_observation`` is declared this way.
+        Index("uq_intake_answers_question", "question_id", unique=True),
+    )
 
+    # No ``index=True``: the unique index above answers everything a plain one on the same
+    # column would, and the second index only costs a write on every answer recorded.
     question_id: Mapped[uuid.UUID] = mapped_column(
-        GUID(), ForeignKey("intake_questions.id"), nullable=False, index=True
+        GUID(), ForeignKey("intake_questions.id"), nullable=False
     )
     session_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("reasoning_sessions.id"), nullable=False, index=True

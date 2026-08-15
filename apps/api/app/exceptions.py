@@ -195,6 +195,27 @@ class ConcurrentApprovalError(ConflictError):
     code = "concurrent_approval"
 
 
+class ConcurrentAnswerError(ConflictError):
+    """Another answer to one of these questions was recorded at the same moment. Reload the
+    intake to see what is on it, and re-enter anything that is missing.
+
+    Raised when the insert is refused by ``uq_intake_answers_question`` twice running — the
+    database refusing to record two answers of record for one clarifying question.
+    ``ReasoningService.submit_answers`` retries once, which is enough for every ordinary
+    collision (a double-clicked Submit, a retried request, the same case open in two rooms),
+    so reaching this means a third submission arrived inside the second attempt's window.
+
+    409 rather than letting the duplicate through, because the two rows cannot be told apart
+    afterwards: they share a ``created_at`` and the primary key is a random UUID, so "the latest
+    answer" is not a question the schema can answer. The engine would then read whichever one
+    the query happened to return first — and on a ``red_flag`` question that is what decides
+    whether the can't-miss sentinel screens a time-critical diagnosis in or out. A conflict the
+    clinician can see and resolve is the correct answer; a coin toss over a red flag is not.
+    """
+
+    code = "concurrent_answer"
+
+
 class ReasoningRunInProgressError(ConflictError):
     """This case is already being reasoned about. Watch the run that is going, or wait for it to
     finish and start another — nothing was lost, and the deterministic drug-safety checks are
