@@ -25,7 +25,12 @@ from app.agents.llm import LLMClient, is_available
 from app.agents.state import CaseState, IntakeQuestionState
 from app.config import settings
 from app.core.logsafe import describe_exception
-from app.exceptions import NotFoundError, ReasoningRunInProgressError, ValidationError
+from app.exceptions import (
+    NotFoundError,
+    ReasoningRunInProgressError,
+    ReasoningRunSupersededError,
+    ValidationError,
+)
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.patient import Patient
@@ -630,6 +635,95 @@ class ReasoningService:
         # rollback above ran, and because it reports the row as it actually committed.
         await self.db.refresh(session)
 
+    async def _finish_claimed_run(
+        self,
+        session: ReasoningSession,
+        claimed_at: datetime | None,
+        status: str,
+        state: CaseState,
+        output: dict,
+    ) -> None:
+        """Write the run's terminal header — but only if this run still holds the claim.
+
+        The other half of a predicate this service already applies to its failure path.
+        ``_release_claim_as_failed`` matches on ``run_claimed_at``, and says why: a run can
+        outlast ``reasoning_run_lease_minutes``, have its session taken over while it is still
+        going, and must not then stamp ``failed`` on the successor. That is not a remote timing.
+        The comment sizing the lease reasons that a full panel's ceiling is
+        ``llm_request_timeout_seconds`` per call; the real ceiling of one
+        ``LLMClient.complete_json`` is that timeout times ``retries + 1`` times every provider in
+        the fallback chain — 30s x 3 x 3 on the shipped defaults, for a *single* agent call, of
+        which ``run_reasoning`` makes seven in sequence plus a parallel panel. A provider that
+        hangs rather than refusing takes a run well past fifteen minutes.
+
+        The success path — the one that writes the *immutable* rows — had no such predicate, and
+        what stands in for it today is an accident. ``run`` flushes before the panel starts, and
+        the session instance is dirty at that point (``_claim_for_run`` assigns ``status`` and
+        ``run_claimed_at`` onto it after its own commit), so the flush issues an UPDATE on
+        ``reasoning_sessions`` and the run holds that row's write lock for the whole panel.
+        A takeover's compare-and-swap therefore blocks on PostgreSQL until this run commits and
+        then matches nothing — and on SQLite fails outright with "database is locked". So the
+        overrun is currently unreachable through two overlapping requests.
+
+        It is unreachable by coincidence, not by design. Nothing in ``run`` intends to hold a row
+        lock across the panel; the assignments that cause it are described at their own site as a
+        workaround for the instance going stale, exactly the kind of line a later edit removes.
+        Drop them, or commit anywhere inside the panel, and the lock goes with them — at which
+        point an overrunning run writes a second complete set of ClinicalSuggestion rows against
+        one ``session_id``, immutable by database trigger (Rule #7) and impossible to remove, over
+        a header describing the run that took over. Two interleaved differentials under one case,
+        with the header — if the runs disagreed — reading ``suggestive`` above the other run's
+        hard block.
+
+        So the claim is re-asserted explicitly, where the invariant can be read rather than
+        inferred from lock ordering. It runs *before* anything is persisted: the enclosing
+        transaction would roll the suggestions back anyway, but ordering the check first means a
+        losing run never takes the insert path or the audit append's global lock at all. Raising
+        leaves the transaction to the request teardown, and the successor's claim untouched.
+        """
+        if claimed_at is None:
+            # Unreachable through ``run``: ``_claim_for_run`` always stamps a claim before this
+            # is called. Guarded anyway because ``run_claimed_at == None`` renders as ``IS NULL``
+            # in SQLAlchemy, so a None here would match a session with *no* claim and publish
+            # over it — the one failure mode this method exists to make impossible.
+            raise ReasoningRunSupersededError(detail="run finished holding no claim")
+
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(ReasoningSession)
+                .where(
+                    ReasoningSession.id == session.id,
+                    ReasoningSession.run_claimed_at == claimed_at,
+                )
+                .values(
+                    status=status,
+                    case_state=output["case_state"],
+                    autonomy_tier=state.autonomy_tier,
+                    completed_at=datetime.now(UTC),
+                )
+                # As in ``_claim_for_run`` and ``_release_claim_as_failed``: the ORM's post-update
+                # synchronisation re-evaluates this WHERE clause in Python and raises comparing a
+                # tz-aware claim against the naive datetime SQLite returns.
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        if result.rowcount == 0:
+            logger.warning(
+                "Reasoning session %s was taken over by another run while this one was still "
+                "executing; its output is being discarded rather than written over the "
+                "successor's.",
+                session.id,
+            )
+            raise ReasoningRunSupersededError()
+
+        # The UPDATE went round the ORM, so the instance still reads as it did before it. Written
+        # back rather than expired because the caller keeps using this instance — it is what
+        # ``_persist_suggestions`` reads ``patient_id`` off, and what ``run`` returns.
+        session.status = status
+        session.case_state = output["case_state"]
+        session.autonomy_tier = state.autonomy_tier
+
     # --------------------------------------------------------------- pipeline
     async def run(
         self, account_id: uuid.UUID, session_id: uuid.UUID, emit: EventEmitter | None = None
@@ -682,14 +776,11 @@ class ReasoningService:
                 )
             raise
 
+        # Before a single row is written. The claim taken above is only exclusive for the length
+        # of its lease, and this run may have outlasted it — see ``_finish_claimed_run``.
+        status = "awaiting_review" if state.autonomy_tier == "flag_for_review" else "completed"
+        await self._finish_claimed_run(session, claimed_at, status, state, output)
         suggestions = await self._persist_suggestions(account_id, session, state, output)
-        session.case_state = output["case_state"]
-        session.autonomy_tier = state.autonomy_tier
-        session.status = (
-            "awaiting_review" if state.autonomy_tier == "flag_for_review" else "completed"
-        )
-        session.completed_at = datetime.now(UTC)
-        await self.db.flush()
 
         closing = [
             AuditDraft(

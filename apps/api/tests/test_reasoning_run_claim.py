@@ -24,8 +24,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from app.agents.state import CaseState
 from app.config import settings
-from app.exceptions import ReasoningRunInProgressError
+from app.exceptions import ReasoningRunInProgressError, ReasoningRunSupersededError
 from app.models.audit_log import AuditLog
 from app.models.clinical_suggestion import ClinicalSuggestion
 from app.models.reasoning_session import ReasoningSession
@@ -57,6 +58,17 @@ async def _plant_claim(db, session_id: str, *, age: timedelta) -> None:
     row.status = RUNNING
     row.run_claimed_at = datetime.now(UTC) - age
     await db.commit()
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    """A stored timestamp as an aware UTC instant.
+
+    SQLite drops tzinfo on the round trip and PostgreSQL does not, so a comparison against a
+    value read back from the row has to normalise before it means anything.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 async def _audit(db, session_id: str) -> list[AuditLog]:
@@ -512,3 +524,98 @@ async def test_the_claim_clears_a_previous_runs_error_detail(auth_client, db, mo
 
     db.expire_all()
     assert (await _row(db, session_id)).error_detail is None
+
+
+# --- Releasing the claim on the way out ---------------------------------------------------------
+
+
+async def test_a_run_whose_claim_moved_under_it_refuses_to_publish(auth_client, db):
+    """The success path's compare-and-swap, driven directly.
+
+    ``_release_claim_as_failed`` already matches on ``run_claimed_at``, because a run that
+    overran ``reasoning_run_lease_minutes`` can have been taken over while it was still going and
+    must not stamp ``failed`` on the successor. ``_finish_claimed_run`` is that predicate on the
+    path that writes the *immutable* rows.
+
+    Driven at the service rather than over HTTP on purpose. Two overlapping requests cannot reach
+    this today: ``run`` flushes a dirty session instance before the panel, so it holds the row's
+    write lock for the whole run and a takeover blocks (PostgreSQL) or errors (SQLite) rather
+    than succeeding. That lock is a side effect of a staleness workaround, not a decision — see
+    ``_finish_claimed_run`` — so the invariant is asserted where it is stated.
+    """
+    session_id = await _session_id(auth_client)
+    service = ReasoningService(db)
+    row = await _row(db, session_id)
+    await service._claim_for_run(row.account_id, row)
+    mine = row.run_claimed_at
+
+    # The lease expires and someone else takes the session while this run is still going.
+    await _plant_claim(db, session_id, age=timedelta(seconds=1))
+    successor = (await _row(db, session_id)).run_claimed_at
+    assert successor != mine
+
+    with pytest.raises(ReasoningRunSupersededError):
+        await service._finish_claimed_run(
+            row,
+            mine,
+            "completed",
+            CaseState(patient_id=uuid.uuid4(), presenting_complaint="x"),
+            {"case_state": {}},
+        )
+
+    db.expire_all()
+    after = await _row(db, session_id)
+    assert after.status == RUNNING, "the superseded run wrote over the successor's status"
+    # Naive/aware: SQLite drops tzinfo on the round trip, so compare the instants.
+    assert _utc(after.run_claimed_at) == _utc(successor), "the superseded run took the claim back"
+
+
+async def test_a_run_that_still_holds_its_claim_writes_its_terminal_header(auth_client, db):
+    """The guard must not refuse the ordinary case, which is every run that finishes on time."""
+    session_id = await _session_id(auth_client)
+    service = ReasoningService(db)
+    row = await _row(db, session_id)
+    await service._claim_for_run(row.account_id, row)
+
+    state = CaseState(patient_id=uuid.uuid4(), presenting_complaint="x")
+    state.autonomy_tier = "flag_for_review"
+    await service._finish_claimed_run(
+        row, row.run_claimed_at, "awaiting_review", state, {"case_state": {"agent_trace": []}}
+    )
+    await db.commit()
+
+    db.expire_all()
+    after = await _row(db, session_id)
+    assert after.status == "awaiting_review"
+    assert after.autonomy_tier == "flag_for_review"
+    assert after.completed_at is not None
+    assert not service._claim_is_live(after)
+
+
+async def test_a_run_holding_no_claim_at_all_refuses_rather_than_matching_every_row(
+    auth_client, db
+):
+    """``run_claimed_at == None`` renders as ``IS NULL``, which matches an *unclaimed* session.
+
+    Unreachable through ``run`` — the claim is always stamped first — and guarded anyway, because
+    the failure mode is the one this method exists to prevent: a run with no claim publishing
+    over a session that has one.
+    """
+    session_id = await _session_id(auth_client)
+    row = await _row(db, session_id)
+
+    with pytest.raises(ReasoningRunSupersededError):
+        await ReasoningService(db)._finish_claimed_run(
+            row,
+            None,
+            "completed",
+            CaseState(patient_id=uuid.uuid4(), presenting_complaint="x"),
+            {"case_state": {}},
+        )
+
+
+async def test_the_superseded_run_is_reported_as_a_conflict_not_a_server_error(auth_client, db):
+    """The clinician's answer has to be actionable: the run they are watching is fine."""
+    assert ReasoningRunSupersededError().status_code == 409
+    assert ReasoningRunSupersededError().code == "reasoning_run_superseded"
+    assert "Nothing from it has been saved" in ReasoningRunSupersededError().message

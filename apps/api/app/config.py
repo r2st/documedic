@@ -199,8 +199,21 @@ class Settings(BaseSettings):
     #
     # Generous on purpose. Expiring early is the harmful direction — it permits exactly the
     # double run the claim exists to prevent — while expiring late only delays a retry after a
-    # run has already died. Sized well above a full eight-agent panel, whose own ceiling is
-    # llm_request_timeout_seconds per call.
+    # run has already died.
+    #
+    # This said it was sized "well above a full eight-agent panel, whose own ceiling is
+    # llm_request_timeout_seconds per call", and that ceiling is wrong by an order of magnitude.
+    # One LLMClient.complete_json is bounded by llm_request_timeout_seconds x (retries + 1) x
+    # every provider in the fallback chain, because a provider that stops answering without
+    # closing the connection is retried and then failed over rather than skipped: 30s x 3 x 3 =
+    # 4.5 minutes for a single agent call, and run_reasoning makes seven in sequence plus a
+    # parallel panel. A hanging upstream — not one returning 503s promptly — takes a run past
+    # fifteen minutes, which is when a clinician is most likely to press Run again.
+    #
+    # Raising the lease is not the answer: a longer lease is a longer window in which a case
+    # killed by a closing tab cannot be re-run. What makes the overrun safe is that a run
+    # re-asserts its claim before publishing — see ReasoningService._finish_claimed_run — so a
+    # run that lost the session discards its output instead of writing over the successor's.
     reasoning_run_lease_minutes: int = 15
 
     # --- Field-level encryption (patient PII at rest) ---

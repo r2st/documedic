@@ -204,6 +204,34 @@ class ReasoningRunInProgressError(ConflictError):
     code = "reasoning_in_progress"
 
 
+class ReasoningRunSupersededError(ConflictError):
+    """This run took longer than a reasoning session is held for, and another run has since
+    started on the case. Nothing from it has been saved. Watch the run that is going, or start
+    another once it finishes.
+
+    The other end of the single-run claim. ``_claim_for_run`` makes a run exclusive *at the
+    moment it starts*; the claim then holds only for ``settings.reasoning_run_lease_minutes``,
+    after which any other request may take the session over — that lease exists because the
+    ordinary way a run ends is a Reasoning Theatre tab closing, which cancels the worker with a
+    ``CancelledError`` that no failure handler sees and no claim release survives.
+
+    So the lease has to expire on a dead run, and a live run can outlast it. The comment sizing
+    it said a full panel's ceiling was ``llm_request_timeout_seconds`` per call; the real ceiling
+    is that timeout times the retries times the providers in the fallback chain, which is an
+    order of magnitude more, and it is reached exactly when a provider stops answering without
+    closing the connection.
+
+    What such a run must not do is publish: a second full set of ClinicalSuggestion rows under
+    one session_id, immutable by trigger and impossible to clean up, over a header describing the
+    successor. Today an incidental row lock held across the panel prevents the takeover from
+    happening in the first place — see ``ReasoningService._finish_claimed_run``, which explains
+    why that is coincidence rather than design, and re-asserts the claim as an explicit
+    compare-and-swap so a run that no longer holds the session discards its output instead.
+    """
+
+    code = "reasoning_run_superseded"
+
+
 class EmailAlreadyExistsError(ConflictError):
     """An account with this email already exists. Sign in instead, or use another address."""
 
