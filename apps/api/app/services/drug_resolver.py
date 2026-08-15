@@ -34,6 +34,7 @@ from rapidfuzz import fuzz, process
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.dose_text import max_milligrams_in_strength
 from app.models.drug_vocabulary import DrugVocabulary
 
 # Minimum fuzzy score (0-100) to accept a non-exact match.
@@ -504,6 +505,30 @@ class DrugResolver:
         if not text or not text.strip():
             return {}
         return (await self._load()).rows_named_in(text.strip().lower())
+
+    async def largest_strength_milligrams(self, generic_name: str) -> tuple[float, str] | None:
+        """The largest mass strength this molecule is listed in, as ``(milligrams, label)``.
+
+        Across every active product sharing the generic name, because "Paracetamol" is stocked as
+        both a 500 mg and a 650 mg tablet and the ceiling a dose is judged against has to be the
+        highest of them. Returns None when no product carries a mass strength — an insulin in
+        U/mL, a contrast medium with none recorded — which leaves
+        :func:`~app.core.dose_text.implausible_dose_reason` with only its absolute ceiling.
+
+        Reads the corpus the fuzzy index already holds, so this costs no query on any path that
+        has already asked what drugs a text names.
+        """
+        wanted = generic_name.strip().lower()
+        if not wanted:
+            return None
+        best: tuple[float, str] | None = None
+        for row in (await self._load()).rows:
+            if row.generic_name.lower() != wanted:
+                continue
+            milligrams = max_milligrams_in_strength(row.strength)
+            if milligrams is not None and (best is None or milligrams > best[0]):
+                best = (milligrams, row.strength or "")
+        return best
 
     async def resolve_reference_id(self, reference_id: str) -> DrugVocabulary | None:
         """The active vocabulary row with this exact reference id, or ``None``.

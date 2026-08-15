@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clinical import age_from_dob, serum_creatinine_mg_dl
 from app.core.dates import is_plausible_clinical_date
+from app.core.dose_text import DoseFinding, find_dose_mentions, implausible_dose_reason
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
     CONDITION_RESOLVED_STATUSES,
@@ -29,6 +30,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     SafetyFlag,
+    check_dose_integrity,
     check_duplicate_orders,
     check_hepatic_severity,
     check_stale_medications,
@@ -927,10 +929,17 @@ class SafetyService:
 
         Offline and deterministic, like every other check here: no LLM, and nothing but the
         patient's own rows and the curated rule tables.
+
+        Two of the flags this returns are not about the patient at all — see
+        :meth:`_dose_integrity_flags`. An option naming a drug the vocabulary does not know
+        resolves to nothing, and every rule below is then keyed on an empty set: the empty flag
+        list that came back was indistinguishable from a clean screen, which is the shape of
+        answer this module has had to refuse three times already.
         """
+        integrity = await self._dose_integrity_flags(text)
         named = await self.resolver.rows_named_in(text)
         if not named:
-            return []
+            return integrity
         # Every molecule of every named product, not just the products' own ids: a guideline
         # sentence naming a combination brand still has to load its ingredients' rules.
         ctx = await self._build_context(
@@ -945,7 +954,54 @@ class SafetyService:
         for reference_id in sorted(named):
             row = named[reference_id]
             flags.extend(evaluate_drug_safety(_drug_ref(row), ctx))
-        return flags
+        return integrity + flags
+
+    async def _dose_integrity_flags(self, text: str) -> list[SafetyFlag]:
+        """Whether the doses ``text`` prescribes belong to drugs, and could be doses of them.
+
+        The vocabulary half of :func:`~app.core.safety.check_dose_integrity`: for each dose
+        expression :mod:`app.core.dose_text` finds, ask whether its own clause names a drug this
+        system knows, and if it does, what the largest strength that drug is dispensed in is.
+
+        Anchoring is asked of the *clause*, not of the whole text, because a text naming
+        paracetamol in its first sentence would otherwise vouch for every invented drug after
+        it. Whole-name matching only, for ``screen_text``'s reason: a fuzzy match run over prose
+        invents drugs the text never mentioned, and here it would do worse than that — it would
+        silently vouch for a hallucinated name by finding something 86% like it.
+        """
+        mentions = find_dose_mentions(text)
+        if not mentions:
+            return []
+        findings: list[DoseFinding] = []
+        for mention in mentions:
+            named = await self.resolver.rows_named_in(mention.context)
+            if not named:
+                findings.append(DoseFinding(mention=mention, drug=None, reason=None))
+                continue
+            # A clause naming several drugs cannot say which of them the dose belongs to, so it
+            # is judged against the most permissive of them — and reported against that same
+            # one, so the flag names the drug the ceiling came from rather than an arbitrary
+            # neighbour. Judging a dose against the wrong drug's strength is how a correct
+            # recommendation gets flagged.
+            candidates = [
+                (name, await self.resolver.largest_strength_milligrams(name))
+                for name in sorted({row.generic_name for row in named.values()})
+            ]
+            measurable = [(name, c) for name, c in candidates if c is not None]
+            drug, ceiling = (
+                max(measurable, key=lambda pair: pair[1][0])
+                if measurable
+                else (candidates[0][0], None)
+            )
+            findings.append(
+                DoseFinding(
+                    mention=mention,
+                    drug=drug,
+                    reason=implausible_dose_reason(mention, ceiling[0] if ceiling else None),
+                    ceiling_text=ceiling[1] if ceiling else None,
+                )
+            )
+        return check_dose_integrity(findings)
 
     async def active_flags(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID

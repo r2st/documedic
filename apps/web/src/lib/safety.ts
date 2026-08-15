@@ -89,11 +89,13 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   hepatic_dose: 'Hepatic dosing',
   hepatic_severity: 'Liver function',
   hepatotoxic_burden: 'Hepatotoxic burden',
+  implausible_dose: 'Dose not possible for this drug',
   renal_dose: 'Renal dosing',
   stale_medication: 'Medication list age',
   unevaluated_allergy: 'Not checked — allergy',
   unevaluated_condition: 'Not checked — condition',
   unevaluated_medication: 'Not checked — medication',
+  unverified_drug_name: 'Not checked — drug not recognised',
 };
 
 /**

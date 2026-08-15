@@ -54,7 +54,13 @@ vi.mock('@/components/reasoning/SuggestionCard', () => ({
 }));
 
 import { ApiError, api } from '@/lib/api';
+import { clearDrafts, readDraft } from '@/lib/drafts';
 import EncounterPage from './page';
+
+// The complaint field now writes to a module-scoped draft store (lib/drafts.ts), which by design
+// outlives an unmount. That lifetime is longer than a test, so every test in this file starts
+// from an empty store — otherwise one test's typing pre-fills the next one's form.
+beforeEach(clearDrafts);
 
 function question(id: string): IntakeQuestion {
   return {
@@ -592,5 +598,87 @@ describe('EncounterPage results loading', () => {
     expect(
       screen.queryByRole('status', { name: 'Fetching the reasoning results' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The presenting complaint is the one field on this screen that can be lost.
+ *
+ * It is composed at length — a paragraph of history — and it is not sent anywhere until "Begin
+ * intake". Everything else on the screen either belongs to the server already (the intake
+ * answers, once submitted; the suggestions) or is derived from it. So a session that ends while
+ * the clinician is away from the keyboard, a navigation to the chart to check a lab value, or
+ * any remount at all took the note with it.
+ *
+ * These tests are about the draft store closing that (see lib/drafts.ts), and about not closing
+ * it too eagerly: a complaint the server has accepted must not come back the next time the
+ * screen opens, or the next encounter starts pre-filled with the last one's history.
+ */
+describe('the presenting complaint survives losing the screen', () => {
+  const NOTE = '54-year-old with central chest pain radiating to the left arm for 1 hour';
+  const DRAFT_KEY = 'encounter:pat-1:complaint';
+
+  beforeEach(() => {
+    vi.mocked(api.startReasoning)
+      .mockReset()
+      .mockResolvedValue(intakeState({ intake_complete: true, pending_questions: [] }));
+    vi.mocked(api.listSuggestions).mockReset().mockResolvedValue([]);
+  });
+
+  it('keeps what was typed when the screen is unmounted and opened again', async () => {
+    const user = userEvent.setup();
+    const first = render(<EncounterPage />);
+    await user.type(screen.getByLabelText('Presenting complaint'), NOTE);
+
+    // Standing in for everything that unmounts this screen: an idle sign-out, a route change to
+    // check the chart, a re-login.
+    first.unmount();
+    render(<EncounterPage />);
+
+    expect(screen.getByLabelText('Presenting complaint')).toHaveValue(NOTE);
+  });
+
+  it('forgets it once the server has it', async () => {
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText('Presenting complaint'), NOTE);
+
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+
+    await waitFor(() => expect(api.startReasoning).toHaveBeenCalledWith('pat-1', NOTE));
+    expect(readDraft(DRAFT_KEY)).toBe('');
+  });
+
+  it('keeps it when the run fails to start', async () => {
+    // The retry and the timeout want the same thing: the text still there. A draft discarded on
+    // the way out rather than on success would clear it on exactly the failure that makes the
+    // clinician need it.
+    const user = userEvent.setup();
+    vi.mocked(api.startReasoning).mockRejectedValue(
+      new ApiError(503, 'service_unavailable', 'Briefly unavailable.'),
+    );
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText('Presenting complaint'), NOTE);
+
+    await user.click(screen.getByRole('button', { name: 'Begin intake' }));
+
+    await screen.findByRole('alert');
+    expect(readDraft(DRAFT_KEY)).toBe(NOTE);
+    expect(screen.getByLabelText('Presenting complaint')).toHaveValue(NOTE);
+  });
+
+  it('does not carry one chart’s history into another', async () => {
+    // The draft key is namespaced by patient. A complaint restored onto the wrong chart would be
+    // worse than a lost one.
+    const user = userEvent.setup();
+    render(<EncounterPage />);
+    await user.type(screen.getByLabelText('Presenting complaint'), NOTE);
+
+    expect(readDraft('encounter:pat-2:complaint')).toBe('');
+  });
+
+  it('starts empty when nothing was ever typed', () => {
+    render(<EncounterPage />);
+    expect(screen.getByLabelText('Presenting complaint')).toHaveValue('');
   });
 });

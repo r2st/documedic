@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useRequireAuth, useAuth } from '@/lib/auth';
+import { SessionExpiryBanner } from '@/components/Banners';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Button } from '@aether/ui';
 
@@ -217,6 +218,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         )}
       </header>
+      {/* Below the sticky header rather than above it, so it never covers the sign-out control
+          it is warning about — and inside the dashboard shell because there is nothing to time
+          out on the login screen. */}
+      <SessionExpiryBanner />
       <main
         id="main-content"
         // Focusable so the skip link actually moves focus here rather than only moving the

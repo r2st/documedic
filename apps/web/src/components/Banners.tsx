@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth';
 
 /** Persistent demo banner — re-appears every session (Critical Safety Rule / P1-11a). */
 export function DemoBanner() {
@@ -76,6 +77,58 @@ export function OfflineBanner() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Notice that the idle timeout is about to sign this clinician out.
+ *
+ * Fifteen minutes without mouse, keyboard or touch ends the session — correct for a shared
+ * clinical workstation, and until this banner existed it happened with no notice at all. The
+ * clinician it happens to is by definition the one not at the keyboard: typing resets the idle
+ * timer, so the person who loses a half-written history is the one who turned away to examine
+ * the patient. They came back to a login form.
+ *
+ * Two things follow from that, and this is the first: say so before it happens, with a count and
+ * a way to stop it. The second is that the draft survives the sign-out anyway — see
+ * lib/drafts.ts — because a warning nobody was in the room to read must not still cost the note.
+ *
+ * `role="alert"` rather than `status`: this is time-critical and the clinician may not be looking
+ * at the screen. Mounted only while the warning is live, unlike OfflineBanner's always-mounted
+ * region, because an alert region is announced on insertion — which is the behaviour wanted here
+ * and the opposite of what a polite status region needs.
+ */
+export function SessionExpiryBanner() {
+  const { account, idleSecondsRemaining, refresh } = useAuth();
+  // A number, and nothing else, means the warning is live. Tested against the type rather than
+  // against `null` because this banner is rendered from the dashboard shell and reads whatever
+  // the auth context provides: an older or stubbed context with no such field would otherwise
+  // put a "signing out in undefined" alert over every screen, permanently.
+  if (!account || typeof idleSecondsRemaining !== 'number') return null;
+
+  const minutes = Math.floor(idleSecondsRemaining / 60);
+  const seconds = idleSecondsRemaining % 60;
+  const remaining = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+  return (
+    <div role="alert" className="bg-amber-100 px-4 py-2.5 text-sm text-amber-900 shadow-sm">
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-2 sm:flex-row">
+        <span className="text-center font-medium">
+          Signing out in {remaining} — you have been inactive. Anything you have typed but not yet
+          submitted is kept on this tab.
+        </span>
+        {/* Any activity at all cancels the timeout, so this button's own click already does the
+            job; it calls refresh so the clinician gets an explicit confirmation rather than
+            having to infer one from the banner disappearing. */}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="rounded-lg bg-amber-900 px-3 py-1 text-xs font-semibold text-amber-50 hover:bg-amber-800"
+        >
+          Stay signed in
+        </button>
+      </div>
     </div>
   );
 }

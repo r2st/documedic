@@ -12,7 +12,7 @@ vi.mock('next/navigation', () => ({
 const logout = vi.fn();
 let authState: { account: Account | null; loading: boolean } = { account: null, loading: true };
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ ...authState, logout, refresh: vi.fn() }),
+  useAuth: () => ({ ...authState, idleSecondsRemaining: null, logout, refresh: vi.fn() }),
   useRequireAuth: () => authState,
 }));
 

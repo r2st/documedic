@@ -35,6 +35,12 @@ _OFFLINE_ROOTS = (
     "app.core.lab_safety",
     "app.core.clinical",
     "app.core.hepatic",
+    # Reached from ``app.core.safety`` for the two checks whose subject is a model-written
+    # recommendation rather than the patient. It belongs under this rule for the same reason the
+    # rest do: a drug name that resolves to nothing and a dose a thousand times its own strength
+    # are exactly the failures that must still be caught when the network is down — the provider
+    # that wrote them may be the thing that is failing.
+    "app.core.dose_text",
 )
 
 # Everything the standard library gives these modules today. An addition here is not forbidden,

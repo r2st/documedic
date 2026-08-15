@@ -17,6 +17,24 @@ from app.core.clinical_language import prescriber_framed
 
 AGENT = "synthesis"
 
+# Flags that say something is wrong with the *option* rather than with its fit to this patient.
+# Both are produced by ``app.core.safety.check_dose_integrity`` from model-written text.
+_INTEGRITY_CHECKS = frozenset({"unverified_drug_name", "implausible_dose"})
+
+
+def _management_title(conflicted: bool, unverified: bool) -> str:
+    """What the management card says it is, in one line, before anything is opened.
+
+    Order matters: a conflict with the patient's own record is the more dangerous finding and
+    keeps the headline when both are present, with the integrity problem carried in the flags
+    below it.
+    """
+    if conflicted:
+        return "Guideline-supported management option — conflicts with this patient's record"
+    if unverified:
+        return "Management option — the drug or dose it names could not be verified"
+    return "Guideline-supported management option"
+
 
 def _framed(value: Any) -> tuple[str, bool]:
     """Model-written text, flattened and then forced into prescriber framing.
@@ -139,7 +157,15 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
         # most dangerous thing this pipeline can emit, precisely because everything about its
         # presentation says it was checked. It is escalated, titled for what it is, and carries
         # the flags with it — the conservative reading wins (Critical Safety Rules #2 and #3).
-        conflicted = bool(opt.safety_flags)
+        # Two different things can be wrong with a management option, and they need different
+        # words. A conflict is a statement about the patient — this drug against this chart. An
+        # integrity flag is a statement about the option itself: it named a drug the vocabulary
+        # does not know, or a dose that cannot be a dose of the drug it named (see
+        # ``app.core.dose_text``). Both escalate to flag-for-review, because both mean the
+        # clinician has to engage before acting; titling the second as a conflict with the
+        # patient's record would send them to look for something in the chart that is not there.
+        integrity = [f for f in opt.safety_flags if f.get("check_type") in _INTEGRITY_CHECKS]
+        conflicted = len(opt.safety_flags) > len(integrity)
         blocked = opt.has_hard_block()
         # The management option is guideline text as the RAG agent summarised it, so it is
         # model-written and reframed like any other. This is the output type the rule is most
@@ -149,20 +175,20 @@ def build_suggestions(state: CaseState) -> list[dict[str, Any]]:
             {
                 "output_type": "management",
                 "autonomy_tier": "flag_for_review"
-                if conflicted or not opt.sufficient_support
+                if conflicted or integrity or not opt.sufficient_support
                 else state.autonomy_tier,
                 "confidence_band": None,
-                "title": (
-                    "Guideline-supported management option — conflicts with this patient's record"
-                    if conflicted
-                    else "Guideline-supported management option"
-                ),
+                "title": _management_title(conflicted, bool(integrity)),
                 "body": option_text or None,
                 "is_hard_block": blocked,
                 "evidence": {
                     "sufficient_support": opt.sufficient_support,
                     "safety_flags": opt.safety_flags,
                     "language_reframed": option_reframed,
+                    # Named separately as well as being in ``safety_flags``, because this is the
+                    # one thing on the card that is a statement about how far the machine got
+                    # rather than about the patient.
+                    "drug_verified": not integrity,
                 },
                 "verifier_verdict": {},
                 "devils_advocate": {},

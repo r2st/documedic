@@ -54,6 +54,7 @@ from datetime import date
 from functools import lru_cache
 from typing import Literal
 
+from app.core.dose_text import DoseFinding
 from app.core.hepatic import HepaticSeverity, assess_hepatic_severity
 
 Severity = Literal["info", "warning", "critical", "hard_block"]
@@ -73,6 +74,12 @@ CheckType = Literal[
     "geriatric_caution",
     "unevaluated_condition",
     "stale_medication",
+    # The last two are not statements about the patient at all. They are statements about a
+    # recommendation this system generated: that it named a drug nothing in the vocabulary
+    # knows, or a dose that could not be a dose of the drug it named. See
+    # ``check_dose_integrity`` and ``app.core.dose_text``.
+    "unverified_drug_name",
+    "implausible_dose",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -2454,6 +2461,87 @@ def check_hepatic_severity(ctx: SafetyContext) -> list[SafetyFlag]:
             },
         )
     ]
+
+
+def check_dose_integrity(findings: list[DoseFinding]) -> list[SafetyFlag]:
+    """Whether a generated recommendation is about a real drug, at a possible dose.
+
+    The only check in this module whose subject is not the patient. Everything else here asks
+    "does this drug conflict with this chart"; this asks whether the sentence proposing the drug
+    can be believed at all, and it exists because the sentence is model-written (see
+    :mod:`app.core.dose_text` for the two failure modes and why they are silent).
+
+    Both flags are warnings rather than hard blocks, and the reasoning is
+    ``check_unevaluated_medications``' reasoning: a hard block is Critical Safety Rule #3's
+    instrument for a documented conflict between a real drug and a real chart, it demands an
+    override with documented reasoning, and spending it on our own text's defects is how a hard
+    block stops meaning what it means. What the clinician needs here is for the option to arrive
+    marked as unverified rather than dressed as checked — which the caller does by escalating it
+    to flag-for-review, the tier that exists for "engage with this before proceeding".
+
+    ``implausible_dose`` is graded critical because it is a specific, actionable finding about a
+    number in front of the clinician, where ``unverified_drug_name`` is the weaker statement that
+    something could not be looked up.
+
+    Pure, offline and pure of the vocabulary too: the lookups happened in the service, and what
+    arrives here is what they concluded.
+    """
+    flags: list[SafetyFlag] = []
+
+    unverified = sorted(
+        {f.mention.name_candidate for f in findings if f.drug is None and f.mention.name_candidate}
+    )
+    if unverified:
+        doses = sorted(
+            {f.mention.text for f in findings if f.drug is None and f.mention.name_candidate}
+        )
+        listed = ", ".join(f"“{name}”" for name in unverified)
+        flags.append(
+            SafetyFlag(
+                check_type="unverified_drug_name",
+                severity="warning",
+                is_hard_block=False,
+                summary=(
+                    f"This suggestion prescribes a dose for {listed}, which "
+                    f"{'do' if len(unverified) != 1 else 'does'} not match any drug in the "
+                    "vocabulary — so no allergy, interaction or contraindication rule could be "
+                    "evaluated against "
+                    f"{'them' if len(unverified) != 1 else 'it'}, and this is not the same as "
+                    "“no conflicts found”. Confirm the drug exists and is spelled as intended "
+                    "before acting on it."
+                ),
+                details={
+                    "unverified_names": unverified,
+                    "doses": doses,
+                    "evaluated": False,
+                },
+            )
+        )
+
+    for finding in findings:
+        if finding.reason is None or finding.drug is None:
+            continue
+        flags.append(
+            SafetyFlag(
+                check_type="implausible_dose",
+                severity="critical",
+                is_hard_block=False,
+                summary=(
+                    f"The dose given for {finding.drug} — “{finding.mention.text}” — cannot be "
+                    f"a dose of it: {finding.reason}. Verify the amount and its unit against the "
+                    "source before acting on this suggestion."
+                ),
+                details={
+                    "drug": finding.drug,
+                    "dose_text": finding.mention.text,
+                    "amount": finding.mention.amount,
+                    "unit": finding.mention.unit,
+                    "reason": finding.reason,
+                    "largest_listed_strength": finding.ceiling_text,
+                },
+            )
+        )
+    return flags
 
 
 def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:

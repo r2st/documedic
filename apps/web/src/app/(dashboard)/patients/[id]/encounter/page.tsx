@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { discardDraft, draftKey, readDraft, saveDraft } from '@/lib/drafts';
 import { requestErrorMessage } from '@/lib/errors';
 import type { ClinicalSuggestion, IntakeQuestion } from '@/lib/types';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -89,7 +90,12 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
 export default function EncounterPage() {
   const { id } = useParams<{ id: string }>();
   const [phase, setPhase] = useState<Phase>('complaint');
-  const [complaint, setComplaint] = useState('');
+  // The presenting complaint is the one field on this screen a clinician composes at length and
+  // which is not sent anywhere until "Begin intake" — so it is the one an idle sign-out, a
+  // navigation away, or a session that reached its absolute lifetime would silently destroy.
+  // Restored from, and written back to, the in-tab draft store; see lib/drafts.ts.
+  const complaintDraft = draftKey(`encounter:${id}`, 'complaint');
+  const [complaint, setComplaint] = useState(() => readDraft(complaintDraft));
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<IntakeQuestion[]>([]);
   const [suggestions, setSuggestions] = useState<ClinicalSuggestion[]>([]);
@@ -102,6 +108,9 @@ export default function EncounterPage() {
     setStarting(true);
     try {
       const state = await api.startReasoning(id, complaint.trim());
+      // Only once the server has it. A failed start leaves the draft in place, which is the
+      // whole point — the retry path and the timeout path want the same text kept.
+      discardDraft(complaintDraft);
       setSessionId(state.session.id);
       if (state.intake_complete || state.pending_questions.length === 0) {
         setPhase('reasoning');
@@ -192,7 +201,10 @@ export default function EncounterPage() {
           <textarea
             id="complaint"
             value={complaint}
-            onChange={(e) => setComplaint(e.target.value)}
+            onChange={(e) => {
+              setComplaint(e.target.value);
+              saveDraft(complaintDraft, e.target.value);
+            }}
             rows={4}
             placeholder="e.g. 54-year-old with central chest pain radiating to the left arm for 1 hour"
             className="w-full"

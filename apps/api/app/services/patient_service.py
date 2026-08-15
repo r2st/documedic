@@ -225,6 +225,32 @@ class PatientService:
     async def update(
         self, account_id: uuid.UUID, patient_id: uuid.UUID, data: PatientUpdate
     ) -> Patient:
+        """Amend the demographics a clinician sent, and only those.
+
+        **What happens when two clinicians edit the same chart at once**, since the arrangement
+        this product is built for is one practice login used from two rooms and nothing here
+        takes a lock:
+
+        * Only fields present in the request body are written (``exclude_unset``). Two clinicians
+          amending *different* fields both keep their edit — this is a field-level merge, not a
+          whole-record overwrite, and it is the case that actually occurs when one corrects a
+          phone number while the other records consent.
+        * Two clinicians amending the *same* field is last-write-wins. There is no version token
+          to reject the second write with, and inventing one here would be the wrong trade: a
+          409 on a demographic correction sends the clinician back to a form they have already
+          filled in, to resolve a conflict that is nearly always "we both fixed the same typo".
+        * Both writes are audited either way, each naming the fields it changed, so the losing
+          edit is recoverable from the trail rather than lost without trace. That is what makes
+          last-write-wins acceptable here and would not make it acceptable for clinical content.
+
+        Clinical content — medications, labs, conditions, allergies — never arrives this way. It
+        is merged from an approved document extraction, and *that* path does serialise: see
+        ``DocumentService.approve``, which locks the chart because a merge decides what to write
+        by reading what is already there, and two of them interleaving leaves a drug both stopped
+        and current.
+
+        Pinned by ``tests/test_concurrent_chart_edits.py``.
+        """
         patient = await self.get(account_id, patient_id)
         changed: dict = {}
         for field_name, value in data.model_dump(exclude_unset=True).items():

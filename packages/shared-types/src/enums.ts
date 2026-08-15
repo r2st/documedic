@@ -27,7 +27,13 @@ export type SafetyCheckType =
   // Not a conflict either: the chart's medication list is old. Every rule still ran against it
   // as active therapy — see app.core.safety.check_stale_medications — so an absence of other
   // flags reflects how current the list is, not only what is on it.
-  | 'stale_medication';
+  | 'stale_medication'
+  // The last two are not about the patient at all. They are about a recommendation the system
+  // generated: it named a drug the vocabulary does not know, or a dose that cannot be a dose of
+  // the drug it named. See app.core.dose_text — the option text is model-written, and both
+  // failures are fluent, plausible and otherwise silent all the way to this screen.
+  | 'unverified_drug_name'
+  | 'implausible_dose';
 
 export type ReasoningStatus =
   | 'created'

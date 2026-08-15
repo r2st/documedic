@@ -22,7 +22,8 @@ class DrugSafetyCheck(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "'renal_dose', 'hepatic_dose', 'duplicate_therapy', 'guideline_deviation', "
             "'unevaluated_medication', 'unevaluated_allergy', 'hepatic_severity', "
             "'hepatotoxic_burden', 'unevaluated_condition', 'bleeding_burden', "
-            "'geriatric_caution', 'stale_medication')",
+            "'geriatric_caution', 'stale_medication', 'unverified_drug_name', "
+            "'implausible_dose')",
             name="ck_dsc_check_type",
         ),
         CheckConstraint(
