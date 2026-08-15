@@ -7,10 +7,9 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.safety import SafetyFlag, has_hard_block
+from app.core.safety import DrugRef, SafetyFlag, has_hard_block
 from app.db.session import get_db
 from app.dependencies import get_current_account
-from app.models.drug_vocabulary import DrugVocabulary
 from app.models.user import Account
 from app.openapi import PATIENT_ERRORS
 from app.schemas.safety import (
@@ -30,7 +29,7 @@ router = APIRouter(prefix="/patients/{patient_id}/drug-safety", tags=["drug-safe
 def _flag_to_response(
     flag: SafetyFlag,
     check_id: uuid.UUID | None = None,
-    drug: DrugVocabulary | None = None,
+    drug: DrugRef | None = None,
 ) -> SafetyFlagResponse:
     """One flag as it goes over the wire.
 

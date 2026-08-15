@@ -243,10 +243,32 @@ class SafetyService:
     async def _vocabulary_by_id(
         self, med_rows: list[MedicationEvent], allergy_rows: list[Allergy]
     ) -> dict[uuid.UUID, DrugVocabulary]:
-        """Batch-load every vocabulary row the two builders need, in one query.
+        """Batch-load every *active* vocabulary row the two builders need, in one query.
 
         This used to be a ``db.get()`` per medication and per allergy — on the hot deterministic
         safety path, so a patient on 10 drugs paid 10 extra round-trips per check.
+
+        ``is_active`` is the load-bearing half of the filter, and it was missing. Every other
+        way into the vocabulary applies it — ``DrugResolver``'s name tiers, its fuzzy corpus,
+        ``resolve_reference_id`` and the batch form — so this was the one path on which a
+        deactivated row still counted as a resolvable drug, and a row is deactivated by ordinary
+        curation: ``app.db.seed`` deactivates a drug dropped from ``drug_vocabulary.json``, and
+        collapses pre-existing duplicates by deactivating all but the first.
+
+        The disagreement was silent in the worst available direction. A medication *linked* to
+        such a row (the normal case — approving an extraction writes the link) stayed in
+        ``current_meds``, so nothing reported it as unevaluated; but ``active_flags`` re-resolved
+        each current medication by reference id through the batch form, which does filter, found
+        nothing, and skipped it. A documented aspirin allergy on a patient taking aspirin
+        therefore produced a hard block on the safety screen right up until the vocabulary row
+        was deactivated, after which the screen went quiet — the drug still listed, the flag
+        list empty, nothing saying a check had been dropped.
+
+        Filtering here puts the row back on the path the seed loader documents for a withdrawal:
+        it stops resolving by id, falls through to name resolution below, and — when that fails
+        too — reaches the clinician through ``check_unevaluated_medications`` /
+        ``check_unevaluated_allergies`` as a visible gap. A merely *duplicated* row recovers
+        outright, since the surviving row still answers to the same name.
         """
         vocab_ids = {row.drug_vocabulary_id for row in med_rows if row.drug_vocabulary_id} | {
             row.drug_vocabulary_id for row in allergy_rows if row.drug_vocabulary_id
@@ -254,7 +276,9 @@ class SafetyService:
         if not vocab_ids:
             return {}
         result = await self.db.execute(
-            select(DrugVocabulary).where(DrugVocabulary.id.in_(vocab_ids))
+            select(DrugVocabulary).where(
+                DrugVocabulary.id.in_(vocab_ids), DrugVocabulary.is_active.is_(True)
+            )
         )
         return {vocab.id: vocab for vocab in result.scalars().all()}
 
@@ -269,10 +293,11 @@ class SafetyService:
         ``check_unevaluated_medications``, which is what turns it back into something the
         clinician is told.
         """
-        # Rows with no vocabulary link fall through to name resolution below. Resolving them
-        # one at a time is a query per unlinked medication; prefetching makes it one for all.
+        # Rows with no *active* vocabulary row behind them fall through to name resolution
+        # below — an absent link, or a link to a row curation has since deactivated. Resolving
+        # them one at a time is a query per such medication; prefetching makes it one for all.
         await self.resolver.prefetch(
-            med.generic_name for med in med_rows if not med.drug_vocabulary_id
+            med.generic_name for med in med_rows if med.drug_vocabulary_id not in vocab_by_id
         )
         out: list[DrugRef] = []
         unresolved: list[str] = []
@@ -301,10 +326,15 @@ class SafetyService:
         so a documented allergy to an unseeded brand contributes nothing at all — see
         ``check_unevaluated_allergies``.
         """
+        # Keyed on "has no active vocabulary row", not on "has no link". A drug allergen linked
+        # to a row curation has since deactivated is in exactly the position of an unlinked one
+        # and must take the same fallback; testing the link alone left it with no reference id,
+        # no drug class *and* no place in ``unidentified``, which is the fail-open shape
+        # ``check_unevaluated_allergies`` exists to close.
         await self.resolver.prefetch(
             a.allergen_name
             for a in allergy_rows
-            if a.drug_vocabulary_id is None and a.allergen_type == "drug"
+            if a.allergen_type == "drug" and a.drug_vocabulary_id not in vocab_by_id
         )
         out: list[PatientAllergy] = []
         unidentified: list[str] = []
@@ -313,7 +343,7 @@ class SafetyService:
             vocab = vocab_by_id.get(a.drug_vocabulary_id) if a.drug_vocabulary_id else None
             if vocab is not None:
                 ref_id, drug_class = vocab.reference_id, vocab.drug_class
-            elif a.drug_vocabulary_id is None and a.allergen_type == "drug":
+            elif a.allergen_type == "drug":
                 resolved = await self.resolver.resolve(a.allergen_name)
                 if resolved:
                     ref_id, drug_class = resolved.reference_id, resolved.drug_class
@@ -798,7 +828,7 @@ class SafetyService:
 
     async def active_flags(
         self, *, account_id: uuid.UUID, patient_id: uuid.UUID
-    ) -> list[tuple[DrugVocabulary, list[SafetyFlag]]]:
+    ) -> list[tuple[DrugRef, list[SafetyFlag]]]:
         """Re-run pairwise checks across all current medications (P1-08c GET flags).
 
         The context is built ONCE and each drug's "everyone but me" variant is derived in
@@ -809,24 +839,30 @@ class SafetyService:
         No ``proposed_reference_id`` is passed: every drug evaluated here is already a current
         medication, so the reference-data scope is exactly the current-medication set.
 
-        The vocabulary rows for all current medications are fetched in one batched query
-        rather than one per drug, so the query count stays flat as the medication list grows.
+        Evaluates the drugs the context already holds rather than re-resolving each reference
+        id back to a vocabulary row. That round-trip was a query per call and one more place the
+        answer could go quiet: a reference id it failed to resolve was skipped with a bare
+        ``continue``, so the drug stayed on the chart, raised no flag, and appeared in no
+        unevaluated-medications note. ``_vocabulary_by_id`` is what let an id reach this loop
+        unresolvable; a drug that cannot be evaluated now never enters ``current_meds`` in the
+        first place and is reported as the gap it is. ``DrugRef`` carries everything both
+        callers of this method need — the identity the flags are attributed to — and it is the
+        same value ``evaluate_drug_safety`` was being handed after the round-trip.
         """
         await self._patient(account_id, patient_id)
         ctx = await self._build_context(patient_id)
-        out: list[tuple[DrugVocabulary, list[SafetyFlag]]] = []
-        seen_refs = {m.reference_id for m in ctx.current_meds}
-        vocab_by_ref = await self.resolver.resolve_reference_ids(seen_refs)
-        for ref in sorted(seen_refs):
-            vocab = vocab_by_ref.get(ref)
-            if vocab is None:
-                continue
+        out: list[tuple[DrugRef, list[SafetyFlag]]] = []
+        # Deduplicated by reference id: the same product charted twice is one drug to evaluate,
+        # and the "everyone but me" context below drops it by id, so evaluating it twice would
+        # report every one of its flags twice.
+        by_ref = {m.reference_id: m for m in ctx.current_meds}
+        for ref in sorted(by_ref):
             sub_ctx = replace(
                 ctx, current_meds=[m for m in ctx.current_meds if m.reference_id != ref]
             )
-            flags = evaluate_drug_safety(_drug_ref(vocab), sub_ctx)
+            flags = evaluate_drug_safety(by_ref[ref], sub_ctx)
             if flags:
-                out.append((vocab, flags))
+                out.append((by_ref[ref], flags))
         return out
 
 
