@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
-from sqlalchemy import Numeric, func, select
+from sqlalchemy import Numeric, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clinical import (
@@ -232,6 +232,41 @@ def _fitted(model: type[Any], **values: Any) -> dict[str, Any]:
     return fitted
 
 
+def _med_identity() -> Any:
+    """What a charted medication row is called, for matching one merge line against another.
+
+    The resolved generic when the vocabulary knew the drug, and the brand text as written when it
+    did not. Dedup used to key on ``generic_name`` alone and skip the check entirely when it was
+    absent — ``if generic and key in seen`` — so a line the vocabulary could not resolve had no
+    identity to compare and every one of them inserted. A prescription listing the same
+    unrecognised brand twice charted it twice; approving that prescription again charted it again.
+
+    Skipping was not arbitrary: keying an unresolved drug on the empty string would collide every
+    unrecognised drug at a given dose into one, so two different unknown drugs at 500mg would have
+    read as duplicates and the second would have been dropped from the chart. Falling back to the
+    brand text keeps them apart — distinct brands are distinct keys — while still recognising the
+    same brand arriving twice.
+
+    Unresolved brand-only rows are exactly the ones this matters most for. They are what a
+    handwritten prescription produces, they cannot be evaluated against the interaction and
+    contraindication tables (nothing resolves them to a reference id), and so they reach the
+    clinician as the "could not be evaluated" note that says which drugs the safety engine had no
+    view of. Duplicated, one unreadable drug is listed as two on the chart and counted twice in
+    every per-row check the record feeds.
+
+    A row carrying neither name still has no identity, and the caller still declines to dedup on
+    it, for the reason the empty-string collision is refused above.
+
+    Folded exactly as the caller folds the incoming line — lowercased *and* trimmed. Both halves
+    have to agree or the comparison is against a value nothing produces: OCR pads what it reads,
+    so a brand first charted as ``"  Zyxomet-XR "`` is stored with its padding, and an identity
+    that lowercased without trimming would never match the same brand read cleanly the next time.
+    """
+    return func.trim(
+        func.lower(func.coalesce(MedicationEvent.generic_name, MedicationEvent.brand_name_raw))
+    )
+
+
 class GraphService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -325,13 +360,59 @@ class GraphService:
                 LabResult.is_deleted.is_(False),
             )
         )
+        # Two key sets in one read. Both arms are constant-cost prefetches rather than per-entity
+        # lookups, so a second query would not have reintroduced the N+1 this method exists to
+        # avoid — but it would have made the "one SELECT per merge, whatever the line count" rule
+        # a "two", and a rule with an exception in it stops being checkable.
+        #
+        # The second arm is discontinuations, scoped to the document for the same reason the labs
+        # above are. A ``stop`` row is not current, so it never appeared in the current-medication
+        # arm and nothing could recognise it as already charted: re-approving a prescription that
+        # reads "STOP Warfarin" appended a second discontinuation, a third, one per approval, all
+        # of them saying the same thing on the same date from the same page.
+        #
+        # Patient-scoped it would be actively unsafe rather than merely untidy. The same drug can
+        # legitimately be stopped, restarted months later, and stopped again — and a key that
+        # ignored which document a stop came from would read the second stop as a duplicate of
+        # the first, return early, and skip ``_retire_current``. The drug would stay ``is_current``
+        # on a patient just taken off it, which is the failure the stop path exists to prevent.
+        # One document's stop re-arriving is the only unambiguous repeat, exactly as for labs.
+        same_document = (
+            MedicationEvent.source_document_id == source_doc_id
+            if source_doc_id is not None
+            else MedicationEvent.source_document_id.is_(None)
+        )
         meds = await self.db.execute(
-            select(MedicationEvent.generic_name, MedicationEvent.dose).where(
+            select(
+                _med_identity(),
+                MedicationEvent.dose,
+                MedicationEvent.event_type,
+                MedicationEvent.is_current,
+                MedicationEvent.source_document_id,
+            ).where(
                 MedicationEvent.patient_id == patient.id,
                 MedicationEvent.is_deleted.is_(False),
-                MedicationEvent.is_current.is_(True),
+                or_(
+                    MedicationEvent.is_current.is_(True),
+                    and_(MedicationEvent.event_type == "stop", same_document),
+                ),
             )
         )
+        # Both arms are re-tested in Python rather than inferred from which one matched, because
+        # the WHERE clause is an OR and a row can satisfy either. ``is_current = event_type !=
+        # "stop"`` makes "current *and* a stop" impossible for anything written today, but a
+        # legacy row predating that rule can be both — and guessing wrong is costly in each
+        # direction. Read as only-a-stop it would leave its drug out of the current-medication
+        # keys and the document could chart a second copy; read as only-current, and coming from
+        # some *other* document, its stop key would suppress a genuine later discontinuation.
+        # Answering the two questions separately is right for the ordinary row and for that one.
+        med_keys: set[tuple] = set()
+        for name, dose, event_type, is_current, doc_id in meds.all():
+            key = ((name or "").lower(), dose or "")
+            if is_current:
+                med_keys.add(key)
+            if event_type == "stop" and doc_id == source_doc_id:
+                med_keys.add(("stop", *key))
         conditions = await self.db.execute(
             select(Condition.condition_name).where(
                 Condition.patient_id == patient.id,
@@ -345,7 +426,7 @@ class GraphService:
             )
         )
         return {
-            "medications": {((generic or "").lower(), dose or "") for generic, dose in meds.all()},
+            "medications": med_keys,
             "conditions": {name.lower() for (name,) in conditions.all() if name},
             "allergies": {name.lower() for (name,) in allergies.all() if name},
             # Read back as stored rather than recomputed from the row's columns: the digest is
@@ -382,13 +463,16 @@ class GraphService:
         # taking — noise on the screen that exists to be read carefully — and ``GET /records``
         # listed an anticoagulant as current for a patient who was not anticoagulated, which is
         # the sort of thing a clinician makes the next decision on.
-        key = ((generic or "").lower(), fields.get("dose") or "")
+        # The generic when the drug resolved, the brand text as written when it did not — see
+        # ``_med_identity``, which is the same expression over the rows already in the chart.
+        identity = (generic or fields.get("brand_name_raw") or "").strip().lower()
+        key = (identity, fields.get("dose") or "")
         if event_type == "stop":
-            if generic and ("stop", *key) in seen:
+            if identity and ("stop", *key) in seen:
                 return False
             seen.add(("stop", *key))
-            await self._retire_current(patient, vocab_id, generic)
-            if generic:
+            await self._retire_current(patient, vocab_id, identity)
+            if identity:
                 # The keys of the rows just retired go with them. ``seen`` was loaded from the
                 # patient's *current* medications to stop this document re-inserting one, and
                 # those rows are no longer current — so leaving the keys behind would make a
@@ -398,7 +482,7 @@ class GraphService:
                 seen.difference_update(
                     {entry for entry in seen if len(entry) == 2 and entry[0] == key[0]}
                 )
-        elif generic and key in seen:
+        elif identity and key in seen:
             return False
         else:
             seen.add(key)
@@ -432,9 +516,7 @@ class GraphService:
         self.db.add(med)
         return True
 
-    async def _retire_current(
-        self, patient: Patient, vocab_id: object, generic: str | None
-    ) -> None:
+    async def _retire_current(self, patient: Patient, vocab_id: object, identity: str) -> None:
         """Take the patient off a drug a newly merged ``stop`` event discontinues.
 
         Without this the stop row lands beside the rows it contradicts and changes nothing: the
@@ -448,13 +530,27 @@ class GraphService:
         discontinues Dolo; a name that resolved to nothing falls back to its own folded text,
         which is all there is to compare.
 
+        That fallback compares against the same expression the row is *identified* by rather than
+        against ``generic_name`` alone — see ``_med_identity``. A drug the vocabulary does not know
+        is charted with a brand and no generic, so a column-equality test on ``generic_name`` was
+        comparing the stop line's text against NULL and matching nothing: "STOP Zzqxtrin" wrote its
+        discontinuation and left Zzqxtrin ``is_current`` beside it. That is the disagreement
+        between ``event_type`` and ``is_current`` this method exists to end, surviving for exactly
+        the drugs the deterministic engine already cannot evaluate — so nothing downstream would
+        have caught it either.
+
+        Still narrow: the fallback is exact equality on folded text, so it can only retire a row
+        charted under literally the same brand string. A brand that OCR'd differently on the two
+        pages does not match, which is the safe direction — an unreadable line must not be able to
+        empty a medication list.
+
         Only rows already in the database, which is exactly right and worth stating because it
         rests on the session's ``autoflush=False``: rows added earlier in this same merge are
         still pending, so a stop line cannot retire a start line from the document it arrived
         in. A prescription that stops one dose and starts another lands as the switch it is,
         whichever order the two lines were extracted in.
         """
-        if vocab_id is None and not (generic or "").strip():
+        if vocab_id is None and not identity:
             # Nothing to match on. A stop line whose drug neither resolved nor carries a name
             # cannot say what it discontinues, so it retires nothing rather than everything —
             # an unreadable line must not be able to empty a medication list.
@@ -462,7 +558,7 @@ class GraphService:
         match = (
             MedicationEvent.drug_vocabulary_id == vocab_id
             if vocab_id is not None
-            else func.lower(MedicationEvent.generic_name) == (generic or "").lower()
+            else _med_identity() == identity
         )
         rows = await self.db.execute(
             select(MedicationEvent).where(
