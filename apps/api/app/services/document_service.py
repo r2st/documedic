@@ -16,6 +16,7 @@ from app.exceptions import (
     ConcurrentApprovalError,
     CorrectionNotApplicableError,
     DocumentNotFoundError,
+    EntityNotMergeableError,
     FileTooLargeError,
     UnsupportedFileTypeError,
 )
@@ -31,7 +32,7 @@ from app.schemas.document import (
 from app.services.audit_service import AuditDraft, AuditService
 from app.services.extraction import ExtractionPipeline
 from app.services.filetype import describe_unsupported, sniff_file_type
-from app.services.graph_service import GraphService
+from app.services.graph_service import MERGEABLE_ENTITY_TYPES, GraphService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.storage import compute_sha256_async, get_storage
 
@@ -493,6 +494,31 @@ class DocumentService:
 
         # Build the merge payload, skipping rejected entities.
         rejected = set(approval.rejected_entity_indexes)
+
+        # An entity of a type the graph cannot chart is refused, not merged-and-forgotten. Same
+        # argument as CorrectionNotApplicableError above, and the same failure it was written
+        # for: the approval used to answer 200 with the entity nowhere in the counts, and the
+        # clinician who ticked "include in the record" read that as the record including it.
+        #
+        # Refusing names the entity so it can be rejected and the rest of the document approved.
+        # The alternative — dropping it quietly — is what left every encounter on every
+        # discharge summary out of the chart without one line of evidence that it had happened.
+        #
+        # Reachable only for documents extracted before the parser began refusing these types;
+        # every type it can emit today is one ``GraphService.merge_entities`` dispatches on.
+        unmergeable = [
+            f"{idx} ({ent.get('entity_type')!r})"
+            for idx, ent in enumerate(raw_entities)
+            if idx not in rejected and ent.get("entity_type") not in MERGEABLE_ENTITY_TYPES
+        ]
+        if unmergeable:
+            raise EntityNotMergeableError(
+                detail=(
+                    "nothing in the record can hold these extracted items, so they cannot be "
+                    f"approved: {', '.join(unmergeable)}. Reject them to approve the rest."
+                )
+            )
+
         merge_payload: list[dict] = []
         for idx, ent in enumerate(raw_entities):
             if idx in rejected:

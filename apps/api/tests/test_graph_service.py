@@ -455,17 +455,30 @@ async def test_a_mixed_batch_counts_each_type(db):
             _entity("lab_result", marker_name="HbA1c", value_numeric=7.4),
             _entity("condition", condition_name="Type 2 diabetes mellitus"),
             _entity("allergy", allergen_name="Sulfa"),
+            _entity("encounter", encounter_date="2026-03-04", encounter_type="emergency"),
             _entity("unknown_type", whatever="ignored"),
         ],
     )
-    assert counts == {"medications": 1, "lab_results": 1, "conditions": 1, "allergies": 1}
+    assert counts == {
+        "medications": 1,
+        "lab_results": 1,
+        "conditions": 1,
+        "allergies": 1,
+        "encounters": 1,
+    }
 
 
 @pytest.mark.asyncio
 async def test_an_empty_batch_is_a_no_op(db):
     patient = await _patient(db)
     counts = await GraphService(db).merge_entities(patient=patient, document=None, entities=[])
-    assert counts == {"medications": 0, "lab_results": 0, "conditions": 0, "allergies": 0}
+    assert counts == {
+        "medications": 0,
+        "lab_results": 0,
+        "conditions": 0,
+        "allergies": 0,
+        "encounters": 0,
+    }
 
 
 def test_to_decimal_accepts_numeric_strings():

@@ -26,10 +26,22 @@ from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
 from app.models.document import Document
+from app.models.encounter import Encounter
 from app.models.lab_result import LabResult, lab_observation_key
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 from app.services.drug_resolver import DrugResolver
+
+# The entity types this service can actually chart. Canonical, because the same set has to hold
+# in three places that had drifted apart: what the extractor is allowed to emit, what the
+# extraction-review API will show a clinician for approval, and what ``merge_entities``
+# dispatches on. When those three disagree the failure is silent in the worst direction — an
+# entity of a type nobody merges was shown with a tick-box reading "include in the record",
+# approved, counted nowhere and written nowhere. ``encounter`` is on this list because it is
+# now merged; it was on the API's list, and nowhere else, for as long as it was dropped.
+MERGEABLE_ENTITY_TYPES = frozenset(
+    {"medication", "lab_result", "condition", "allergy", "encounter"}
+)
 
 
 def _resolvable_names(entities: list[dict]) -> list[str]:
@@ -158,7 +170,7 @@ def _allowed_enum_values(model: type[Any]) -> dict[str, frozenset[str]]:
 
 _ENUM_VALUES: dict[str, dict[str, frozenset[str]]] = {
     model.__name__: _allowed_enum_values(model)
-    for model in (Allergy, Condition, MedicationEvent, LabResult)
+    for model in (Allergy, Condition, MedicationEvent, LabResult, Encounter)
 }
 
 
@@ -279,8 +291,19 @@ class GraphService:
         document: Document | None,
         entities: list[dict],
     ) -> dict[str, int]:
-        """Merge a list of {entity_type, fields, region} dicts. Returns per-type counts."""
-        counts = {"medications": 0, "lab_results": 0, "conditions": 0, "allergies": 0}
+        """Merge a list of {entity_type, fields, region} dicts. Returns per-type counts.
+
+        Encounters are merged before anything else, because the visit is the context the rest of
+        the document was recorded in and the other rows carry a foreign key to it. See
+        :meth:`_visit_context` for when that key is set and when it is deliberately left null.
+        """
+        counts = {
+            "medications": 0,
+            "lab_results": 0,
+            "conditions": 0,
+            "allergies": 0,
+            "encounters": 0,
+        }
         source_doc_id = document.id if document else None
         new_lab_results: list[LabResult] = []
 
@@ -295,33 +318,79 @@ class GraphService:
         # round-trips; one prefetch collapses them into a single query.
         await self.resolver.prefetch(_resolvable_names(entities))
 
-        for entity in entities:
-            etype = entity.get("entity_type")
-            # Every merge below treats these as text; see _as_text for what used to arrive.
-            fields = {k: _as_text(v) for k, v in entity.get("fields", {}).items()}
-            region = entity.get("region")
-            confidence = entity.get("confidence", {})
+        # Every merge below treats these as text; see _as_text for what used to arrive.
+        parsed = [
+            (
+                entity.get("entity_type"),
+                {k: _as_text(v) for k, v in entity.get("fields", {}).items()},
+                entity.get("region"),
+                entity.get("confidence", {}),
+            )
+            for entity in entities
+        ]
 
+        # Pass one: the visit. Ahead of the rest of the loop rather than in document order,
+        # because a discharge summary lists the admission at the top and the drugs started at it
+        # below, but nothing guarantees that order — and a medication merged before the encounter
+        # it belongs to has nothing to point at.
+        encounters_in_payload = False
+        for etype, fields, region, confidence in parsed:
+            if etype != "encounter":
+                continue
+            encounters_in_payload = True
+            if self._merge_encounter(
+                patient, source_doc_id, fields, region, confidence, seen["encounters"]
+            ):
+                counts["encounters"] += 1
+        encounter_id = (
+            await self._visit_context(patient, source_doc_id) if encounters_in_payload else None
+        )
+
+        for etype, fields, region, confidence in parsed:
             if etype == "medication":
                 if await self._merge_medication(
-                    patient, source_doc_id, fields, region, confidence, seen["medications"]
+                    patient,
+                    source_doc_id,
+                    fields,
+                    region,
+                    confidence,
+                    seen["medications"],
+                    encounter_id,
                 ):
                     counts["medications"] += 1
             elif etype == "lab_result":
                 lab = await self._merge_lab(
-                    patient, source_doc_id, fields, region, confidence, seen["lab_results"]
+                    patient,
+                    source_doc_id,
+                    fields,
+                    region,
+                    confidence,
+                    seen["lab_results"],
+                    encounter_id,
                 )
                 if lab is not None:
                     counts["lab_results"] += 1
                     new_lab_results.append(lab)
             elif etype == "condition":
                 if self._merge_condition(
-                    patient, source_doc_id, fields, region, confidence, seen["conditions"]
+                    patient,
+                    source_doc_id,
+                    fields,
+                    region,
+                    confidence,
+                    seen["conditions"],
+                    encounter_id,
                 ):
                     counts["conditions"] += 1
             elif etype == "allergy":
                 if await self._merge_allergy(
-                    patient, source_doc_id, fields, region, confidence, seen["allergies"]
+                    patient,
+                    source_doc_id,
+                    fields,
+                    region,
+                    confidence,
+                    seen["allergies"],
+                    encounter_id,
                 ):
                     counts["allergies"] += 1
 
@@ -425,10 +494,23 @@ class GraphService:
                 Allergy.is_deleted.is_(False),
             )
         )
+        # Document-scoped, for the reason the labs and the discontinuations above are: the repeat
+        # this has to suppress is one extraction being approved twice, and a patient seen twice on
+        # one date is a real second visit rather than a duplicate of the first.
+        encounters = await self.db.execute(
+            select(Encounter.encounter_date, Encounter.encounter_type).where(
+                Encounter.patient_id == patient.id,
+                Encounter.source_document_id == source_doc_id
+                if source_doc_id is not None
+                else Encounter.source_document_id.is_(None),
+                Encounter.is_deleted.is_(False),
+            )
+        )
         return {
             "medications": med_keys,
             "conditions": {name.lower() for (name,) in conditions.all() if name},
             "allergies": {name.lower() for (name,) in allergies.all() if name},
+            "encounters": set(encounters.all()),
             # Read back as stored rather than recomputed from the row's columns: the digest is
             # what the unique index constrains, so comparing against anything else could let the
             # in-memory check pass an insert the database then rejects.
@@ -443,6 +525,7 @@ class GraphService:
         region: dict[str, Any] | None,
         confidence: dict[str, Any],
         seen: set,
+        encounter_id: uuid.UUID | None = None,
     ) -> bool:
         brand = fields.get("brand_name_raw") or fields.get("generic_name")
         resolved = await self.resolver.resolve(brand)
@@ -492,6 +575,7 @@ class GraphService:
                 MedicationEvent,
                 patient_id=patient.id,
                 source_document_id=source_doc_id,
+                encounter_id=encounter_id,
                 drug_vocabulary_id=vocab_id,
                 brand_name_raw=fields.get("brand_name_raw"),
                 generic_name=generic,
@@ -579,6 +663,7 @@ class GraphService:
         region: dict[str, Any] | None,
         confidence: dict[str, Any],
         seen: set,
+        encounter_id: uuid.UUID | None = None,
     ) -> LabResult | None:
         marker = fields.get("marker_name")
         if not marker:
@@ -612,6 +697,7 @@ class GraphService:
                 LabResult,
                 patient_id=patient.id,
                 source_document_id=source_doc_id,
+                encounter_id=encounter_id,
                 dedup_key=key,
                 marker_name=marker,
                 value_numeric=value_numeric,
@@ -633,6 +719,99 @@ class GraphService:
         self.db.add(lab)
         return lab
 
+    def _merge_encounter(
+        self,
+        patient: Patient,
+        source_doc_id: uuid.UUID | None,
+        fields: dict[str, Any],
+        region: dict[str, Any] | None,
+        confidence: dict[str, Any],
+        seen: set,
+    ) -> bool:
+        """Chart a visit.
+
+        This branch did not exist. ``encounter`` was an accepted extraction type — the
+        extraction-review API listed it, the upload screen drew it with a tick-box reading
+        "include in the record" — and ``merge_entities`` had no arm for it, so a clinician who
+        approved a discharge summary got its drugs and its diagnoses and no record that the
+        patient had been admitted. Nothing reported the loss: the type was not in ``counts``
+        either, so the approval answered with four zeros-or-more and never mentioned the visit.
+
+        The consequence was not only a missing row. ``encounters`` is what the four
+        ``encounter_id`` foreign keys on the clinical tables point at, so all of them were
+        permanently null; the FHIR export had no visits to carry, leaving a receiving clinician
+        a chart of findings with no consultations in it.
+
+        A date is required — the column is NOT NULL, and an encounter without one is not a
+        visit, it is a claim that a visit happened at no particular time. An entity that has no
+        readable date is skipped, exactly as a medication with no name is: it is not a row we
+        could write more truthfully by guessing.
+        """
+        when = _parse_date(fields.get("encounter_date") or fields.get("document_date"))
+        if when is None:
+            return False
+        etype = _enum(Encounter, "encounter_type", fields.get("encounter_type"), None)
+        # Scoped to the document, like lab results and discontinuations and for the same reason:
+        # re-approving one extraction must not chart the same visit twice, while a patient who
+        # genuinely attends twice on one date (a morning clinic and an evening presentation) is
+        # not two copies of anything and must survive. One document asserting a visit twice is
+        # the only unambiguous repeat.
+        key = (when, etype)
+        if key in seen:
+            return False
+        seen.add(key)
+        self.db.add(
+            Encounter(
+                **_fitted(
+                    Encounter,
+                    patient_id=patient.id,
+                    source_document_id=source_doc_id,
+                    encounter_date=when,
+                    encounter_type=etype,
+                    presenting_complaint=fields.get("presenting_complaint"),
+                    clinician_notes=fields.get("clinician_notes"),
+                    extraction_region=region,
+                    extraction_confidence=confidence,
+                )
+            )
+        )
+        return True
+
+    async def _visit_context(
+        self, patient: Patient, source_doc_id: uuid.UUID | None
+    ) -> uuid.UUID | None:
+        """The one visit this document's other entities belong to, if there is exactly one.
+
+        A prescription written at a consultation, or a discharge summary, describes a single
+        visit: the drugs, results and diagnoses on it were all recorded at that visit, and
+        saying so is what makes the exported encounter more than an orphan resource.
+
+        Exactly one, or none. A document carrying two visits gives no way to tell which of them
+        a particular drug was started at, and a guess would be indistinguishable at the far end
+        from a fact — this system's recurring failure mode. Better an unlinked row, which is
+        what every row in this table has been until now, than a confidently wrong one.
+
+        Read back from the database rather than taken from what :meth:`_merge_encounter` just
+        added, so a *re-approval* links too. The second approval of a document dedups its
+        encounter away and creates nothing, and a rule built on "what did I just insert" would
+        leave that pass's rows unlinked while the first pass's were linked.
+        """
+        # Explicit, because the session runs with autoflush off: the encounter added moments ago
+        # is not visible to a SELECT until it is flushed, so without this the first approval of a
+        # document would find nothing and link none of its own rows.
+        await self.db.flush()
+        result = await self.db.execute(
+            select(Encounter.id).where(
+                Encounter.patient_id == patient.id,
+                Encounter.source_document_id == source_doc_id
+                if source_doc_id is not None
+                else Encounter.source_document_id.is_(None),
+                Encounter.is_deleted.is_(False),
+            )
+        )
+        ids = list(result.scalars().all())
+        return ids[0] if len(ids) == 1 else None
+
     def _merge_condition(
         self,
         patient: Patient,
@@ -641,6 +820,7 @@ class GraphService:
         region: dict[str, Any] | None,
         confidence: dict[str, Any],
         seen: set,
+        encounter_id: uuid.UUID | None = None,
     ) -> bool:
         name = fields.get("condition_name")
         if not name:
@@ -653,6 +833,7 @@ class GraphService:
                 Condition,
                 patient_id=patient.id,
                 source_document_id=source_doc_id,
+                encounter_id=encounter_id,
                 condition_name=name,
                 icd10_code=fields.get("icd10_code"),
                 status=_enum(Condition, "status", fields.get("status"), "active", "unknown"),
@@ -674,6 +855,7 @@ class GraphService:
         region: dict[str, Any] | None,
         confidence: dict[str, Any],
         seen: set,
+        encounter_id: uuid.UUID | None = None,
     ) -> bool:
         name = fields.get("allergen_name")
         if not name:
@@ -694,6 +876,7 @@ class GraphService:
                 Allergy,
                 patient_id=patient.id,
                 source_document_id=source_doc_id,
+                encounter_id=encounter_id,
                 allergen_name=name,
                 allergen_type=allergen_type,
                 reaction_description=fields.get("reaction_description"),

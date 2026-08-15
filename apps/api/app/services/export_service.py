@@ -68,14 +68,21 @@ _CONDITION_CLINICAL_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-cl
 _ALLERGY_CLINICAL_SYSTEM = "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical"
 _INTERPRETATION_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 
-# Our vocabularies -> FHIR's. Anything absent falls through to ``unknown`` rather than being
-# guessed at: a status this map does not recognise must not be exported as "active".
+# Our vocabularies -> FHIR's. A status neither map recognises exports with no clinicalStatus at
+# all rather than being guessed at, because every guess available is a clinical claim: "active"
+# asserts a diagnosis nobody made, "inactive" retires an allergy nobody ruled out.
+#
+# FHIR's ``condition-clinical`` value set is a *required* binding, and it contains active,
+# recurrence, relapse, inactive, remission and resolved — no "unknown". Our own vocabulary has
+# one, and it was being exported verbatim, which produced a Condition that fails validation
+# outright: a strict receiver rejects the resource, and the patient's diagnosis does not arrive.
+# Anything without a code here exports with no clinicalStatus, which the element's 0..1
+# cardinality permits and which is the honest reading — we do not know, so we do not say.
 _CONDITION_STATUS = {
     "active": "active",
     "resolved": "resolved",
     "inactive": "inactive",
     "recurrence": "recurrence",
-    "unknown": "unknown",
 }
 _ALLERGY_STATUS = {
     "active": "active",
@@ -83,7 +90,8 @@ _ALLERGY_STATUS = {
     # FHIR has no "refuted" clinical status — it models a refuted allergy through
     # verificationStatus instead, which is where this is carried. See _allergy.
     "refuted": "inactive",
-    "unknown": "inactive",
+    # "unknown" is deliberately absent, and so is a fallback: see _allergy for why an allergy of
+    # unknown standing must not leave here described as inactive.
 }
 _ALLERGY_CATEGORY = {
     "drug": "medication",
@@ -176,13 +184,26 @@ class PatientExportService:
         entries: list[dict[str, Any]] = [self._patient(patient)]
         incomplete: list[str] = []
 
+        # Visits first, because everything below references them. Which visits are in the file
+        # has to be known before a finding can say it was recorded at one — a reference to an
+        # encounter the ceiling truncated away would be a dangling one, and an importer either
+        # rejects the bundle or resolves it against whatever else holds that id.
+        encounters, truncated = await self._rows(
+            select(Encounter)
+            .where(Encounter.patient_id == patient.id, Encounter.is_deleted.is_(False))
+            .order_by(Encounter.encounter_date.desc(), Encounter.id)
+        )
+        incomplete += ["Encounter"] if truncated else []
+        entries += [self._encounter(row, patient_ref) for row in encounters]
+        visits = {row.id for row in encounters}
+
         allergies, truncated = await self._rows(
             select(Allergy)
             .where(Allergy.patient_id == patient.id, Allergy.is_deleted.is_(False))
             .order_by(Allergy.allergen_name, Allergy.id)
         )
         incomplete += ["AllergyIntolerance"] if truncated else []
-        entries += [self._allergy(row, patient_ref) for row in allergies]
+        entries += [self._allergy(row, patient_ref, visits) for row in allergies]
 
         conditions, truncated = await self._rows(
             select(Condition)
@@ -190,7 +211,7 @@ class PatientExportService:
             .order_by(Condition.condition_name, Condition.id)
         )
         incomplete += ["Condition"] if truncated else []
-        entries += [self._condition(row, patient_ref) for row in conditions]
+        entries += [self._condition(row, patient_ref, visits) for row in conditions]
 
         medications, truncated = await self._rows(
             select(MedicationEvent)
@@ -201,15 +222,7 @@ class PatientExportService:
             .order_by(MedicationEvent.event_date.desc().nullslast(), MedicationEvent.id)
         )
         incomplete += ["MedicationStatement"] if truncated else []
-        entries += [self._medication(row, patient_ref) for row in medications]
-
-        encounters, truncated = await self._rows(
-            select(Encounter)
-            .where(Encounter.patient_id == patient.id, Encounter.is_deleted.is_(False))
-            .order_by(Encounter.encounter_date.desc(), Encounter.id)
-        )
-        incomplete += ["Encounter"] if truncated else []
-        entries += [self._encounter(row, patient_ref) for row in encounters]
+        entries += [self._medication(row, patient_ref, visits) for row in medications]
 
         labs, truncated = await self._rows(
             select(LabResult)
@@ -217,7 +230,7 @@ class PatientExportService:
             .order_by(LabResult.sample_date.desc().nullslast(), LabResult.id)
         )
         incomplete += ["Observation (laboratory)"] if truncated else []
-        entries += [self._lab(row, patient_ref) for row in labs]
+        entries += [self._lab(row, patient_ref, visits) for row in labs]
         # Which lab results actually made it into this bundle, so a marker computed from one
         # that was truncated away does not export a reference to a resource the file does not
         # contain. A dangling reference is worse than an absent one: the importer either
@@ -271,6 +284,24 @@ class PatientExportService:
             extension.append({"url": "source-document", "valueString": str(source_document_id)})
         return [{"url": PROVENANCE_EXTENSION, "extension": extension}]
 
+    @staticmethod
+    def _visit(encounter_id: uuid.UUID | None, visits: set[uuid.UUID]) -> dict[str, Any] | None:
+        """A reference to the visit this was recorded at, when that visit is in this bundle.
+
+        Without it the encounters exported alongside are orphans: the file says the patient
+        attended an emergency presentation on a date, and separately that they are on a drug,
+        and nothing joins the two. Which drug was started at which visit is most of what a
+        referral is for.
+
+        Gated on presence for the same reason ``derivedFrom`` is. A section that hit the export
+        ceiling leaves references pointing at resources this file does not contain, and a
+        dangling reference is worse than an absent one — an importer either refuses the bundle
+        or resolves it against some other record that happens to hold that id.
+        """
+        if encounter_id is None or encounter_id not in visits:
+            return None
+        return {"reference": f"urn:uuid:{encounter_id}"}
+
     def _patient(self, patient: Patient) -> dict[str, Any]:
         return self._entry(
             {
@@ -292,8 +323,16 @@ class PatientExportService:
             }
         )
 
-    def _allergy(self, row: Allergy, patient_ref: str) -> dict[str, Any]:
+    def _allergy(self, row: Allergy, patient_ref: str, visits: set[uuid.UUID]) -> dict[str, Any]:
         category = _ALLERGY_CATEGORY.get(row.allergen_type)
+        # An allergy whose status we do not know leaves with no clinicalStatus at all, rather
+        # than the "inactive" this used to send. FHIR's value set has only active, inactive and
+        # resolved, so there is no code for "unknown" and the closest one is a claim: an
+        # inactive allergy is one the patient no longer has, and a receiving EMR will not raise
+        # it when the drug is next prescribed. Conservative wins on ambiguity (Rule #2), and the
+        # conservative reading of an unknown allergy is *not* that it has gone away. Absent, and
+        # paired with the "unconfirmed" verificationStatus below, it stays a live caution.
+        clinical_status = _ALLERGY_STATUS.get(row.status)
         return self._entry(
             {
                 "resourceType": "AllergyIntolerance",
@@ -306,10 +345,13 @@ class PatientExportService:
                     "coding": [
                         {
                             "system": _ALLERGY_CLINICAL_SYSTEM,
-                            "code": _ALLERGY_STATUS.get(row.status, "inactive"),
+                            "code": clinical_status,
                         }
                     ]
-                },
+                }
+                if clinical_status
+                else None,
+                "encounter": self._visit(row.encounter_id, visits),
                 # A refuted allergy is a distinct claim — someone looked and it is not true —
                 # and FHIR carries it here rather than in clinicalStatus. Exporting it as a
                 # plain inactive allergy would lose that a clinician actively ruled it out.
@@ -357,7 +399,10 @@ class PatientExportService:
             }
         )
 
-    def _condition(self, row: Condition, patient_ref: str) -> dict[str, Any]:
+    def _condition(
+        self, row: Condition, patient_ref: str, visits: set[uuid.UUID]
+    ) -> dict[str, Any]:
+        clinical_status = _CONDITION_STATUS.get(row.status)
         return self._entry(
             {
                 "resourceType": "Condition",
@@ -370,10 +415,13 @@ class PatientExportService:
                     "coding": [
                         {
                             "system": _CONDITION_CLINICAL_SYSTEM,
-                            "code": _CONDITION_STATUS.get(row.status, "unknown"),
+                            "code": clinical_status,
                         }
                     ]
-                },
+                }
+                if clinical_status
+                else None,
+                "encounter": self._visit(row.encounter_id, visits),
                 "code": _prune(
                     {
                         "coding": (
@@ -439,7 +487,9 @@ class PatientExportService:
             }
         )
 
-    def _medication(self, row: MedicationEvent, patient_ref: str) -> dict[str, Any]:
+    def _medication(
+        self, row: MedicationEvent, patient_ref: str, visits: set[uuid.UUID]
+    ) -> dict[str, Any]:
         # A stop event is a stopped medication whatever `is_current` says; otherwise the flag
         # the chart is actually driven by decides. "unknown" rather than a guess for anything
         # else, because "active" is the reading with consequences at the far end.
@@ -476,6 +526,10 @@ class PatientExportService:
                     ),
                 },
                 "subject": {"reference": patient_ref},
+                # R4 calls this ``context`` on MedicationStatement rather than ``encounter``:
+                # the element takes an EpisodeOfCare as well as an Encounter, so it is not the
+                # same name it carries everywhere else in this file.
+                "context": self._visit(row.encounter_id, visits),
                 "effectivePeriod": _prune(
                     {"start": _iso(row.event_date), "end": _iso(row.end_date)}
                 )
@@ -508,6 +562,7 @@ class PatientExportService:
         code_text: str,
         category: str,
         effective: datetime | None,
+        encounter: dict[str, Any] | None = None,
         extension: list[dict[str, Any]] | None = None,
         value_numeric: Decimal | None = None,
         value_text: str | None = None,
@@ -544,6 +599,7 @@ class PatientExportService:
                 ],
                 "code": {"text": code_text},
                 "subject": {"reference": patient_ref},
+                "encounter": encounter,
                 "effectiveDateTime": _iso(effective),
                 "valueQuantity": (
                     _prune({"value": _number(value_numeric), "unit": unit})
@@ -583,13 +639,14 @@ class PatientExportService:
             }
         )
 
-    def _lab(self, row: LabResult, patient_ref: str) -> dict[str, Any]:
+    def _lab(self, row: LabResult, patient_ref: str, visits: set[uuid.UUID]) -> dict[str, Any]:
         return self._observation(
             resource_id=row.id,
             patient_ref=patient_ref,
             code_text=row.marker_name,
             category="laboratory",
             effective=row.sample_date,
+            encounter=self._visit(row.encounter_id, visits),
             extension=self._provenance(
                 confirmed=row.clinician_confirmed,
                 source_document_id=row.source_document_id,

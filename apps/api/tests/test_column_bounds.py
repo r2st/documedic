@@ -214,7 +214,13 @@ async def test_merge_of_pathological_extraction_fits_every_column(db):
         patient=patient, document=None, entities=PATHOLOGICAL_ENTITIES
     )
     # Nothing is refused: an unreadable line must not cost the clinician the rest of the chart.
-    assert counts == {"medications": 1, "lab_results": 1, "conditions": 1, "allergies": 1}
+    assert counts == {
+        "medications": 1,
+        "lab_results": 1,
+        "conditions": 1,
+        "allergies": 1,
+        "encounters": 0,
+    }
     await db.commit()
 
     rows: list[object] = []

@@ -51,8 +51,14 @@ async def get_record(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> LongitudinalRecord:
-    """Everything approved into the patient graph: medications, labs, conditions, allergies,
-    encounters and derived markers, in one timeline.
+    """Everything approved into the patient graph: medications, labs, conditions, allergies and
+    derived markers, in one timeline.
+
+    Encounters are **not** a section here, though this said they were. They are charted (an
+    approved extraction merges them) and they are exported, but the chart view has never
+    returned them and the five sections below are the five it has — a clinician reading this to
+    find out whether a visit is on the record would have been told to look somewhere that never
+    had it.
 
     The widest clinical read in the API, and audited as `patient_record_viewed` for that
     reason. Reads the graph directly — no LLM, so it is unaffected when reasoning is offline.
@@ -94,8 +100,12 @@ async def export_record(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """Everything in the patient graph, as a FHIR R4 `collection` Bundle
-    (`application/fhir+json`): demographics, allergies, conditions, medications, lab results
-    and computed markers.
+    (`application/fhir+json`): demographics, encounters, allergies, conditions, medications,
+    lab results and computed markers.
+
+    Findings reference the visit they were recorded at, where the record knows it — so the
+    bundle is a chart rather than a pile of resources. The reference is only written when that
+    `Encounter` is in the same bundle, so it can never dangle.
 
     **Not paged.** This is the export, not the chart view — if a section exceeds the per-section
     ceiling the bundle carries an `OperationOutcome` saying which one and that the file is not

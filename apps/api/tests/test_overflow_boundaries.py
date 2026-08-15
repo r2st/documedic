@@ -31,6 +31,7 @@ from app.core.clinical import CKD_EPI_MIN_AGE_YEARS, ckd_epi_2021_egfr
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
+from app.models.encounter import Encounter
 from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
@@ -46,7 +47,7 @@ from app.services.graph_service import (
 )
 from tests.column_fit import assert_fits_columns
 
-MERGED_MODELS = (MedicationEvent, LabResult, Condition, Allergy)
+MERGED_MODELS = (MedicationEvent, LabResult, Condition, Allergy, Encounter)
 
 
 async def _patient(db, **overrides) -> Patient:

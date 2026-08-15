@@ -36,7 +36,18 @@ class ExtractionField(BaseModel):
 
 
 class ExtractedEntity(BaseModel):
-    entity_type: Literal["encounter", "medication", "lab_result", "condition", "allergy"]
+    # Deliberately not a ``Literal`` of the chartable types, though that is what it was. This
+    # model is built from ``extraction_metadata`` that is already on disk, so a closed enum here
+    # is a validator applied to *stored history* rather than to input: a document whose
+    # extraction recorded any other type — from a model that volunteered one before the parser
+    # began refusing them — raised ValidationError inside ``build_extraction_result`` and made
+    # the review endpoint 500 forever. Not just for that entity: for the whole document, so its
+    # correctly-extracted drugs became unreviewable and therefore unapprovable, with no way to
+    # get them into the chart and no way to delete the entity that caused it.
+    #
+    # The set is enforced where it can still change the outcome — at extraction (see
+    # ``MERGEABLE_ENTITY_TYPES``), and at approval, which refuses rather than silently drops.
+    entity_type: str
     fields: list[ExtractionField]
     region: dict | None = None
 

@@ -367,6 +367,25 @@ class CorrectionNotApplicableError(ValidationError):
     code = "correction_not_applicable"
 
 
+class EntityNotMergeableError(ValidationError):
+    """An extracted item was approved that nothing in the patient record can hold, so nothing
+    was approved. Reject that item and approve the rest.
+
+    Refused rather than skipped for the same reason as
+    :class:`CorrectionNotApplicableError`, one level up: a silent skip answers 200 to a
+    clinician who ticked "include in the record", and the item is in no chart, no count and no
+    audit entry. Approval is the moment extraction becomes the patient's record, and it has to
+    mean the same thing for every item it was given.
+
+    Reachable only for documents extracted before the extractor was constrained to the types the
+    graph charts — a model that volunteered ``"vital_sign"`` for a discharge summary's
+    observations. Naming the index and the type lets the client reject exactly that item, so one
+    unusable line does not cost the document its prescriptions.
+    """
+
+    code = "entity_not_mergeable"
+
+
 class HardBlockError(AetherError):
     """A safety hard block prevents this action. It can only be passed by an explicit
     clinician override with documented reasoning — it is never bypassed silently."""

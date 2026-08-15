@@ -28,6 +28,11 @@ from app.config import settings
 from app.core.logsafe import describe_exception
 from app.services.extraction.text_parser import ParsedEntity, ParsedField
 
+# The merge is the authority on what can be charted, so the set it dispatches on is the set this
+# parser is allowed to emit. Imported rather than restated because a second copy of this list is
+# exactly how the three that had drifted apart came to disagree.
+from app.services.graph_service import MERGEABLE_ENTITY_TYPES
+
 logger = logging.getLogger(__name__)
 
 EXTRACTION_SYSTEM_PROMPT = """You are a clinical document extraction engine for an Indian \
@@ -127,6 +132,24 @@ def _to_entities(payload: object) -> tuple[list[ParsedEntity], str | None]:
             # it, so an untyped entity is silently merged nowhere while still being shown to
             # the clinician for approval — which reads as "recorded".
             continue
+        etype = etype.strip().lower()
+        if etype not in MERGEABLE_ENTITY_TYPES:
+            # The same failure one step over, and the one that actually happens: a *typed*
+            # entity of a type nothing charts. The prompt asks for four types and the model
+            # answers with a fifth — "vital_sign", "procedure", "immunization" are all things a
+            # discharge summary contains and a plausible model volunteers. That entity passed
+            # the guard above, was stored, was drawn on the review screen with a tick-box
+            # reading "include in the record", was ticked, and was written nowhere.
+            #
+            # Refused here rather than at the merge because this is the boundary where the
+            # model's output stops being a suggestion: past it, an entity is something a
+            # clinician is being asked to approve, and offering to record something that cannot
+            # be recorded is the whole defect. The rest of the document is unaffected — a
+            # discharge summary's drugs still extract when its vitals do not.
+            logger.warning(
+                "Extraction returned entity_type %r, which nothing charts; dropping it.", etype
+            )
+            continue
         fields_map = raw.get("fields")
         conf_map = raw.get("confidence")
         if not isinstance(conf_map, dict):
@@ -137,7 +160,7 @@ def _to_entities(payload: object) -> tuple[list[ParsedEntity], str | None]:
             if isinstance(k, str) and _usable(v)
         ]
         if fields:
-            entities.append(ParsedEntity(entity_type=etype.strip(), fields=fields))
+            entities.append(ParsedEntity(entity_type=etype, fields=fields))
     _inherit_document_date(entities, payload.get("document_date"))
     doc_type = payload.get("document_type")
     return entities, doc_type.strip() if isinstance(doc_type, str) and doc_type.strip() else None
