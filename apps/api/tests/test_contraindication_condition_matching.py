@@ -420,7 +420,12 @@ async def test_the_seeded_atenolol_block_fires_for_a_chart_that_says_asthma(db) 
 
 
 async def test_a_resolved_condition_is_still_not_consulted(db) -> None:
-    """Only active problems reach the context. Unchanged, and load-bearing for the above."""
+    """A condition the chart says the patient no longer has raises nothing.
+
+    Load-bearing for the above, and the one half of the status filter that survived the
+    widening in ``test_condition_status_scoping`` — "resolved" and "inactive" are the only two
+    statuses that still keep a row out of the context.
+    """
     account, patient = await _account_and_patient(db)
     db.add(Condition(patient_id=patient.id, condition_name="Asthma", status="resolved"))
     await db.flush()

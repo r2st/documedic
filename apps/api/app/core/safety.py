@@ -298,8 +298,18 @@ class PatientAllergy:
 
 @dataclass(frozen=True)
 class PatientCondition:
+    """A problem-list row, and what the chart says about whether the patient still has it.
+
+    ``status`` is the ``conditions.status`` column verbatim, or ``None`` for a caller that has
+    no status to offer. Carried here because the alternative — deciding at the query — is what
+    went wrong: the service selected ``status == "active"`` and every other status simply never
+    reached this module, so a contraindication rule keyed on the condition found nothing to
+    match and the check reported clean. See ``_CONDITION_PRESENT_STATUSES``.
+    """
+
     condition_name: str
     icd10_code: str | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -746,6 +756,40 @@ _CONDITION_ABSENT_TOKENS = frozenset(
 # hard block — the chart does not assert the patient currently has it — but very much grounds for
 # telling the clinician the rule exists. "h/o peptic ulcer disease" against an NSAID is the
 # textbook case: not a block, never nothing.
+# ``conditions.status`` values under which the chart asserts the patient currently has the
+# condition. "recurrence" is here because a recurred diagnosis is a present one — it is what a
+# clinician writes when the condition came back — and leaving it out is indistinguishable from
+# the chart never having carried the row.
+#
+# "unknown" is deliberately NOT here, and is deliberately not excluded from the query either.
+# It is what ``graph_service._enum`` records when a document's status field could not be read,
+# so the diagnosis is charted and only its currency is unstated. Both available answers are
+# wrong in a different direction: dropping it hides the one condition that bears on the drug,
+# and treating it as present manufactures a hard block out of an OCR failure. It is therefore
+# routed through the same near-miss flag as a textually hedged wording ("h/o asthma") —
+# reported, with the rule named and the reason it was not enforced, for the clinician to close.
+_CONDITION_PRESENT_STATUSES = frozenset({"active", "recurrence"})
+
+# Statuses under which the chart says the patient does not currently have the condition. These
+# are the only ones the service filters out; see ``SafetyService._conditions``. Public because
+# it crosses that boundary: which statuses mean "no longer has it" is a clinical judgement and
+# belongs in this module with the rest of them, not re-decided in a SQL predicate.
+CONDITION_RESOLVED_STATUSES = frozenset({"resolved", "inactive"})
+
+
+def _status_establishes_presence(status: str | None) -> bool:
+    """True when ``conditions.status`` asserts the patient currently has the condition.
+
+    ``None`` is true: a caller with no status column to read (the reasoning engine's own
+    snapshots, and every test constructing a ``PatientCondition`` by name) is not making a
+    claim that the condition is doubtful, and reading its silence as doubt would quietly
+    downgrade every hard block that does not come through the database.
+    """
+    if status is None:
+        return True
+    return _norm(status) in _CONDITION_PRESENT_STATUSES
+
+
 _CONDITION_UNCERTAIN = (
     "suspected",
     "possible",
@@ -906,11 +950,17 @@ class _ConditionMatch:
 
     ``is_present`` false means "related, but the chart does not assert the patient currently has
     it" — reported as a warning rather than enforced as a block.
+
+    ``charted_status`` is the row's ``conditions.status`` as charted, carried onto every flag
+    this match produces. A block that fired on a "recurrence" row and a block that fired on an
+    "active" one are the same block, but they are not the same record to answer for months
+    later, and the status is the column that says which.
     """
 
     charted_name: str
     basis: str
     is_present: bool
+    charted_status: str | None = None
 
 
 @lru_cache(maxsize=2048)
@@ -1020,12 +1070,22 @@ def _match_condition(
             continue
 
         hedged = any(marker in normalised for marker in _CONDITION_UNCERTAIN)
-        is_present = basis != "less_specific" and not hedged
-        if hedged and basis != "less_specific":
-            basis = f"{basis}_hedged"
+        # The same question the wording answers, asked of the status column. A row the chart
+        # marks "unknown" is a diagnosis whose currency nobody established — the structured
+        # equivalent of "?asthma" — so it takes the same route: reported, not enforced.
+        unconfirmed = not _status_establishes_presence(condition.status)
+        is_present = basis != "less_specific" and not hedged and not unconfirmed
+        if basis != "less_specific":
+            if hedged:
+                basis = f"{basis}_hedged"
+            if unconfirmed:
+                basis = f"{basis}_unconfirmed_status"
 
         match = _ConditionMatch(
-            charted_name=condition.condition_name, basis=basis, is_present=is_present
+            charted_name=condition.condition_name,
+            basis=basis,
+            is_present=is_present,
+            charted_status=condition.status,
         )
         if is_present:
             return match
@@ -1049,6 +1109,17 @@ def _near_miss_flag(
     carried in the details so the clinician can see what it would have been.
     """
     would_block = rule.is_absolute or rule.severity == "absolute"
+    # Why the record does not establish it, in the clinician's terms. A hedged *wording* is
+    # visible on the problem list they are already looking at; a status column reading
+    # "unknown" is not, so a flag that says only "the record does not establish it" sends them
+    # to re-read a line that looks perfectly definite. Naming the status is what makes the flag
+    # actionable — the fix is to set the status, not to re-word the diagnosis.
+    unconfirmed_status = not _status_establishes_presence(match.charted_status)
+    because = (
+        f", because the chart records its status as “{match.charted_status}” rather than active"
+        if unconfirmed_status
+        else ""
+    )
     return SafetyFlag(
         check_type="contraindication",
         severity="warning" if would_block else "info",
@@ -1056,7 +1127,7 @@ def _near_miss_flag(
         summary=(
             f"“{match.charted_name}” on this chart may be the {rule.condition_name} that "
             f"{ing.label} is contraindicated in ({rule.description}), but the record "
-            "does not establish it"
+            f"does not establish it{because}"
             + (
                 ", so the hard block was not applied. Confirm the diagnosis if it applies."
                 if would_block
@@ -1067,6 +1138,7 @@ def _near_miss_flag(
             **ing.details(),
             "condition": rule.condition_name,
             "charted_condition": match.charted_name,
+            "charted_status": match.charted_status,
             "match_basis": match.basis,
             "would_hard_block_if_confirmed": would_block,
             "rule_severity": rule.severity,
@@ -1133,6 +1205,7 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
                             # anything but a verbatim wording, and a block is exactly the record
                             # that has to be answerable months later.
                             "charted_condition": match.charted_name,
+                            "charted_status": match.charted_status,
                             "match_basis": match.basis,
                         },
                         contraindication_id=rule.contraindication_id,
@@ -1152,6 +1225,7 @@ def check_contraindications(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
                             "condition": rule.condition_name,
                             "severity": rule.severity,
                             "charted_condition": match.charted_name,
+                            "charted_status": match.charted_status,
                             "match_basis": match.basis,
                         },
                         contraindication_id=rule.contraindication_id,

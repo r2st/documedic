@@ -19,6 +19,7 @@ from app.core.clinical import age_from_dob, serum_creatinine_mg_dl
 from app.core.dates import is_plausible_clinical_date
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
+    CONDITION_RESOLVED_STATUSES,
     ChartedMedication,
     ContraindicationRule,
     DrugRef,
@@ -452,15 +453,39 @@ class SafetyService:
         return out, unidentified
 
     async def _conditions(self, patient_id: uuid.UUID) -> list[PatientCondition]:
+        """The problem list the contraindication rules are evaluated against.
+
+        Excludes only the two statuses under which the chart says the patient does not
+        currently have the condition. It used to select ``status == "active"`` and nothing
+        else, which is the same fail-open shape as the allergy query above and was wrong for
+        the same reason — with two concrete ways in:
+
+        * ``recurrence`` is what a clinician records when a condition came back. It is a
+          present diagnosis by any reading, and it was dropped, so a rule keyed on it matched
+          nothing and the response came back ``is_blocked: false``.
+        * ``unknown`` is what ``graph_service._enum`` writes when a document's status field
+          could not be read — chosen there, deliberately, "rather than asserting an active
+          diagnosis nobody made". The row is a real charted diagnosis with an unreadable
+          status, and it never reached the engine at all: not as a block, not as a warning,
+          and not even as an unevaluated-condition note, because
+          ``check_unevaluated_conditions`` only sees rows that got this far.
+
+        The second one is why this is not simply widened to "everything not resolved".
+        ``_match_condition`` reads the status it now carries and routes an unestablished one
+        through the near-miss flag, so it is reported without manufacturing a hard block out of
+        an OCR failure. See ``_CONDITION_PRESENT_STATUSES``.
+        """
         result = await self.db.execute(
             select(Condition).where(
                 Condition.patient_id == patient_id,
                 Condition.is_deleted.is_(False),
-                Condition.status == "active",
+                Condition.status.notin_(tuple(sorted(CONDITION_RESOLVED_STATUSES))),
             )
         )
         return [
-            PatientCondition(condition_name=c.condition_name, icd10_code=c.icd10_code)
+            PatientCondition(
+                condition_name=c.condition_name, icd10_code=c.icd10_code, status=c.status
+            )
             for c in result.scalars().all()
         ]
 
