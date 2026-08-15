@@ -169,6 +169,11 @@ _BUCKETS: dict[str, tuple[str, float]] = {
     "signup": ("rate_limit_signups_per_hour", _SECONDS_PER_HOUR),
     "password_reset": ("rate_limit_password_resets_per_hour", _SECONDS_PER_HOUR),
     "validation_run": ("rate_limit_validation_runs_per_hour", _SECONDS_PER_HOUR),
+    "record_export": ("rate_limit_exports_per_hour", _SECONDS_PER_HOUR),
+    # Shared by the per-patient chain walk and the dossier's full-table one, for the same
+    # reason `reasoning_run` is shared by POST ../run and GET ../stream: they are the same
+    # work, and a caller must not be able to double its spend by alternating them.
+    "chain_verification": ("rate_limit_chain_verifications_per_hour", _SECONDS_PER_HOUR),
 }
 
 

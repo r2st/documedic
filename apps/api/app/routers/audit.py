@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit
 from app.models.user import Account
-from app.openapi import PATIENT_ERRORS
+from app.openapi import PATIENT_ERRORS, errors
 from app.schemas.audit import AuditEntryResponse, AuditVerifyResponse
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.services.audit_service import AuditService
@@ -76,7 +76,12 @@ async def patient_audit(
     "/verify",
     response_model=AuditVerifyResponse,
     summary="Verify this patient's audit hash chain",
-    responses=PATIENT_ERRORS,
+    responses=PATIENT_ERRORS | errors(429),
+    # Metered: this recomputes a SHA-256 per entry over a trail that is append-only, never
+    # pruned, and records every read of the chart as well as every write. The work is
+    # proportional to the patient's whole history, so one GET buys an unbounded amount of CPU.
+    # Shares its budget with the dossier's full-table walk. See `chain_verification`.
+    dependencies=[Depends(rate_limit("chain_verification"))],
 )
 async def verify_chain(
     patient_id: uuid.UUID,

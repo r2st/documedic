@@ -326,9 +326,11 @@ class Settings(BaseSettings):
     # app.core.rate_limit. Set any of these to 0 to disable that bucket alone, or
     # rate_limit_enabled=false to disable all of them.
     #
-    # The deterministic drug-safety and chart-read routes are deliberately absent: they are
-    # local and cheap, and a 429 on an allergy cross-check reads to a hurried clinician as "no
-    # conflict found". See app/core/rate_limit.py.
+    # The deterministic drug-safety and *paged* chart-read routes are deliberately absent: they
+    # are local, cheap and bounded by their page size, and a 429 on an allergy cross-check reads
+    # to a hurried clinician as "no conflict found". See app/core/rate_limit.py. The two
+    # ceilings at the end of this block are the exceptions to "reads are cheap" — one is
+    # unpaged and one is unbounded in CPU.
     rate_limit_enabled: bool = True
     # A full eight-agent panel. POST ../run and GET ../stream share this budget — they run the
     # same pipeline, so a client must not be able to double its spend by alternating them.
@@ -362,6 +364,30 @@ class Settings(BaseSettings):
     # execution takes minutes of wall clock. Twelve an hour is far beyond any human cadence
     # while still capping a runaway loop at a bounded spend.
     rate_limit_validation_runs_per_hour: int = 12
+    # Whole-chart export (`GET /patients/{id}/export`), per account per hour. The one read in
+    # this API that is deliberately *not* paged: it serialises every medication, lab, condition,
+    # allergy, encounter and derived marker a patient has into a single FHIR bundle, and it is
+    # audited as `patient_record_exported` — "the widest disclosure this API performs". Nothing
+    # bounded how often it could be performed, so a stolen bearer token could pull every chart
+    # in an account at the speed of HTTP, and the only trace was one audit row per chart written
+    # after each one had already left. That is the DPDP-relevant failure: not that the export
+    # exists, but that its rate was unmetered.
+    #
+    # Per hour and generous, because a clinician exporting a handful of charts for a referral in
+    # one sitting is the normal use and must not hit this. Bulk retrieval is what it stops.
+    rate_limit_exports_per_hour: int = 60
+    # Audit-chain verification, per account per hour. Both routes it covers recompute SHA-256
+    # over rows rather than reading them: `GET /patients/{id}/audit/verify` walks one chart's
+    # whole trail, and `GET /regulatory/samd-dossier` walks *every row in audit_logs* via
+    # verify_full_chain. `audit_logs` is append-only and never pruned, and it records every PHI
+    # read as well as every write, so both grow without limit — one authenticated GET buys an
+    # unbounded amount of CPU, which is the plainest amplification surface in the API. The
+    # batching added earlier keeps the event loop responsive during a walk; it does not stop a
+    # caller from starting a hundred of them.
+    #
+    # Tamper checks are run by a human investigating something, or by a scheduled job, so an
+    # hourly ceiling in the tens is far above real use and well below what hurts.
+    rate_limit_chain_verifications_per_hour: int = 30
 
     # --- Single-run claim (reasoning sessions) ---
     # How long a claim on a reasoning session stays valid before another request may take it

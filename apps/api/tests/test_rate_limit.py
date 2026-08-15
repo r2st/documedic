@@ -413,6 +413,107 @@ async def test_signup_is_metered_per_address(client, monkeypatch):
     assert blocked.json()["code"] == "rate_limited"
 
 
+@pytest.mark.asyncio
+async def test_whole_chart_export_is_metered(auth_client, monkeypatch):
+    """The unpaged read: every row a patient has, in one file, leaving the system.
+
+    Audited as `patient_record_exported` — "the widest disclosure this API performs" — and until
+    now the only thing bounding how often it could be performed was HTTP. A stolen bearer token
+    could walk every chart in the account at line rate, leaving one audit row per chart written
+    *after* each one had already gone. The ceiling is the control; the audit row is the record.
+    """
+    monkeypatch.setattr("app.config.settings.rate_limit_exports_per_hour", 1)
+    patient = await create_patient(auth_client)
+    url = f"/api/v1/patients/{patient['id']}/export"
+
+    assert (await auth_client.get(url)).status_code == 200
+    resp = await auth_client.get(url)
+    assert resp.status_code == 429
+    assert resp.json()["code"] == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_the_export_ceiling_is_per_account_not_global(
+    auth_client, second_auth_client, monkeypatch
+):
+    """One clinician exporting a referral pack must not throttle the practice next door."""
+    monkeypatch.setattr("app.config.settings.rate_limit_exports_per_hour", 1)
+    mine = await create_patient(auth_client)
+    theirs = await create_patient(second_auth_client)
+
+    assert (await auth_client.get(f"/api/v1/patients/{mine['id']}/export")).status_code == 200
+    assert (await auth_client.get(f"/api/v1/patients/{mine['id']}/export")).status_code == 429
+    # The other account's budget is untouched.
+    assert (
+        await second_auth_client.get(f"/api/v1/patients/{theirs['id']}/export")
+    ).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_paged_chart_reads_stay_unmetered_while_the_export_is_metered(
+    auth_client, monkeypatch
+):
+    """The distinction the bucket rests on: the chart view is paged, the export is not.
+
+    A clinician refreshing a timeline mid-consultation is not abuse, and must never meet a 429
+    from the export ceiling.
+    """
+    monkeypatch.setattr("app.config.settings.rate_limit_exports_per_hour", 1)
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+
+    for _ in range(10):
+        assert (await auth_client.get(f"/api/v1/patients/{pid}/record")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_audit_chain_verification_is_metered(auth_client, monkeypatch):
+    """One GET recomputes a SHA-256 per entry over a table that is never pruned.
+
+    `audit_logs` records every PHI *read* as well as every write, so a chart's trail grows for
+    as long as the patient is seen, and the work this route does grows with it. Unmetered, it is
+    the plainest CPU amplification surface in the API.
+    """
+    monkeypatch.setattr("app.config.settings.rate_limit_chain_verifications_per_hour", 1)
+    patient = await create_patient(auth_client)
+    url = f"/api/v1/patients/{patient['id']}/audit/verify"
+
+    assert (await auth_client.get(url)).status_code == 200
+    resp = await auth_client.get(url)
+    assert resp.status_code == 429
+    assert resp.json()["code"] == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_reading_the_audit_trail_is_not_the_same_as_verifying_it(auth_client, monkeypatch):
+    """Paging the trail is an indexed read; verifying it hashes every row. Only one is metered."""
+    monkeypatch.setattr("app.config.settings.rate_limit_chain_verifications_per_hour", 1)
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+
+    for _ in range(10):
+        assert (await auth_client.get(f"/api/v1/patients/{pid}/audit")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_dossier_shares_the_chain_verification_budget(auth_client, monkeypatch):
+    """`build_dossier` walks *every row in audit_logs* to report the chain's length and validity.
+
+    Same work as the per-patient walk at a larger scale, so it shares the budget for the reason
+    POST ../run and GET ../stream do: a caller must not be able to double its spend by
+    alternating two routes that drive the same machinery.
+    """
+    monkeypatch.setattr("app.config.settings.rate_limit_chain_verifications_per_hour", 2)
+    patient = await create_patient(auth_client)
+
+    assert (
+        await auth_client.get(f"/api/v1/patients/{patient['id']}/audit/verify")
+    ).status_code == 200
+    assert (await auth_client.get("/api/v1/regulatory/samd-dossier")).status_code == 200
+    # Third request against a ceiling of two, whichever route it goes to.
+    assert (await auth_client.get("/api/v1/regulatory/samd-dossier")).status_code == 429
+
+
 # --- What must stay unmetered ---------------------------------------------------------------
 
 

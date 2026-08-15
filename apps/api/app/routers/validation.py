@@ -133,7 +133,12 @@ async def pilot_status(account: Account = Depends(get_current_account)) -> dict:
     "/regulatory/samd-dossier",
     response_model=None,
     summary="Generate the CDSCO SaMD regulatory dossier",
-    responses=AUTH_ERRORS,
+    responses=AUTH_ERRORS | errors(429),
+    # Metered: `build_dossier` reports the audit chain's length and validity, which means
+    # `AuditService.verify_full_chain` — a SHA-256 over *every row in audit_logs*, a table that
+    # is append-only and never pruned. Shares the `chain_verification` budget with the
+    # per-patient walk because it is the same work at a larger scale.
+    dependencies=[Depends(rate_limit("chain_verification"))],
 )
 async def samd_dossier(
     format: str = Query(

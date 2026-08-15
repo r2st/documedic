@@ -9,9 +9,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit
 from app.models.user import Account
-from app.openapi import PATIENT_ERRORS
+from app.openapi import PATIENT_ERRORS, errors
 from app.schemas.record import (
     CriticalLabFlagItem,
     CriticalLabFlagsResponse,
@@ -91,8 +91,12 @@ async def get_record(
 @export_router.get(
     "",
     summary="The patient's whole record as a FHIR R4 Bundle",
-    responses=PATIENT_ERRORS,
+    responses=PATIENT_ERRORS | errors(429),
     response_class=JSONResponse,
+    # Metered, unlike the paged chart read above it. This is the unpaged one — the whole chart
+    # in one file, leaving the system — so it is both the most expensive read and the bulk
+    # disclosure surface. See `record_export`.
+    dependencies=[Depends(rate_limit("record_export"))],
 )
 async def export_record(
     patient_id: uuid.UUID,

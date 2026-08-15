@@ -38,6 +38,16 @@ DETERMINISTIC = "deterministic"
 # Routes with no upstream spend where a ceiling is nonetheless justified on other grounds —
 # account creation walking around the per-account limits, and the vector store's responsiveness.
 BOUNDED_FOR_OTHER_REASONS = "bounded"
+# Local work whose cost is *not* bounded by the request that asks for it, and which must
+# therefore carry a ceiling even though it spends nothing upstream. The distinction
+# ``DETERMINISTIC`` was hiding: "costs no LLM call" and "must never be throttled" are not the
+# same claim. A paged chart read is bounded by its page size and a drug-safety check by the
+# chart; a whole-chart FHIR export is deliberately unpaged, and an audit-chain walk hashes every
+# row of a table that is append-only and never pruned. Neither is a safety-critical read a
+# clinician meets mid-consultation, so Rule #8's argument does not reach them — and unmetered,
+# each is a bulk-disclosure or CPU-amplification surface. Each of these must be metered, which
+# is asserted below in both directions.
+LOCAL_BUT_UNBOUNDED = "local_unbounded"
 
 ROUTE_COST: dict[tuple[str, str], str] = {
     # --- auth. No clinical work; signup is capped so accounts cannot be minted to bypass the
@@ -66,10 +76,13 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("DELETE", "/api/v1/patients/{patient_id}"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/record"): DETERMINISTIC,
     # The FHIR export reads the graph and nothing else — no LLM, so it works offline like every
-    # other chart read, and it is not metered for the same reason they are not.
-    ("GET", "/api/v1/patients/{patient_id}/export"): DETERMINISTIC,
+    # other chart read. It is metered all the same: it is the one read that is deliberately
+    # unpaged, so it is both the most expensive and the bulk-disclosure surface.
+    ("GET", "/api/v1/patients/{patient_id}/export"): LOCAL_BUT_UNBOUNDED,
+    # Paging the trail is an indexed read of one page. Verifying it recomputes a SHA-256 per
+    # entry over the patient's whole history — different work, different classification.
     ("GET", "/api/v1/patients/{patient_id}/audit"): DETERMINISTIC,
-    ("GET", "/api/v1/patients/{patient_id}/audit/verify"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/audit/verify"): LOCAL_BUT_UNBOUNDED,
     # --- documents. Upload runs multimodal extraction over the scan; everything else is
     # metadata, stored bytes, or a merge of an extraction that already happened.
     ("POST", "/api/v1/patients/{patient_id}/documents"): LLM,
@@ -115,7 +128,10 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/validation/runs/{run_id}"): DETERMINISTIC,
     ("GET", "/api/v1/metrics/performance"): DETERMINISTIC,
     ("GET", "/api/v1/pilot/status"): DETERMINISTIC,
-    ("GET", "/api/v1/regulatory/samd-dossier"): DETERMINISTIC,
+    # Reports the audit chain's length and validity, which means verify_full_chain — a SHA-256
+    # over every row in audit_logs. The same work as the per-patient walk, one scale worse, and
+    # it shares that walk's budget.
+    ("GET", "/api/v1/regulatory/samd-dossier"): LOCAL_BUT_UNBOUNDED,
     ("POST", "/api/v1/safety-reports"): DETERMINISTIC,
     ("GET", "/api/v1/safety-reports"): DETERMINISTIC,
 }
@@ -208,6 +224,24 @@ def test_no_deterministic_route_is_metered():
     assert not metered, (
         f"these routes are local and must answer whenever they are asked, but are metered: "
         f"{metered}"
+    )
+
+
+def test_every_locally_unbounded_route_is_metered():
+    """The other half of the LLM invariant, for work that costs CPU and disclosure instead.
+
+    Classifying a route ``LOCAL_BUT_UNBOUNDED`` is a statement that its cost does not follow from
+    the request, so leaving it uncapped is the same omission ``POST /validation/run`` was.
+    """
+    routes = _api_routes()
+    unmetered = sorted(
+        key
+        for key, cost in ROUTE_COST.items()
+        if cost == LOCAL_BUT_UNBOUNDED and not _is_metered(key, routes[key])
+    )
+    assert not unmetered, (
+        "these routes do unbounded local work with no ceiling, so a loop on any of them buys "
+        f"unbounded CPU or walks every chart in the account at line rate: {unmetered}"
     )
 
 
