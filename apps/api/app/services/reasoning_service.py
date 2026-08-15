@@ -166,10 +166,22 @@ class ReasoningService:
         The second arm was for a long time the reason this signature took a drug name at all,
         and it returned the first arm's constant regardless — a seam that looked wired and was
         inert. Everything it now finds was reachable the whole time.
+
+        The first arm carries the chart-level flags too — what could not be evaluated, and how
+        impaired this liver is — which is the same set ``GET /patients/{id}/drug-safety/flags``
+        appends and for the same reason. Without them the Theatre's drug-safety panel reported
+        the flags of a chart it could fully read, on a chart it could not: a medication line the
+        vocabulary cannot resolve and an allergen it cannot identify are absent from every rule
+        this arm evaluates, so an empty list there meant "nothing found" and "nothing checked"
+        indistinguishably — on the one surface in the product built to show the clinician what
+        the machine actually did. Appended once for the chart, not per drug, exactly as on the
+        Safety screen; the per-option arm below is about drugs named in a sentence and gets
+        none of them.
         """
         service = SafetyService(self.db)
         results = await service.active_flags(account_id=account_id, patient_id=patient_id)
         current: list[dict] = [_flag_dict(f) for _vocab, flag_list in results for f in flag_list]
+        current += [_flag_dict(f) for f in await service.chart_completeness_flags(patient_id)]
         # Screening results memoised per text: management options are drafted from overlapping
         # guideline excerpts, so the same sentence is commonly screened more than once in a run,
         # and each miss costs a handful of queries on a path that is streaming to the clinician.
@@ -887,10 +899,14 @@ class ReasoningService:
         most conservative verdict the Verifier itself can reach — so this can only move the
         output in the direction the Verifier is there to move it, never past it.
         """
-        results = await SafetyService(self.db).active_flags(
-            account_id=account_id, patient_id=patient_id
-        )
+        service = SafetyService(self.db)
+        results = await service.active_flags(account_id=account_id, patient_id=patient_id)
         fresh = [_flag_dict(f) for _vocab, flag_list in results for f in flag_list]
+        # The same chart-level flags the pre-panel arm carried (see ``_safety_evaluator``), and
+        # re-read here for the same reason everything else in this method is: a medication
+        # approved onto the chart mid-run can be one the vocabulary cannot resolve, and this is
+        # the evaluation that ships.
+        fresh += [_flag_dict(f) for f in await service.chart_completeness_flags(patient_id)]
         known = {block.summary for block in state.hard_blocks}
         state.drug_safety_flags = fresh
         for flag in fresh:

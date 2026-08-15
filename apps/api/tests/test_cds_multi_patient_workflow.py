@@ -204,10 +204,21 @@ async def test_each_sessions_safety_flags_come_only_from_its_own_patients_chart(
         f"the warfarin patient's drugs appeared on the nitrate patient's session: {nitrate_drugs}"
     )
 
-    assert results["Simple patient"]["case_state"]["drug_safety_flags"] == [], (
-        "a patient on one analgesic was given somebody else's safety flags: "
-        f"{results['Simple patient']['case_state']['drug_safety_flags']}"
-    )
+    # Nothing from the other two charts. Not asserted as an empty list: this patient's own
+    # chart says "Dolo", which this fifty-drug vocabulary has not been seeded with, so the run
+    # correctly reports that one medication could not be evaluated. That note *is* about this
+    # patient — it quotes the entry off this chart — and it is the answer
+    # `test_reasoning_chart_completeness` exists to keep. What must not appear is any finding
+    # naming a drug this patient is not on.
+    simple_flags = results["Simple patient"]["case_state"]["drug_safety_flags"]
+    others = {"Warfarin", "Ibuprofen", "Sildenafil", "Nitroglycerin"}
+    for flag in simple_flags:
+        found = {drug for drug in others if drug.lower() in flag["summary"].lower()}
+        assert not found, (
+            f"a patient on one analgesic was given somebody else's safety flags: {found}"
+        )
+    assert [f["check_type"] for f in simple_flags] == ["unevaluated_medication"]
+    assert simple_flags[0]["details"]["unresolved_medications"] == ["Dolo"]
 
 
 @pytest.mark.asyncio
