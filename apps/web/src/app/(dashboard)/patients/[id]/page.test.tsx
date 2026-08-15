@@ -20,6 +20,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       getRecord: vi.fn(),
       auditTrail: vi.fn(),
       verifyAudit: vi.fn(),
+      exportPatientRecord: vi.fn(),
     },
   };
 });
@@ -441,5 +442,29 @@ describe('PatientDetailPage retry while in flight', () => {
 
     release(patient());
     expect(await screen.findByRole('heading', { name: 'Asha Reddy' })).toBeInTheDocument();
+  });
+});
+
+describe('record export', () => {
+  it('exports the chart the clinician is looking at', async () => {
+    vi.mocked(api.exportPatientRecord).mockResolvedValue(undefined);
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText('Asha Reddy');
+
+    await userEvent.click(screen.getByRole('button', { name: /export record/i }));
+
+    await waitFor(() => expect(api.exportPatientRecord).toHaveBeenCalledWith('pat-1'));
+  });
+
+  it('says so when the export failed rather than leaving the button looking done', async () => {
+    // An export that saved nothing and one the browser filed somewhere unexpected look
+    // identical from the button, and the clinician may be relying on the file existing.
+    vi.mocked(api.exportPatientRecord).mockRejectedValue(new ApiError(500, 'export_error', 'boom'));
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText('Asha Reddy');
+
+    await userEvent.click(screen.getByRole('button', { name: /export record/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not export this record/i);
   });
 });

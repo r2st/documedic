@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.dependencies import limiter
 from app.main import create_app
 from app.models import Base
+from app.services.auth_service import reset_sweep_schedule
 from app.services.guideline_service import reset_corpus_cache
 
 
@@ -42,6 +43,19 @@ def _reset_rate_limiter():
     limiter.reset()
     yield
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_session_sweep_schedule():
+    """Forget when the session retention sweep last ran.
+
+    ``auth_service._last_session_sweep`` is process-global and deliberately so — it is an
+    hourly scheduling hint, not a lock. Left alone across tests, the first sign-in anywhere in
+    the suite claims the hour and every later test that expects a sweep silently gets none.
+    """
+    reset_sweep_schedule()
+    yield
+    reset_sweep_schedule()
 
 
 @pytest.fixture(autouse=True)

@@ -30,6 +30,12 @@ _PUBLIC_PATHS = {
     "/api/v1/auth/login",
     "/api/v1/auth/refresh",
     "/api/v1/auth/logout",
+    # A clinician who has lost their password cannot hold a bearer token, so both halves of the
+    # reset flow are necessarily open. Neither can be used to learn anything about an account:
+    # the request endpoint's response is identical for an address with one and without, and the
+    # confirm endpoint's failures are identical for all four ways to fail.
+    "/api/v1/auth/password-reset/request",
+    "/api/v1/auth/password-reset/confirm",
     # SSE: EventSource cannot send headers, so this authenticates from a bearer header *or* a
     # session-bound ?token=. That is hand-rolled inside the handler rather than a dependency,
     # which is why the scheme does not appear on it.

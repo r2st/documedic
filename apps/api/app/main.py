@@ -308,6 +308,7 @@ def create_app() -> FastAPI:
     ):
         app.include_router(module.router, prefix=API_PREFIX)
     app.include_router(records.labs_router, prefix=API_PREFIX)
+    app.include_router(records.export_router, prefix=API_PREFIX)
 
     return app
 

@@ -85,6 +85,7 @@ _BUCKETS: dict[str, tuple[str, float]] = {
     "document_upload": ("rate_limit_uploads_per_minute", _SECONDS_PER_MINUTE),
     "guideline_search": ("rate_limit_searches_per_minute", _SECONDS_PER_MINUTE),
     "signup": ("rate_limit_signups_per_hour", _SECONDS_PER_HOUR),
+    "password_reset": ("rate_limit_password_resets_per_hour", _SECONDS_PER_HOUR),
     "validation_run": ("rate_limit_validation_runs_per_hour", _SECONDS_PER_HOUR),
 }
 

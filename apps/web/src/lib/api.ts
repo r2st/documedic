@@ -363,6 +363,57 @@ export const api = {
   samdDossierUrl: (format: 'json' | 'markdown' = 'markdown') =>
     `${PREFIX}/regulatory/samd-dossier?format=${format}`,
 
+  /**
+   * Download the patient's whole record as a FHIR R4 bundle.
+   *
+   * The bundle may carry an `OperationOutcome` saying it was truncated — that warning lives
+   * inside the file rather than only on the response, because the file is what gets kept.
+   */
+  async exportPatientRecord(patientId: string): Promise<void> {
+    const headers: Record<string, string> = {};
+    const access = tokenStore.access;
+    if (access) headers['Authorization'] = `Bearer ${access}`;
+
+    const resp = await fetch(`${PREFIX}/patients/${patientId}/export`, { headers });
+
+    if (resp.status === 401 && tokenStore.refresh) {
+      const refreshed = await tryRefresh();
+      if (refreshed) return this.exportPatientRecord(patientId);
+    }
+
+    if (!resp.ok) {
+      throw new ApiError(resp.status, 'export_error', resp.statusText);
+    }
+
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `aether-record-${patientId}.fhir.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
+  changePassword: (body: {
+    current_password: string;
+    new_password: string;
+    keep_current_refresh_token?: string | null;
+  }) => request<{ message: string }>(`/auth/password`, { method: 'POST', body: JSON.stringify(body) }),
+
+  requestPasswordReset: (email: string) =>
+    request<{ message: string; reset_token: string | null }>(`/auth/password-reset/request`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  confirmPasswordReset: (body: { token: string; new_password: string }) =>
+    request<{ message: string }>(`/auth/password-reset/confirm`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   async downloadSamdDossier(format: 'json' | 'markdown' = 'markdown'): Promise<void> {
     const headers: Record<string, string> = {};
     const access = tokenStore.access;

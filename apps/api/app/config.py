@@ -131,6 +131,59 @@ class Settings(BaseSettings):
     # carries a narrowly scoped, very short-lived token instead of the real access token.
     stream_token_ttl_seconds: int = 60
 
+    # --- Record export ---
+    # Per-section ceiling on a FHIR export. Unlike a chart read this is meant to be the whole
+    # record, so the ceiling is far above any real patient and exists only to bound the worst
+    # case — and when it is hit the bundle says so in an OperationOutcome rather than coming
+    # back quietly short. See app.services.export_service.
+    export_max_rows_per_section: int = 10_000
+
+    # --- Password reset ---
+    # A reset token is a bearer capability over one clinician's account, so its life is
+    # measured in minutes rather than hours: long enough to walk from the request to the inbox
+    # or the phone call that relays it, short enough that a token left in a log or a chat
+    # window is dead before anyone finds it. Single-use as well as time-limited, and requesting
+    # a new one invalidates the outstanding one.
+    password_reset_token_ttl_minutes: int = 30
+    # Per-account ceiling, counted from the audit trail like the login lockout, so it survives a
+    # restart and cannot be walked around by moving to another address. Exceeding it is silent:
+    # the endpoint's response never varies, or the ceiling itself would answer "does this email
+    # have an account?".
+    password_reset_max_requests_per_hour: int = 5
+    # How the raw token reaches the person who asked for it. This deployment has no mail
+    # provider, and inventing one is not this module's job — so the channel is an explicit
+    # choice rather than a silent default:
+    #
+    #   "log"      — the default. Written to the application log for an operator to relay out
+    #                of band. The token is a short-lived single-use secret sitting in a log an
+    #                operator can read; that is a real cost, taken deliberately as the interim
+    #                posture until a delivery integration exists, and it is why the TTL above
+    #                is short.
+    #   "response" — returned in the request's own response body, which makes the whole flow
+    #                usable and testable with nothing but the API. It also means anyone who can
+    #                POST an email address can take that account over, so it is opt-in rather
+    #                than the default and is REFUSED in production (see
+    #                production_config_errors).
+    password_reset_delivery: Literal["response", "log"] = "log"
+
+    # --- Session retention ---
+    # How long a dead session row (revoked, or past its absolute expiry) is kept before the
+    # retention sweep deletes it. These rows are an access record, not a clinical record — the
+    # clinical trail is the append-only audit log, which is never pruned and carries every
+    # sign-in, refresh, logout and revocation independently. Keeping the token hashes
+    # themselves forever serves nothing and is data minimisation the DPDP Act asks for.
+    #
+    # The window exists so "which devices was this account signed in on last week?" is still
+    # answerable from the session table during an incident, rather than only from the audit log.
+    session_retention_days: int = 30
+    # Rows removed per sweep. The sweep runs opportunistically on the auth path, so it must
+    # cost a bounded amount of work rather than however much has accumulated: a deployment that
+    # has never swept simply takes several passes to catch up.
+    session_sweep_batch_size: int = 500
+    # Minimum interval between sweeps, per process. Without it every refresh would issue a
+    # delete.
+    session_sweep_interval_minutes: int = 60
+
     # --- Reverse proxy ---
     # How many reverse proxies this deployment operates in front of the API. 0 means uvicorn
     # is exposed directly and ``X-Forwarded-For`` is ignored entirely (the safe default: the
@@ -179,6 +232,12 @@ class Settings(BaseSettings):
     # above are bypassable by signing up repeatedly; DEMO_MODE removes the credential gate but
     # not this one.
     rate_limit_signups_per_hour: int = 10
+    # Password-reset requests, keyed by client address. The per-account ceiling
+    # (password_reset_max_requests_per_hour) is the one that stops a clinician's inbox being
+    # flooded; this one stops an unauthenticated caller walking the account list from a single
+    # source. Set generously, because a shared hospital egress address carries everyone's
+    # genuine resets — the same reasoning as login_max_failed_attempts_per_ip.
+    rate_limit_password_resets_per_hour: int = 60
     # The Phase 4 validation harness, and by far the most expensive route in the system: one
     # request replays every gold-standard vignette, and each vignette costs a full eight-agent
     # panel plus its intake rounds. A single POST therefore spends several times what the
@@ -328,6 +387,13 @@ def production_config_errors(cfg: "Settings") -> list[str]:
                 f"({DEFAULT_MINIO_CREDENTIAL!r}) — anyone who can reach the object store can "
                 "read every uploaded prescription and lab report."
             )
+    if cfg.password_reset_delivery == "response":
+        problems.append(
+            "PASSWORD_RESET_DELIVERY=response hands the reset token straight back to whoever "
+            "POSTed the email address, so anyone who knows a clinician's address can take "
+            "their account. Set it to `log` (an operator relays the token out of band) until "
+            "a delivery integration exists."
+        )
     problems.extend(_llm_demo_fallback_errors(cfg))
     problems.extend(_database_url_errors(cfg))
     return problems

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -18,12 +19,14 @@ from app.schemas.record import (
     UnreadableLabItem,
 )
 from app.services.audit_service import AuditService
+from app.services.export_service import PatientExportService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
 from app.services.record_service import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, RecordService
 
 router = APIRouter(prefix="/patients/{patient_id}/record", tags=["records"])
 labs_router = APIRouter(prefix="/patients/{patient_id}/labs", tags=["records"])
+export_router = APIRouter(prefix="/patients/{patient_id}/export", tags=["records"])
 
 
 @router.get(
@@ -77,6 +80,55 @@ async def get_record(
     )
     await db.commit()
     return record
+
+
+@export_router.get(
+    "",
+    summary="The patient's whole record as a FHIR R4 Bundle",
+    responses=PATIENT_ERRORS,
+    response_class=JSONResponse,
+)
+async def export_record(
+    patient_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """Everything in the patient graph, as a FHIR R4 `collection` Bundle
+    (`application/fhir+json`): demographics, allergies, conditions, medications, lab results
+    and computed markers.
+
+    **Not paged.** This is the export, not the chart view — if a section exceeds the per-section
+    ceiling the bundle carries an `OperationOutcome` saying which one and that the file is not
+    the whole record. A short export that does not admit it is worse than no export.
+
+    Every resource carries whether a clinician confirmed it and which uploaded document it came
+    from, so a receiving system can tell a confirmed entry from an unreviewed extraction.
+
+    What is **not** here: differential diagnoses, reasoning sessions and agent output. Those are
+    this system's opinions about the patient rather than the patient's record, and a suggestion
+    that arrives elsewhere as a plain FHIR `Condition` is indistinguishable from a diagnosis a
+    clinician made.
+
+    Audited as `patient_record_exported` — the widest disclosure this API performs.
+    """
+    patient = await PatientService(db).get(account.id, patient_id)
+    bundle = await PatientExportService(db).build_bundle(patient)
+    await AuditService(db).record(
+        action="patient_record_exported",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        payload={"format": "fhir-r4", "resources": len(bundle["entry"])},
+    )
+    await db.commit()
+    return JSONResponse(
+        content=bundle,
+        media_type="application/fhir+json",
+        headers={
+            "Content-Disposition": (f'attachment; filename="aether-record-{patient_id}.fhir.json"')
+        },
+    )
 
 
 @labs_router.get(

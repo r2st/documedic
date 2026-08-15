@@ -50,6 +50,13 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/auth/me"): DETERMINISTIC,
     ("GET", "/api/v1/auth/sessions"): DETERMINISTIC,
     ("DELETE", "/api/v1/auth/sessions/{session_id}"): DETERMINISTIC,
+    ("POST", "/api/v1/auth/password"): DETERMINISTIC,
+    # Unauthenticated, so there is no account to key a ceiling on — capped per address instead,
+    # for the same reason signup is: without it an unauthenticated caller can walk an address
+    # list. The per-*account* ceiling that stops one clinician's inbox being flooded is
+    # password_reset_max_requests_per_hour, enforced in the service.
+    ("POST", "/api/v1/auth/password-reset/request"): BOUNDED_FOR_OTHER_REASONS,
+    ("POST", "/api/v1/auth/password-reset/confirm"): DETERMINISTIC,
     # --- patients and chart reads. Never metered; a clinician must always be able to read.
     ("POST", "/api/v1/patients"): DETERMINISTIC,
     ("GET", "/api/v1/patients"): DETERMINISTIC,
@@ -58,6 +65,9 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("PATCH", "/api/v1/patients/{patient_id}"): DETERMINISTIC,
     ("DELETE", "/api/v1/patients/{patient_id}"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/record"): DETERMINISTIC,
+    # The FHIR export reads the graph and nothing else — no LLM, so it works offline like every
+    # other chart read, and it is not metered for the same reason they are not.
+    ("GET", "/api/v1/patients/{patient_id}/export"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/audit"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/audit/verify"): DETERMINISTIC,
     # --- documents. Upload runs multimodal extraction over the scan; everything else is

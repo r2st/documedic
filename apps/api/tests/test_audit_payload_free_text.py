@@ -475,6 +475,21 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "auth_session_idle_expired": {"ip_address", "session_id"},
     "auth_logout": set(),
     "auth_logout_all": {"revoked_count"},
+    # --- password change and reset. No token, raw or hashed, and no new password: the trail
+    # records that a credential moved, never anything that helps move it again.
+    "auth_password_changed": {"revoked_sessions"},
+    # Empty on purpose: the action name is the whole fact, and there is nothing about a wrong
+    # password that can be recorded without recording something about the password.
+    "auth_password_change_failed": set(),
+    "auth_password_reset_requested": {"ip_address", "superseded_tokens"},
+    "auth_password_reset_throttled": {"ip_address", "requests_in_window"},
+    # ``token_id`` is the row's own primary key, not the token — the token exists only as a
+    # SHA-256 hash and never leaves ``password_reset_tokens`` even in that form.
+    "auth_password_reset_completed": {"token_id", "revoked_sessions"},
+    "auth_password_reset_token_reused": {"token_id"},
+    # Retention sweep. Counts and configuration, no identifiers: the rows it removed are gone,
+    # and naming them would recreate in this table the record the sweep exists to retire.
+    "auth_sessions_purged": {"removed", "retention_days"},
     # --- patient. ``changed_fields`` is field *names*; the new values are the PII.
     "patient_created": {"consent_given"},
     # consent_given is the one field *value* this payload carries. It is the opposite of PII --
@@ -484,6 +499,10 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "patient_deleted": {"soft_delete"},
     "patient_viewed": set(),
     "patient_record_viewed": set(),
+    # ``format`` is the interchange format, ``resources`` a count. Neither is patient data, and
+    # together they are what makes a disclosure entry reviewable: which shape left, and how
+    # much of the chart was in it.
+    "patient_record_exported": {"format", "resources"},
     # --- documents. No file_name anywhere: uploads are named after the patient.
     "document_uploaded": {"file_type", "sha256"},
     "document_list_viewed": {"document_count"},

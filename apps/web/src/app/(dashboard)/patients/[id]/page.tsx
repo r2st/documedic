@@ -98,6 +98,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [chainValid, setChainValid] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -138,6 +139,24 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
   // loading state, which unmounts every boundary and remounts it clean. So a retry from any
   // one of them recovers all of them, and there is no per-section variant to keep in step.
   const reloadChart = () => void load();
+
+  // Export failures surface in the same alert region the chart's load errors use, rather than
+  // silently: an export that did nothing and an export the browser saved elsewhere look
+  // identical from the button, and the clinician may be relying on the file existing.
+  const exportRecord = async () => {
+    setExporting(true);
+    try {
+      await api.exportPatientRecord(id);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `Could not export this record: ${err.message}`
+          : 'Could not export this record. Check the connection and try again.',
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
 
   if (error)
     return (
@@ -287,6 +306,32 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
               Drug safety
             </Button>
           </Link>
+          {/* Not a <Link>: the file arrives from an authenticated fetch, so it cannot be a
+              plain href. The busy label matters here because a long chart takes a moment and
+              a silent button invites a second click, which is a second audited disclosure. */}
+          <Button
+            className="w-full sm:w-auto"
+            variant="secondary"
+            size="sm"
+            disabled={exporting}
+            onClick={exportRecord}
+          >
+            <svg
+              aria-hidden="true"
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
+              />
+            </svg>
+            {exporting ? 'Exporting…' : 'Export record (FHIR)'}
+          </Button>
           <Link href={`/patients/${id}/encounter`} className="col-span-2 w-full sm:w-auto">
             <Button className="w-full sm:w-auto" size="sm">
               <svg

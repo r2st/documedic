@@ -103,6 +103,19 @@ class SessionExpiredError(TokenError):
     """
 
 
+class InvalidResetTokenError(AuthError):
+    """This password-reset link is no longer valid. Request a new one from the sign-in screen.
+
+    Deliberately one message for all four ways a reset can fail — unknown token, expired,
+    already spent, superseded by a later request. Distinguishing them tells a holder of a
+    token they should not have which of those it is, and "already used" in particular confirms
+    that the address is a real account someone is actively resetting. The ``detail`` carries
+    the distinction to the log, where it belongs.
+    """
+
+    code = "invalid_reset_token"
+
+
 class ForbiddenError(AetherError):
     """This account does not have access to that record."""
 

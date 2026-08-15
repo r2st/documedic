@@ -28,6 +28,20 @@ AUDIT_ACTIONS = (
     "auth_refresh_token_reuse_detected",
     "auth_session_revoked",
     "auth_session_idle_expired",
+    "auth_password_changed",
+    "auth_password_change_failed",
+    # The reset flow. All four are recorded even though the endpoint tells the caller nothing:
+    # the response is deliberately identical whether the address exists, is over its ceiling, or
+    # got a token, so the trail is the *only* place a burst of reset attempts against one
+    # clinician is visible. ``auth_password_reset_token_reused`` is the sharpest of them — the
+    # legitimate holder has no reason to present a spent token twice.
+    "auth_password_reset_requested",
+    "auth_password_reset_throttled",
+    "auth_password_reset_completed",
+    "auth_password_reset_token_reused",
+    # Retention housekeeping. Dead session rows are deleted; this is what makes their removal
+    # accountable, since the rows themselves can no longer say they existed.
+    "auth_sessions_purged",
     "critical_lab_value_detected",
     "critical_lab_value_not_evaluated",
     "patient_created",
@@ -61,6 +75,8 @@ AUDIT_ACTIONS = (
     # records one of these, so the trail answers "who saw this" and not only "who changed it".
     "patient_viewed",
     "patient_record_viewed",
+    # The widest disclosure this API performs: the whole chart, in one file, leaving the system.
+    "patient_record_exported",
     "document_downloaded",
     "document_list_viewed",
     "extraction_viewed",

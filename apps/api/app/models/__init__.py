@@ -17,12 +17,13 @@ from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 from app.models.reasoning_session import ReasoningSession
-from app.models.user import Account, Session
+from app.models.user import Account, PasswordResetToken, Session
 from app.models.validation import SafetyReport, ValidationRun
 
 __all__ = [
     "Base",
     "Account",
+    "PasswordResetToken",
     "Session",
     "Patient",
     "Document",

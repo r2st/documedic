@@ -39,7 +39,11 @@ class Session(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         GUID(), ForeignKey("accounts.id"), nullable=False, index=True
     )
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Indexed for AuthService.purge_expired_sessions, whose whole job is to find rows past
+    # this timestamp in a table that grows by one row per sign-in *and* per refresh.
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     ip_address: Mapped[str | None] = mapped_column(INETType(), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_revoked: Mapped[bool] = mapped_column(
@@ -60,3 +64,29 @@ class Session(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     account: Mapped[Account] = relationship(back_populates="sessions")
+
+
+class PasswordResetToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A single-use, time-limited capability to set one account's password.
+
+    Stored as a SHA-256 hash for the same reason refresh tokens are: a reader of this table
+    must not come away able to sign in. The raw value exists only in the response (or log
+    line) that delivered it and in the hands of whoever received it.
+
+    ``used_at`` rather than a delete, so a replay is distinguishable from an expiry in the
+    audit trail — a second presentation of a spent reset token is a signal, not a retry.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Superseded by a later request for the same account, rather than used. Kept apart from
+    # ``used_at`` so "someone requested three resets in a row" and "someone spent one" read
+    # differently in the trail.
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    requested_ip: Mapped[str | None] = mapped_column(INETType(), nullable=True)

@@ -436,3 +436,49 @@ describe('downloadSamdDossier', () => {
     expect(click).not.toHaveBeenCalled();
   });
 });
+
+describe('exportPatientRecord', () => {
+  let click: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal(
+      'URL',
+      Object.assign(globalThis.URL, {
+        createObjectURL: vi.fn(() => 'blob:record'),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    click = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(click);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('downloads the FHIR bundle under a name that says which patient it is', async () => {
+    seedTokens('a1');
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response('{"resourceType":"Bundle"}', { status: 200 }),
+    );
+
+    await api.exportPatientRecord('pat-1');
+
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toBe(`${PREFIX}/patients/pat-1/export`);
+    expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer a1');
+    expect(click).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:record');
+    expect(document.querySelectorAll('a[download]')).toHaveLength(0);
+  });
+
+  it('raises rather than saving an error page as the patient record', async () => {
+    seedTokens('a1');
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('nope', { status: 500 }));
+
+    await expect(api.exportPatientRecord('pat-1')).rejects.toBeInstanceOf(ApiError);
+    expect(click).not.toHaveBeenCalled();
+  });
+});

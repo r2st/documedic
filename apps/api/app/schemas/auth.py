@@ -45,6 +45,33 @@ class LogoutAllRequest(BaseModel):
     keep_current_refresh_token: str | None = None
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    # The caller's own refresh token, so the device doing the change is not signed out along
+    # with every other one. Omit it to be signed out everywhere including here.
+    keep_current_refresh_token: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetResponse(BaseModel):
+    """Fixed-shape acknowledgement. ``message`` never varies with whether the address exists."""
+
+    message: str
+    # Present only when PASSWORD_RESET_DELIVERY=response, which production refuses. Null in
+    # every other case, including for an address that has no account — a client cannot read
+    # this field to enumerate accounts.
+    reset_token: str | None = None
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
 class SessionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
