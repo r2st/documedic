@@ -90,6 +90,7 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   hepatic_severity: 'Liver function',
   hepatotoxic_burden: 'Hepatotoxic burden',
   renal_dose: 'Renal dosing',
+  stale_medication: 'Medication list age',
   unevaluated_allergy: 'Not checked — allergy',
   unevaluated_condition: 'Not checked — condition',
   unevaluated_medication: 'Not checked — medication',

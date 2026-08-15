@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import type { AuditEntry, LongitudinalRecord, Patient } from '@/lib/types';
+import { medicationDocumentedLabel } from '@/lib/medications';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Timeline } from '@/components/patient/Timeline';
 import { Button, Card, LoadingBlock, Skeleton, SkeletonCards } from '@aether/ui';
@@ -410,6 +411,14 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
               // than filtered out: "stopped in March" is what makes the record longitudinal, and
               // a silently shortened list is how a clinician concludes a drug was never given.
               badge={(row) => (row.is_current === false ? 'Stopped' : null)}
+              // Nothing in this system ages a medication out, so a 2019 prescription is still on
+              // this list in 2026 — and the list showed name, dose and frequency with no date at
+              // all, which made an old line and this morning's line indistinguishable. The
+              // clinical caution is raised on the Safety screen; this is the fact behind it.
+              meta={(row) => {
+                const { text, stale } = medicationDocumentedLabel(row);
+                return { text, caution: stale };
+              }}
             />
             <RecordSection
               title="Conditions"
@@ -511,6 +520,7 @@ function RecordSection({
   fields,
   empty,
   badge,
+  meta,
 }: {
   title: string;
   icon?: JSX.Element;
@@ -519,6 +529,8 @@ function RecordSection({
   empty: string;
   /** Optional short qualifier for a row — returns null for rows that need none. */
   badge?: (row: Record<string, unknown>) => string | null;
+  /** Optional second line under a row: when it was documented, and whether that is a caution. */
+  meta?: (row: Record<string, unknown>) => { text: string; caution: boolean } | null;
 }) {
   return (
     <Card>
@@ -540,6 +552,7 @@ function RecordSection({
         <ul className="space-y-1.5">
           {rows.map((row, i) => {
             const label = badge?.(row) ?? null;
+            const line = meta?.(row) ?? null;
             return (
               <li
                 key={i}
@@ -547,11 +560,25 @@ function RecordSection({
                   label ? 'bg-slate-50/60 text-slate-500' : 'bg-slate-50 text-slate-700'
                 }`}
               >
-                <span>
-                  {fields
-                    .map((f) => row[f])
-                    .filter((v) => v !== null && v !== undefined && v !== '')
-                    .join(' · ')}
+                <span className="min-w-0">
+                  <span className="block">
+                    {fields
+                      .map((f) => row[f])
+                      .filter((v) => v !== null && v !== undefined && v !== '')
+                      .join(' · ')}
+                  </span>
+                  {/* Under the drug, not beside it: it qualifies the whole row, and a clinician
+                      reading down a medication list should meet the name first. Amber carries no
+                      meaning on its own — the phrase says how long ago in words. */}
+                  {line && (
+                    <span
+                      className={`block text-xs ${
+                        line.caution ? 'text-amber-700' : 'text-slate-400'
+                      }`}
+                    >
+                      {line.text}
+                    </span>
+                  )}
                 </span>
                 {/* Text, not colour alone: the distinction between a drug the patient is on and
                     one they were taken off cannot rest on a shade of grey. */}

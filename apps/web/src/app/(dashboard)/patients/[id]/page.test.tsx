@@ -203,6 +203,46 @@ describe('PatientDetailPage', () => {
     );
   });
 
+  it('says when each medication was documented, and marks the ones that are years old', async () => {
+    // Nothing in this system ages a medication out — `is_current` is written at the merge and
+    // only a `stop` line clears it — so a 2019 prescription is still on this list. The list
+    // showed name, dose and frequency and no date at all, which made that row and this
+    // morning's row identical on screen.
+    mockAll({
+      record: record({
+        medications: [
+          {
+            id: 'm1',
+            generic_name: 'Metformin',
+            dose: '500mg',
+            is_current: true,
+            event_date: new Date().toISOString().slice(0, 10),
+          },
+          {
+            id: 'm2',
+            generic_name: 'Amoxicillin',
+            dose: '500mg',
+            is_current: true,
+            event_date: '2019-06-01',
+          },
+          { id: 'm3', generic_name: 'Atenolol', dose: '25mg', is_current: true },
+        ],
+      }),
+    });
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByRole('heading', { name: 'Asha Reddy' });
+
+    const meds = section('Medications');
+    // The one that matters: charted before the pandemic, still listed as current.
+    expect(within(meds).getByText(/Documented 1 Jun 2019 · over \d+ years ago/)).toBeInTheDocument();
+    // "No date" and "today" must not look the same either.
+    expect(within(meds).getByText('No date on the prescription')).toBeInTheDocument();
+    // A fresh row gets the date and no caution — the phrasing carries the warning, not a colour.
+    expect(
+      within(meds).getByText('Metformin · 500mg').closest('li'),
+    ).not.toHaveTextContent('ago');
+  });
+
   it('confirms the audit hash chain when the backend verifies it', async () => {
     mockAll();
     render(<PatientDetailPage params={{ id: 'pat-1' }} />);

@@ -19,6 +19,7 @@ from app.core.clinical import age_from_dob, serum_creatinine_mg_dl
 from app.core.dates import is_plausible_clinical_date
 from app.core.lab_safety import canonical_lab_value
 from app.core.safety import (
+    ChartedMedication,
     ContraindicationRule,
     DrugRef,
     HepaticPanel,
@@ -28,6 +29,7 @@ from app.core.safety import (
     SafetyContext,
     SafetyFlag,
     check_hepatic_severity,
+    check_stale_medications,
     check_unevaluated_allergies,
     check_unevaluated_conditions,
     check_unevaluated_medications,
@@ -100,6 +102,54 @@ def _charted_names(med: MedicationEvent) -> list[str]:
     return [
         name.strip() for name in (med.generic_name, med.brand_name_raw) if name and name.strip()
     ]
+
+
+def _charted_current_meds(med_rows: list[MedicationEvent]) -> list[ChartedMedication]:
+    """Every row the chart calls current, with how long ago it was documented.
+
+    The clock lives here rather than in ``app.core.safety`` so that module stays a pure function
+    of its arguments — the same split ``age_years`` takes.
+
+    ``event_date`` first: the date the prescription itself carries is the only thing on the row
+    that says when this drug was last *prescribed*, and it is what makes a 2019 course visible
+    as one.
+
+    ``created_at`` when there is no usable ``event_date``, marked as the weaker source it is.
+    Most of what this product ingests is handwritten, and a date OCR could not read is the
+    ordinary case rather than the broken one — but the row still knows when it entered the
+    record, and a scan approved this morning is the freshest information about this patient
+    that exists. Reporting it instead as undated would have put a staleness note on nearly
+    every chart, which is how a flag stops being read. It costs the case of an old prescription
+    photographed today, which nothing in the record can detect anyway: no column knows a date
+    the page did not carry.
+
+    A date the record could not have produced (an OCR'd "2126", a prescription written next
+    year) falls through to the same fallback, for the reason ``_age_years`` refuses an
+    implausible date of birth: a confident number derived from a wrong one is worse than using
+    the one the record is sure of. A same-day date gives 0, which is fresh, not falsy — hence
+    the explicit ``None`` checks downstream rather than a truth test.
+    """
+    today = datetime.now(UTC).date()
+    out: list[ChartedMedication] = []
+    for med in med_rows:
+        names = _charted_names(med)
+        documented_on = med.event_date
+        from_prescription = documented_on is not None and is_plausible_clinical_date(documented_on)
+        if not from_prescription:
+            # `created_at` is server-defaulted and so is always set on a persisted row; the
+            # guard is for a row still pending in this session, which has no timestamp yet.
+            documented_on = med.created_at.date() if med.created_at is not None else None
+        out.append(
+            ChartedMedication(
+                name=names[0] if names else _UNNAMED_MEDICATION,
+                documented_on=documented_on,
+                days_since_documented=(
+                    max((today - documented_on).days, 0) if documented_on is not None else None
+                ),
+                from_prescription=from_prescription,
+            )
+        )
+    return out
 
 
 def _drug_ref(row: DrugVocabulary | ResolvedDrug) -> DrugRef:
@@ -209,6 +259,7 @@ class SafetyService:
             self._facts[patient_id] = SafetyContext(
                 current_meds=current_meds,
                 unresolved_current_meds=unresolved,
+                charted_current_meds=_charted_current_meds(med_rows),
                 allergies=allergies,
                 unresolved_allergies=unidentified_allergies,
                 conditions=await self._conditions(patient_id),
@@ -675,6 +726,7 @@ class SafetyService:
             + check_unevaluated_medications(ctx)
             + check_unevaluated_allergies(ctx)
             + check_unevaluated_conditions(ctx)
+            + check_stale_medications(ctx)
             + check_hepatic_severity(ctx)
         )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
@@ -699,6 +751,7 @@ class SafetyService:
             check_unevaluated_medications(facts)
             + check_unevaluated_allergies(facts)
             + check_unevaluated_conditions(facts)
+            + check_stale_medications(facts)
             + check_hepatic_severity(facts)
         )
 

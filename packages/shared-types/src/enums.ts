@@ -23,7 +23,11 @@ export type SafetyCheckType =
   | 'unevaluated_allergy'
   | 'hepatic_severity'
   | 'hepatotoxic_burden'
-  | 'unevaluated_condition';
+  | 'unevaluated_condition'
+  // Not a conflict either: the chart's medication list is old. Every rule still ran against it
+  // as active therapy — see app.core.safety.check_stale_medications — so an absence of other
+  // flags reflects how current the list is, not only what is on it.
+  | 'stale_medication';
 
 export type ReasoningStatus =
   | 'created'

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from functools import lru_cache
 from typing import Literal
 
@@ -71,6 +72,7 @@ CheckType = Literal[
     "bleeding_burden",
     "geriatric_caution",
     "unevaluated_condition",
+    "stale_medication",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -266,6 +268,34 @@ class PatientCondition:
 
 
 @dataclass(frozen=True)
+class ChartedMedication:
+    """A current medication, and when the chart last has anything to say about it.
+
+    Carried alongside ``SafetyContext.current_meds`` rather than folded into it because the two
+    lists answer different questions and do not have the same membership. ``current_meds`` is
+    the *evaluable* drugs — a row that resolved to nothing is absent from it — whereas this is
+    every row the chart calls current, resolved or not, because "how old is this medication
+    list" is a question about the list a clinician is looking at.
+
+    ``days_since_documented`` is computed by the service against today's date rather than in
+    this module, for the same reason ``age_years`` is: every function here is a pure function of
+    its arguments, and reading a clock inside one would make its output depend on when it ran.
+    ``None`` means the row carries no date at all — not that it is fresh.
+
+    ``from_prescription`` distinguishes the two dates the record can offer. A prescription that
+    carries a readable date is evidence about the *therapy*; a row dated only by when someone
+    uploaded the scan is evidence about the *record*. Both are worth reporting when they are old
+    — a chart nobody has touched in two years is stale whichever column says so — but they are
+    not the same claim, so the details say which one this was.
+    """
+
+    name: str
+    documented_on: date | None = None
+    days_since_documented: int | None = None
+    from_prescription: bool = True
+
+
+@dataclass(frozen=True)
 class InteractionRule:
     drug_a_reference_id: str
     drug_b_reference_id: str
@@ -344,6 +374,10 @@ class SafetyContext:
     # are absent from ``current_meds`` and from every rule evaluated against it. See
     # ``check_unevaluated_medications``.
     unresolved_current_meds: list[str] = field(default_factory=list)
+    # Every row the chart calls current — resolved or not — with the date it was documented on.
+    # Nothing in the engine ages a medication out, so this is what lets it say how old the list
+    # it just evaluated is. See ``check_stale_medications``.
+    charted_current_meds: list[ChartedMedication] = field(default_factory=list)
     # Names of documented *drug* allergies the vocabulary could not identify, so the entry
     # carries no reference id and no drug class. See ``check_unevaluated_allergies``.
     unresolved_allergies: list[str] = field(default_factory=list)
@@ -2013,6 +2047,134 @@ def check_unevaluated_conditions(ctx: SafetyContext) -> list[SafetyFlag]:
                 "unevaluated_conditions": listed_names,
                 "unevaluated_condition_count": count,
                 "evaluated": False,
+            },
+        )
+    ]
+
+
+# How long a medication can go undocumented before the chart stops being evidence that the
+# patient is still on it. Six months is chosen against this market's prescribing: a repeat
+# prescription here is written for one to three months, so an ordinary refill cycle never trips
+# it, while a course charted in a different year cannot pass as current therapy unnoticed.
+#
+# A threshold, not an expiry. Nothing below removes anything from the medication list — see the
+# function.
+_MEDICATION_STALE_AFTER_DAYS = 180
+
+
+def _stale_phrase(days: int) -> str:
+    """ "7 months" / "3 years" — how long ago, at the precision a clinician would say it."""
+    if days >= 730:
+        return f"over {days // 365} years ago"
+    if days >= 365:
+        return "over a year ago"
+    return f"about {round(days / 30)} months ago"
+
+
+def check_stale_medications(ctx: SafetyContext) -> list[SafetyFlag]:
+    """Say how old the medication list is, when the engine has just treated all of it as live.
+
+    Nothing in this system ages a medication out. ``is_current`` is written once, at the merge
+    that created the row, and only a later ``stop`` line ever clears it — so a five-day
+    antibiotic course lifted off a 2019 prescription is still ``is_current`` in 2026, still in
+    ``current_meds``, and still interacting with everything prescribed since. Every check above
+    has just run against it as though the patient took a dose this morning.
+
+    Which of the two possible responses to that is safe is not a close call, and it is the
+    opposite of the intuitive one. *Dropping* aged rows from the evaluation would silently
+    shrink the list every hard block is computed from: an anticoagulant last charted eight
+    months ago would stop conflicting with a new NSAID, and the screen would go quiet — the
+    fail-open shape this file has been corrected for repeatedly. Patients on long-term therapy
+    in this setting routinely go a year between documented prescriptions, so "not documented
+    recently" is not evidence of "not taking".
+
+    So the rows stay, every rule still runs against them, and what is added is the sentence the
+    clinician needs in order to read the result correctly: this evaluation assumed a list that
+    was last updated a long time ago. A stale list is not a wrong list. It is a list whose
+    silence about a drug means less than it appears to.
+
+    Two ways a row can be uninformative about its own age, reported together because they are
+    the same problem to the clinician reading the chart:
+
+    * documented longer ago than ``_MEDICATION_STALE_AFTER_DAYS``, by whichever date the record
+      has for it — the prescription's own, or failing that the day the row was added, and
+    * carrying no date in either column, which nothing on the supported write path produces
+      but which must not be silently read as "recent" if it ever does.
+
+    A handwritten prescription whose date OCR could not read is emphatically *not* the second
+    case: the row still knows when it entered the record, and a scan approved this morning is
+    the freshest information about this patient that exists. Reporting it as undated would put
+    an amber box on almost every chart this product ingests, which is how a flag stops being
+    read.
+
+    A warning, never a block. The chart being old is not a reason to refuse a prescription, and
+    a chart old enough to say so is the commonest chart this product will ever see — blocking on
+    it would be an alert nobody could clear and everybody would learn to click through.
+    """
+    stale = sorted(
+        (
+            med
+            for med in ctx.charted_current_meds
+            if med.days_since_documented is not None
+            and med.days_since_documented >= _MEDICATION_STALE_AFTER_DAYS
+        ),
+        key=lambda med: (-(med.days_since_documented or 0), med.name),
+    )
+    undated = sorted(
+        {med.name for med in ctx.charted_current_meds if med.days_since_documented is None}
+    )
+    if not stale and not undated:
+        return []
+
+    clauses: list[str] = []
+    if stale:
+        oldest = stale[0]
+        plural = len(stale) != 1
+        clauses.append(
+            f"{len(stale)} of the medications this chart lists as current "
+            f"{'were' if plural else 'was'} last documented more than "
+            f"{_MEDICATION_STALE_AFTER_DAYS // 30} months ago "
+            f"(oldest: “{oldest.name}”, {_stale_phrase(oldest.days_since_documented or 0)})"
+        )
+    if undated:
+        plural = len(undated) != 1
+        clauses.append(
+            f"{len(undated)} carr{'y' if plural else 'ies'} no date at all "
+            f"({', '.join(f'“{name}”' for name in undated)})"
+        )
+    return [
+        SafetyFlag(
+            check_type="stale_medication",
+            severity="warning",
+            is_hard_block=False,
+            summary=(
+                f"{' and '.join(clauses)}. Every check above was still run against "
+                f"{'them' if len(stale) + len(undated) != 1 else 'it'} as active therapy, which "
+                "is the safer assumption — but a medication list this old may not be what the "
+                "patient is taking now, so an absence of flags reflects the chart rather than "
+                "the patient. Confirming what is still being taken is what makes the rest of "
+                "this screen mean what it appears to mean."
+            ),
+            details={
+                "stale_after_days": _MEDICATION_STALE_AFTER_DAYS,
+                "stale_medications": [
+                    {
+                        "name": med.name,
+                        "documented_on": med.documented_on.isoformat()
+                        if med.documented_on
+                        else None,
+                        "days_since_documented": med.days_since_documented,
+                        # Whether that date is the prescription's own or the day the row was
+                        # added to the record. Both mean the information is old; only the first
+                        # means the *therapy* was last prescribed that long ago.
+                        "dated_from": "prescription" if med.from_prescription else "record_entry",
+                    }
+                    for med in stale
+                ],
+                "undated_medications": undated,
+                # True, unlike the ``unevaluated_*`` family: these rows were evaluated, by every
+                # rule, as active drugs. What is uncertain is the chart, not the check.
+                "evaluated": True,
             },
         )
     ]
