@@ -710,6 +710,19 @@ class GraphService:
         if low is not None and high is not None and low > high:
             low = high = None
 
+        # The interval as the document printed it — "< 200", "Up to 40", "0.4 - 4.0". Kept
+        # alongside the numbers rather than instead of them, and this column had no writer at
+        # all until now: the record export read it (``record_pdf``) and every row answered
+        # None, so a chart printed for a patient showed a blank where the report had a range.
+        #
+        # It also carries what the numbers cannot. A one-sided range reduces to a single bound
+        # and the other end is genuinely open, so "high = 200, low = None" and "no range at all"
+        # look identical on the row; the printed text is what distinguishes them. Where the two
+        # ends were dropped as inverted just above, this is deliberately kept — it is the
+        # evidence that a range *was* printed and could not be read, which is the thing a
+        # clinician needs in order to re-read the source.
+        printed_range = fields.get("reference_range_text")
+
         is_abnormal: bool | None = None
         direction: str | None = None
         if value_numeric is not None and (low is not None or high is not None):
@@ -745,6 +758,7 @@ class GraphService:
                 unit=fields.get("unit"),
                 reference_range_low=low,
                 reference_range_high=high,
+                reference_range_text=printed_range,
                 is_abnormal=is_abnormal,
                 abnormality_direction=direction,
                 sample_date=sample_date,

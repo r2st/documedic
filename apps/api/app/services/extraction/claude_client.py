@@ -50,7 +50,7 @@ Return ONLY a JSON object with this shape:
      "confidence": {"brand_name_raw": 0-1, "dose": 0-1, ...}},
     {"entity_type": "lab_result", "fields": {"marker_name": str, "value_numeric": number,
       "unit": str, "reference_range_low": number, "reference_range_high": number,
-      "sample_date": "YYYY-MM-DD"},
+      "reference_range_text": str, "sample_date": "YYYY-MM-DD"},
      "confidence": {...}},
     {"entity_type": "condition", "fields": {"condition_name": str, "status": str}, "confidence": {...}},
     {"entity_type": "allergy", "fields": {"allergen_name": str, "reaction_description": str},
@@ -66,7 +66,14 @@ printed on the document — prefer a collection/sample date over a report or pri
 rest of the document; otherwise omit it and it inherits "document_date". Never guess a date \
 that is not printed on the document: omit the field instead. Do NOT emit the document's \
 administrative header lines (collection date, patient age, accession or bill number, referring \
-doctor) as lab_result entities — they are not clinical markers."""
+doctor) as lab_result entities — they are not clinical markers.
+
+Reference ranges: set "reference_range_text" to the interval exactly as printed beside the \
+result ("< 200", "Up to 40", "0.4 - 4.0", "Negative"), and set the numeric bounds only where \
+the printed range gives them. A one-sided range fills one bound and leaves the other absent — \
+"< 200" is reference_range_high 200 with no low, and "> 40" is reference_range_low 40 with no \
+high. Do not turn a one-sided range into a two-ended one by supplying a bound the report does \
+not state, and do not swap the ends: the low bound must never exceed the high bound."""
 
 _MEDIA_TYPES = {
     "image/jpeg": "image/jpeg",

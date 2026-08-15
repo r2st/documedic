@@ -92,6 +92,9 @@ def test_no_spelling_of_a_report_date_becomes_a_lab_result(line):
             "unit": "mmol/L",
             "reference_range_low": 3.5,
             "reference_range_high": 5.1,
+            # The interval as the report printed it, kept beside the numbers — see
+            # ``_reference_range`` in the parser and ``tests/test_lab_reference_ranges.py``.
+            "reference_range_text": "3.5 - 5.1",
             "sample_date": "2026-03-12T00:00:00",
         }
     ]

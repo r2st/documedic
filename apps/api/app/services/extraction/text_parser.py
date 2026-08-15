@@ -83,10 +83,59 @@ _MED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Reference ranges -------------------------------------------------------------------
+#
+# A reference interval is printed one of two ways, and only one of them was matched here. The
+# two-ended form ("0.4 - 4.0") was; the *one-ended* form was not, and it is not an edge case —
+# it is how a printed panel states every marker whose normal range has one clinically meaningful
+# side:
+#
+#     Cholesterol, Total     245 mg/dL     (< 200)
+#     Triglycerides          310 mg/dL     (<150)
+#     ALT (SGPT)              68 U/L       (Up to 40)
+#     HDL Cholesterol          32 mg/dL    (> 40)
+#
+# What that cost was not the range. Both grammars below anchor on ``$``, so a trailing
+# "(< 200)" the pattern could not account for failed the *whole* match — and a line that does
+# not match ``_parse_lab`` is not a lab result at all. So a total cholesterol of 245, an ALT of
+# 68 and a triglyceride of 310 were silently absent from the chart, and the clinician approving
+# the report saw a shorter list with nothing to say rows were missing from it.
+#
+# It reaches further than the display. The deterministic engine reads the chart, not the
+# document: ``app.core.hepatic`` cannot score a liver it has no ALT for, and any marker printed
+# this way is invisible to the critical-value guard for the same reason. The failure is silent
+# in both directions — a missing row and a check that reports itself unevaluated.
+#
+# Only *numeric* one-sided forms are admitted, never arbitrary text. That restraint is the
+# columnar grammar's safety: the parenthesised range is what tells a lab line from a
+# prescription line, and "(SOS)" or "(1-0-1)" after a dose would otherwise start reading as a
+# reference range and put a medication in the chart as a lab result. A comparison operator or
+# "up to" followed by a number cannot be a dose schedule.
+_COMPARISON = r"(?:<=|>=|≤|≥|<|>|up\s*to|upto)"
+_NUMBER = r"\d+(?:\.\d+)?"
+# Named groups differ between the two alternatives because Python's ``re`` forbids reusing a
+# group name in one pattern, and both grammars below embed this fragment twice (bracketed and
+# bare). ``_range_from_match`` reads whichever set matched.
+_RANGE_BODY = (
+    rf"(?P<{{p}}low>{_NUMBER})\s*[-–]\s*(?P<{{p}}high>{_NUMBER})"
+    rf"|(?P<{{p}}op>{_COMPARISON})\s*(?P<{{p}}bound>{_NUMBER})"
+)
+
+
+def _range_group(prefix: str) -> str:
+    return _RANGE_BODY.format(p=prefix)
+
+
+# The comma is in both marker classes because a printed panel qualifies an analyte after it
+# rather than before: "Cholesterol, Total", "Bilirubin, Direct", "Protein, Total". Without it
+# the line did not match at all — the same silent row loss the one-sided range caused, on the
+# markers whose *qualifier* decides which analyte they are. It cannot widen either grammar into
+# a prescription line: the value and the range discriminator are unchanged.
 _LAB_RE = re.compile(
-    r"^(?P<marker>[A-Za-z][A-Za-z0-9\-\.\/\(\) ]*?)\s*[:=]\s*"
+    r"^(?P<marker>[A-Za-z][A-Za-z0-9\-\.\/\(\), ]*?)\s*[:=]\s*"
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>[A-Za-z%/µμ\^0-9]+)?\s*"
-    r"(?:\(?\s*(?P<low>\d+(?:\.\d+)?)\s*[-–]\s*(?P<high>\d+(?:\.\d+)?)\s*\)?)?\s*$"
+    rf"(?:\(\s*(?:{_range_group('br_')})\s*\)|(?:{_range_group('')}))?\s*$",
+    re.IGNORECASE,
 )
 
 # Whitespace-column layout, which is what most printed lab reports actually use:
@@ -96,10 +145,27 @@ _LAB_RE = re.compile(
 # discriminator. Prescriptions do not carry one (a dose schedule like "(1-0-1)" has three
 # parts and fails this pattern), which keeps medications from being read as labs.
 _LAB_COLUMNAR_RE = re.compile(
-    r"^(?P<marker>[A-Za-z][A-Za-z0-9\-\.\/\+ ]*?)\s{1,}"
-    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>%|[A-Za-z][A-Za-z/µμ\^0-9\.]*)?\s*"
-    r"\(\s*(?P<low>\d+(?:\.\d+)?)\s*[-–]\s*(?P<high>\d+(?:\.\d+)?)\s*\)\s*$"
+    # Parentheses in the marker for the same reason as the comma above: "ALT (SGPT)",
+    # "Platelet Count (PLT)" and "Potassium (K+)" are how an analyser prints a name with its
+    # synonym, and ``app.core.lab_safety`` already resolves exactly those spellings — it was
+    # never getting the chance, because the line did not parse.
+    r"^(?P<marker>[A-Za-z][A-Za-z0-9\-\.\/\+\(\), ]*?)\s{1,}"
+    # The unit may start with a digit or a slash, not only a letter. "10^3/µL" is the canonical
+    # platelet unit and "/cumm" is how an Indian CBC prints a raw cell count — both are
+    # registered in ``app.core.lab_safety``, and both made the line unmatchable here, so a
+    # platelet count of 8 (a panic low) was dropped before any guard could see it. Widening the
+    # first character costs nothing this grammar was relying on: the parenthesised numeric range
+    # at the end is what separates a lab line from a prescription line, and it is unchanged.
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>%|[A-Za-z0-9/][A-Za-z/µμ\^0-9\.]*)?\s*"
+    rf"\(\s*(?:{_range_group('')})\s*\)\s*$",
+    re.IGNORECASE,
 )
+
+# Which side of the scale a one-sided range bounds. "< 200" states the *upper* end of normal
+# and says nothing about how low a result may be; "> 40" is the reverse. Reading one as the
+# other inverts every abnormality judgement on the marker — an HDL of 32 against "> 40" is low,
+# and read as a high bound it is charted as normal.
+_UPPER_BOUND_OPERATORS = ("<", "<=", "≤", "up to", "upto")
 
 
 # --- Labelled masthead lines ------------------------------------------------------------
@@ -454,14 +520,51 @@ def _parse_lab(line: str) -> ParsedEntity | None:
         ParsedField("value_numeric", numeric if numeric is not None else value, 0.85),
         ParsedField("unit", (m.group("unit") or None), 0.75 if m.group("unit") else 0.4),
     ]
-    low = _finite(m.group("low")) if m.group("low") else None
-    high = _finite(m.group("high")) if m.group("high") else None
-    # Both bounds or neither: a range with one unrepresentable end is not a narrower range, and
-    # ``_merge_lab`` reads a lone bound as a real one when it screens the value as abnormal.
-    if low is not None and high is not None:
+    low, high, printed = _reference_range(m)
+    # Both bounds, or one, or neither. A *pair* with one unrepresentable end is still dropped
+    # whole — that is a misread rather than a narrower interval — but a genuinely one-sided
+    # range is a real, usable bound and ``_merge_lab`` screens against a lone bound correctly.
+    if low is not None:
         fields.append(ParsedField("reference_range_low", low, 0.8))
+    if high is not None:
         fields.append(ParsedField("reference_range_high", high, 0.8))
+    # The range as the document printed it, kept whether or not it reduced to numbers. It is
+    # what the record export shows the clinician, and it is the only way to tell "the report
+    # printed no range" from "the report printed one this parser could not reduce".
+    if printed:
+        fields.append(ParsedField("reference_range_text", printed, 0.8))
     return ParsedEntity(entity_type="lab_result", fields=fields)
+
+
+def _reference_range(m: re.Match[str]) -> tuple[float | None, float | None, str | None]:
+    """``(low, high, as printed)`` from whichever range alternative matched, or three Nones.
+
+    Both grammars carry the range fragment twice — bracketed and bare — so the groups are
+    prefixed and tried in turn. A one-sided range fills exactly one bound and leaves the other
+    open, which is the honest reading: "< 200" says where normal stops, not where it starts.
+    """
+    groups = m.groupdict()
+    for prefix in ("", "br_"):
+        raw_low, raw_high = groups.get(f"{prefix}low"), groups.get(f"{prefix}high")
+        if raw_low and raw_high:
+            low, high = _finite(raw_low), _finite(raw_high)
+            # Both ends or neither: see the caller.
+            if low is None or high is None:
+                continue
+            return low, high, f"{raw_low} - {raw_high}"
+        operator, raw_bound = groups.get(f"{prefix}op"), groups.get(f"{prefix}bound")
+        if operator and raw_bound:
+            bound = _finite(raw_bound)
+            if bound is None:
+                continue
+            folded = " ".join(operator.lower().split()) if " " in operator else operator.lower()
+            upper = folded in _UPPER_BOUND_OPERATORS or folded.startswith("up")
+            return (
+                (None, bound, f"{operator} {raw_bound}")
+                if upper
+                else (bound, None, f"{operator} {raw_bound}")
+            )
+    return None, None, None
 
 
 def _parse_condition(line: str) -> ParsedEntity | None:

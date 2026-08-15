@@ -46,6 +46,11 @@ class LabItem(BaseModel):
     unit: str | None
     reference_range_low: Decimal | None
     reference_range_high: Decimal | None
+    # The interval as the document printed it. A one-sided range ("< 200") reduces to a single
+    # bound, so the numeric pair alone cannot tell "the report printed no range" from "the report
+    # printed one with an open end" — this is what distinguishes them on the row the clinician
+    # reads, and it is already what the record PDF prints.
+    reference_range_text: str | None
     is_abnormal: bool | None
     abnormality_direction: str | None
     sample_date: datetime | None
