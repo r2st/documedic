@@ -55,8 +55,12 @@ async def patient_audit(
 
     `payload` is deliberately thin. It holds identifiers and counts rather than clinical text,
     because this table is unencrypted, immutable, and never pruned.
+
+    Still readable after the chart is withdrawn at `DELETE /patients/{id}`, unlike every
+    clinical read in this API. The withdrawal is itself an entry in this trail, and a record
+    of who accessed a chart is worth least at the moment the chart stops being visible.
     """
-    await PatientService(db).get(account.id, patient_id)  # ownership check
+    await PatientService(db).get_for_audit(account.id, patient_id)  # ownership check
     items, total = await AuditService(db).list_for_patient(
         patient_id, action=action, limit=limit, offset=offset
     )
@@ -83,7 +87,10 @@ async def verify_chain(
 
     `chain_valid: false` means an entry was altered or removed underneath the application —
     tamper evidence, not a transient error, and worth escalating rather than retrying.
+
+    Runnable after the chart is withdrawn, for the same reason the trail itself stays
+    readable: a tamper check that stops working once a record is deleted checks nothing.
     """
-    await PatientService(db).get(account.id, patient_id)
+    await PatientService(db).get_for_audit(account.id, patient_id)
     count, valid = await AuditService(db).verify_patient_chain(patient_id)
     return AuditVerifyResponse(patient_id=patient_id, entries_checked=count, chain_valid=valid)

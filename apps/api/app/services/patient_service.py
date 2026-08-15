@@ -62,6 +62,39 @@ class PatientService:
             raise PatientNotFoundError()
         return patient
 
+    async def get_for_audit(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
+        """Ownership check for reading the audit trail — **including withdrawn charts**.
+
+        :meth:`get` without the ``is_deleted`` predicate, and the only caller is the audit
+        router. Withdrawing a chart soft-deletes it precisely so the rows survive underneath:
+        the trail is append-only and its hash chain references them, and ``soft_delete``
+        appends a ``patient_deleted`` entry to that same trail. Gating the read on
+        ``is_deleted is False`` meant the withdrawal made its own record unreachable, along
+        with every access, suggestion and override recorded before it — and made
+        ``GET ../audit/verify``, the tamper-evidence check, unrunnable for exactly the charts
+        most likely to be disputed. A trail that disappears when the record is withdrawn is
+        not an audit trail.
+
+        Safe to widen *here* and nowhere else because of what the trail holds. Payloads are
+        deliberately identifiers and counts rather than clinical text (see the comments on
+        ``patient_created`` and ``reasoning_session_started``), so this discloses that a chart
+        existed and what was done to it, not what it said. The clinical content — the record,
+        the safety flags, the suggestions — stays behind :meth:`get` and stays 404 once the
+        chart is withdrawn.
+
+        Account scoping is unchanged: another clinician's withdrawn chart is still a 404.
+        """
+        result = await self.db.execute(
+            select(Patient).where(
+                Patient.id == patient_id,
+                Patient.account_id == account_id,
+            )
+        )
+        patient = result.scalar_one_or_none()
+        if patient is None:
+            raise PatientNotFoundError()
+        return patient
+
     async def get_for_processing(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
         """Fetch a patient for an operation that *processes new personal data*.
 

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import graph
@@ -91,11 +92,35 @@ class ReasoningService:
         return await PatientService(self.db).get_for_processing(account_id, patient_id)
 
     async def _session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> ReasoningSession:
+        """The session, if this account owns it *and* its chart is still in use.
+
+        The join to ``patients`` is the point. Every other patient-scoped route in the API
+        reaches its rows through ``PatientService.get``, which filters ``is_deleted``, so
+        withdrawing a chart at ``DELETE /patients/{id}`` turns the record, the safety flags,
+        the documents and the chart itself into 404s. The reasoning routes reached their rows
+        through the *session* id instead and never looked at the patient again after ``start``,
+        so a session id kept from before the withdrawal stayed a working door into the chart:
+        ``GET /reasoning/{id}`` returned ``case_state``, which for a completed run carries
+        ``patient_graph_snapshot`` — a frozen copy of the whole longitudinal record, the exact
+        payload ``GET /patients/{id}/record`` had just started refusing — and
+        ``GET ../suggestions`` returned the engine's clinical output about the patient.
+
+        Withdrawal is not erasure and this does not pretend otherwise: the rows survive, the
+        immutable suggestions survive, and the audit trail stays readable through
+        ``PatientService.get_for_audit``. What stops is the chart answering clinical questions
+        about a patient it was told to stop being used for.
+
+        Scoping the read here rather than at each of the eight routes because the alternative
+        is eight places to remember — and the one that gets forgotten is the whole hole again.
+        """
         result = await self.db.execute(
-            select(ReasoningSession).where(
+            select(ReasoningSession)
+            .join(Patient, Patient.id == ReasoningSession.patient_id)
+            .where(
                 ReasoningSession.id == session_id,
                 ReasoningSession.account_id == account_id,
                 ReasoningSession.is_deleted.is_(False),
+                Patient.is_deleted.is_(False),
             )
         )
         session = result.scalar_one_or_none()
@@ -519,6 +544,92 @@ class ReasoningService:
         session.status = RUNNING
         session.run_claimed_at = claimed_at
 
+    async def _release_claim_as_failed(
+        self,
+        account_id: uuid.UUID,
+        session: ReasoningSession,
+        patient_id: uuid.UUID,
+        claimed_at: datetime | None,
+        exc: BaseException,
+    ) -> None:
+        """Mark a claimed run failed and let go of the session.
+
+        ``describe_exception`` rather than ``str(exc)``: exceptions on this path come back from
+        an LLM provider that was just sent this patient's snapshot, and ``audit_logs.payload``
+        is unencrypted, immutable and never pruned — so a provider that quoted the prompt in
+        its error would write a piece of the chart into the one table that outlives the record.
+
+        Takes ``patient_id`` and ``claimed_at`` alongside ``session`` rather than reading them
+        off it, because the recovery below may have to roll back, and a rolled-back session
+        expires every loaded object — reading ``session.patient_id`` afterwards would emit lazy
+        IO from a context with no greenlet to run it in. The instance itself is only written
+        back at the end, through a ``refresh`` that repopulates it either way.
+
+        The rollback is attempted only if the release itself fails, and that ordering is the
+        point. What this handles is no longer only "the panel raised": it now also covers the
+        chart snapshot and the context build, and a *database* error there leaves the
+        transaction unusable, so the UPDATE that releases the claim would fail on the poisoned
+        connection and the claim would leak exactly as before. Rolling back unconditionally
+        would fix that and expire the caller's other loaded objects on every ordinary LLM
+        failure too, which is a wide blast radius for a narrow case — so it is the fallback,
+        not the first move.
+
+        The ``run_claimed_at`` predicate stops a dead run from stamping ``failed`` on a live
+        one. A run that overruns ``reasoning_run_lease_minutes`` — retried LLM calls make that
+        reachable, not hypothetical — can have had its session taken over by a second claim
+        while it was still going. Without the predicate, its eventual failure would flip the
+        *successor's* session to ``failed`` underneath a clinician watching that run stream,
+        and the successor's own completion would then write over it. Matching nothing is the
+        correct outcome there, and it is also why the audit entry is conditional: the run whose
+        failure this is has nothing left to say about a session it no longer holds.
+        """
+        failure = describe_exception(exc)
+        # Read before the expire below, which expires the primary key along with everything else.
+        session_id = session.id
+        # Drop the run's in-memory idea of this session before writing the row. ``_claim_for_run``
+        # assigns ``status`` and ``run_claimed_at`` onto the instance after its own commit, which
+        # leaves it *dirty* against the values it was loaded with — so the commit at the end of
+        # this method would flush ``status='reasoning'`` straight back over the ``failed`` the
+        # UPDATE below just wrote, and the session would come out of a failed run still claimed.
+        # It only escaped notice because a run that got as far as ``_build_context`` had already
+        # flushed that assignment on the way through, so the overwrite was invisible for exactly
+        # the failures the old code could reach. From here the row is the truth and the instance
+        # is reloaded from it.
+        self.db.expire(session)
+        release = (
+            update(ReasoningSession)
+            .where(
+                ReasoningSession.id == session_id,
+                ReasoningSession.run_claimed_at == claimed_at,
+            )
+            .values(status="failed", error_detail=failure)
+            # As in ``_claim_for_run``: the ORM's post-update sync would re-evaluate this WHERE
+            # clause in Python against a tz-aware claim and the naive datetime SQLite returns.
+            .execution_options(synchronize_session=False)
+        )
+        try:
+            result = cast("CursorResult[Any]", await self.db.execute(release))
+        except SQLAlchemyError:
+            await self.db.rollback()
+            result = cast("CursorResult[Any]", await self.db.execute(release))
+
+        if result.rowcount:
+            await self.audit.record(
+                action="reasoning_session_failed",
+                account_id=account_id,
+                patient_id=patient_id,
+                entity_type="reasoning_session",
+                entity_id=session_id,
+                payload={"error": failure},
+            )
+        await self.db.commit()
+        # The UPDATE went round the ORM, so without this the identity map still holds
+        # ``reasoning`` — and with ``expire_on_commit=False`` a later ``get_session`` in the same
+        # unit of work would hand that stale instance back rather than re-reading the row. A
+        # refresh rather than two assignments because it also un-expires the instance if the
+        # rollback above ran, and because it reports the row as it actually committed.
+        await self.db.refresh(session)
+
     # --------------------------------------------------------------- pipeline
     async def run(
         self, account_id: uuid.UUID, session_id: uuid.UUID, emit: EventEmitter | None = None
@@ -528,33 +639,47 @@ class ReasoningService:
         # its lease expires. Taken before the snapshot is assembled so a losing caller spends one
         # UPDATE rather than a chart read.
         await self._claim_for_run(account_id, session)
-        # When the LLM is unavailable the pipeline still runs deterministically (degraded mode):
-        # it marks the case degraded, escalates to flag-for-review, and attaches an explicit
-        # caveat rather than silently producing confident output.
-        state = await self._rebuild_intake_state(session)
-        state.intake_complete = True
-        await self.db.flush()
-
-        ctx = await self._build_context(account_id, session.patient_id, emit=emit)
+        # Read off the instance before the try. The handler expires it — and may roll back — so
+        # neither can be asked for again from inside it. See ``_release_claim_as_failed``.
+        patient_id = session.patient_id
+        claimed_at = session.run_claimed_at
         try:
+            # Inside the failure handler, not before it. These two steps used to sit between the
+            # committed claim and the ``try`` — and they are the two heaviest things the method
+            # does: ``_rebuild_intake_state`` assembles the whole chart snapshot, and
+            # ``_build_context`` re-evaluates every current medication for safety and loads the
+            # guideline corpus. A failure in either escaped the handler entirely, so the session
+            # kept the claim and sat at ``reasoning`` until the lease expired: unrunnable by
+            # anyone for fifteen minutes, with no ``failed`` status and no closing audit record
+            # — indistinguishable in the trail from a run that reached the panel and was
+            # abandoned mid-flight, which is the one thing that trail exists to distinguish.
+            #
+            # When the LLM is unavailable the pipeline still runs deterministically (degraded
+            # mode): it marks the case degraded, escalates to flag-for-review, and attaches an
+            # explicit caveat rather than silently producing confident output.
+            state = await self._rebuild_intake_state(session)
+            state.intake_complete = True
+            await self.db.flush()
+            ctx = await self._build_context(account_id, patient_id, emit=emit)
             output = await graph.run_reasoning(state, ctx)
         except Exception as exc:  # noqa: BLE001 — record failure, surface to clinician
-            session.status = "failed"
-            # Both of these took str(exc). Exceptions here come back from an LLM provider that
-            # was just sent this patient's snapshot, and audit_logs.payload is unencrypted,
-            # immutable and never pruned — so a provider that quoted the prompt in its error
-            # wrote a piece of the chart into the one table that outlives the record.
-            failure = describe_exception(exc)
-            session.error_detail = failure
-            await self.audit.record(
-                action="reasoning_session_failed",
-                account_id=account_id,
-                patient_id=session.patient_id,
-                entity_type="reasoning_session",
-                entity_id=session.id,
-                payload={"error": failure},
-            )
-            await self.db.commit()
+            try:
+                await self._release_claim_as_failed(
+                    account_id, session, patient_id, claimed_at, exc
+                )
+            except Exception:  # noqa: BLE001 — never mask the failure being reported
+                # The release is best-effort by construction: it is itself database work, and
+                # the failure it is reporting may be the database being unreachable. Losing it
+                # costs the lease — the session stays claimed until
+                # ``reasoning_run_lease_minutes`` elapses and the next run takes it over — which
+                # is the safety net this exists to avoid needing, not one it may destroy. What
+                # must not happen is this swallowing or replacing the exception the clinician
+                # is waiting on an answer about.
+                logger.exception(
+                    "Could not release the run claim on reasoning session %s after a failed "
+                    "run; it will stay claimed until the lease expires.",
+                    session_id,
+                )
             raise
 
         suggestions = await self._persist_suggestions(account_id, session, state, output)
