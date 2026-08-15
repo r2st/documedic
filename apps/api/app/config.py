@@ -210,6 +210,12 @@ class Settings(BaseSettings):
 
     # --- Uploads ---
     max_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+    # Hard ceiling on ANY request body, refused with 413 before the application reads it.
+    # Sits just above max_upload_bytes because a 20 MB document arrives wrapped in multipart
+    # framing and must still fit; every other route is orders of magnitude below it. This is a
+    # memory backstop for the unauthenticated routes, not an upload rule — the upload route
+    # enforces its own 20 MB. See app.middleware.RequestBodyLimitMiddleware.
+    max_request_bytes: int = 24 * 1024 * 1024  # 24 MB
     confirmation_confidence_threshold: float = 0.85
     ocr_fallback_threshold: float = 0.50
 

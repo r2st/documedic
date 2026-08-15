@@ -17,6 +17,7 @@ from app.config import assert_production_config, settings
 from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
 from app.middleware import (
+    RequestBodyLimitMiddleware,
     RequestContextMiddleware,
     apply_security_headers,
     internal_error_response,
@@ -164,6 +165,12 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Added first, so it ends up *innermost* of the three (Starlette builds the stack so the
+    # most recently added is outermost). That is deliberate: refusing an oversized body still
+    # happens before the application reads a byte of it, but the 413 travels back out through
+    # RequestContextMiddleware and CORSMiddleware, so it carries the request id and the
+    # security and CORS headers that every other error response carries.
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,

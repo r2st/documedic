@@ -273,6 +273,21 @@ class FileTooLargeError(ValidationError):
     code = "file_too_large"
 
 
+class RequestTooLargeError(AetherError):
+    """That request was too large to process. If you are uploading a document, upload the
+    pages as separate files or re-scan at a lower resolution.
+
+    413 rather than 422 because this is refused on the envelope, before anything has looked at
+    what the body says — the point is that nothing ever does. Distinct from
+    ``FileTooLargeError``, which is the upload route's own 20 MB rule applied to a file it has
+    already accepted and begun reading; this is the ceiling on any request body at all, and it
+    is the only one of the two that protects the unauthenticated routes.
+    """
+
+    status_code = 413
+    code = "request_too_large"
+
+
 class CorrectionNotApplicableError(ValidationError):
     """A correction could not be applied to the extracted item it names, so nothing was
     approved. Reload the extraction and make the change again.
