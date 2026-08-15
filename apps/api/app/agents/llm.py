@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from collections import OrderedDict
+from collections.abc import Callable
 from typing import Any
 
 from app.agents import demo_data
@@ -144,24 +147,109 @@ def is_available() -> bool:
 _probe_cache: dict[str, tuple[float, bool, str | None]] = {}
 
 
-def _probe_openai_compatible(api_key: str, base_url: str | None) -> None:
-    from openai import OpenAI
+# --- Provider client reuse -----------------------------------------------------------------
+#
+# One SDK client per (provider, key, endpoint, timeout), not one per call. Each client owns an
+# httpx connection pool, so building one per call meant no connection was ever reused: every
+# agent call opened a fresh TCP connection and paid a full TLS handshake. Measured from the
+# production host against OpenRouter that is ~37ms a call (3-5ms to connect, ~33ms to complete
+# the handshake) before the model is asked anything. A run spends one call per agent lane and
+# more whenever a provider is retried or failed over, and it spends them out of the same
+# wall-clock budget -- ``settings.reasoning_llm_budget_seconds`` -- that decides whether the
+# later lanes get to run at all. Handshakes are the cheapest thing in that budget to stop
+# paying for.
+#
+# It churned sockets too. The clients were dropped without ``close()``, and neither
+# ``httpx.Client`` nor ``httpcore.ConnectionPool`` defines ``__del__``, so each pool's
+# keep-alive connection stayed open until the garbage collector reached it: sixty sequential
+# calls held ten sockets open that a reused client holds none of. Bounded, since the collector
+# does get there -- this is waste rather than a leak -- but it is waste under exactly the
+# condition that produces the most of it, a provider outage driving the retry ladder.
+#
+# Cached rather than built once at import because every field of the key is read from
+# ``settings`` at first use: tests override keys and timeouts per case, and a module-level
+# client would freeze the first one's configuration for the whole session. The lock covers
+# construction only -- a cache hit takes no lock, which matters because every one of
+# ``llm_max_concurrent_calls`` worker threads comes through here. Sharing one client across
+# those threads is what makes the pool reusable in the first place, and is safe: ``httpx.Client``
+# is thread-safe by design, and both SDKs wrap one.
+#
+# The key space is (3 providers x {request timeout, probe timeout}), so six entries in a
+# running deployment. The cap is a guard against a caller that varies the timeout, not a tuning
+# knob; an evicted client is dropped rather than closed, because another thread may be part-way
+# through a request on it and the collector will close it once that finishes.
+_MAX_CACHED_CLIENTS = 12
+_client_cache: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+_client_cache_lock = threading.Lock()
 
-    # base_url=None is what the SDK already means by "use the default endpoint", so OpenAI and
-    # OpenRouter differ only in this argument.
-    OpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        timeout=settings.llm_health_probe_timeout_seconds,
+
+def _cached_client(key: tuple[Any, ...], build: Callable[[], Any]) -> Any:
+    """The client for ``key``, building it once and reusing it after that."""
+    client = _client_cache.get(key)
+    if client is not None:
+        return client
+    with _client_cache_lock:
+        client = _client_cache.get(key)
+        if client is None:
+            client = build()
+            _client_cache[key] = client
+            while len(_client_cache) > _MAX_CACHED_CLIENTS:
+                evicted, _ = _client_cache.popitem(last=False)
+                logger.debug("Dropped a cached %r client; the cache is at its cap.", evicted[0])
+    return client
+
+
+def _openai_compatible_client(
+    api_key: str, base_url: str | None, timeout: float, headers: dict[str, str] | None = None
+) -> Any:
+    """A reused ``openai`` SDK client. ``base_url=None`` is the SDK's own "default endpoint",
+    so OpenAI and OpenRouter differ only in that argument and the identifying headers."""
+
+    def build() -> Any:
+        from openai import OpenAI
+
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, default_headers=headers)
+
+    key = ("openai", api_key, base_url, timeout, tuple(sorted((headers or {}).items())))
+    return _cached_client(key, build)
+
+
+def _anthropic_client(api_key: str, timeout: float) -> Any:
+    """A reused ``anthropic`` SDK client."""
+
+    def build() -> Any:
+        import anthropic
+
+        return anthropic.Anthropic(api_key=api_key, timeout=timeout)
+
+    return _cached_client(("anthropic", api_key, timeout), build)
+
+
+def close_provider_clients() -> None:
+    """Close and forget every cached SDK client, releasing its pooled connections.
+
+    Called from the app lifespan on the way down, and by tests between cases. Closing is
+    best-effort per client: this runs while the process is shutting down, and a client that
+    objects to being closed must not stop the rest from being.
+    """
+    with _client_cache_lock:
+        clients = list(_client_cache.values())
+        _client_cache.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001 — shutdown must not fail on a reluctant client
+            logger.debug("A cached LLM client did not close cleanly.", exc_info=True)
+
+
+def _probe_openai_compatible(api_key: str, base_url: str | None) -> None:
+    _openai_compatible_client(
+        api_key, base_url, settings.llm_health_probe_timeout_seconds
     ).models.list()
 
 
 def _probe_anthropic(api_key: str) -> None:
-    import anthropic
-
-    anthropic.Anthropic(
-        api_key=api_key, timeout=settings.llm_health_probe_timeout_seconds
-    ).models.list()
+    _anthropic_client(api_key, settings.llm_health_probe_timeout_seconds).models.list()
 
 
 def _probe(provider: str) -> None:
@@ -232,9 +320,9 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def _complete_openai(system: str, user: str, model: str, max_tokens: int) -> str:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=settings.openai_api_key, timeout=settings.llm_request_timeout_seconds)
+    client = _openai_compatible_client(
+        settings.openai_api_key, None, settings.llm_request_timeout_seconds
+    )
     completion = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
@@ -248,11 +336,7 @@ def _complete_openai(system: str, user: str, model: str, max_tokens: int) -> str
 
 
 def _complete_anthropic(system: str, user: str, model: str, max_tokens: int) -> str:
-    import anthropic
-
-    client = anthropic.Anthropic(
-        api_key=settings.anthropic_api_key, timeout=settings.llm_request_timeout_seconds
-    )
+    client = _anthropic_client(settings.anthropic_api_key, settings.llm_request_timeout_seconds)
     message = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -266,13 +350,11 @@ def _complete_anthropic(system: str, user: str, model: str, max_tokens: int) -> 
 def _complete_openrouter(system: str, user: str, model: str, max_tokens: int) -> str:
     # OpenRouter exposes an OpenAI-compatible API, so reuse the openai SDK with a
     # custom base_url. The optional referer/title headers identify the app to OpenRouter.
-    from openai import OpenAI
-
-    client = OpenAI(
-        api_key=settings.openrouter_api_key,
-        base_url=settings.openrouter_base_url,
-        timeout=settings.llm_request_timeout_seconds,
-        default_headers={
+    client = _openai_compatible_client(
+        settings.openrouter_api_key,
+        settings.openrouter_base_url,
+        settings.llm_request_timeout_seconds,
+        {
             "HTTP-Referer": "https://documedic.aiknol.com",
             "X-Title": "Documedic (Aether Clinician)",
         },

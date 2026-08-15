@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.agents.llm import close_provider_clients
+from app.agents.util import shutdown_llm_executor
 from app.config import assert_production_config, settings
 from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
@@ -141,6 +143,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     assert_production_config()
     await _seed_drug_data()
     yield
+    # Shutdown, in the order the dependencies run: the LLM side first, then the database.
+    #
+    # Uvicorn has already let the in-flight requests finish by the time this runs, so what is
+    # left in the pool is work nothing is waiting on any more. Cancelling it stops a worker on
+    # its way out from opening new provider sockets, and stops the interpreter being held at
+    # the atexit join by calls that were only ever queued. See ``shutdown_llm_executor`` for
+    # what this can and cannot interrupt.
+    shutdown_llm_executor()
+    # After the executor, so no worker thread is part-way through a request on a client while
+    # it is being closed. Releases the pooled keep-alive connections to each provider.
+    close_provider_clients()
     await dispose_engine()
 
 

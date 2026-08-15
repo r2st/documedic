@@ -55,13 +55,43 @@ def llm_executor() -> ThreadPoolExecutor:
     return _llm_executor
 
 
-def reset_llm_executor() -> None:
-    """Drop the pool so the next call rebuilds it at the current size. For tests."""
+def shutdown_llm_executor() -> None:
+    """Stop the pool: cancel every queued call, and stop waiting on the running ones.
+
+    Called from the app lifespan on the way down. Without it nothing ever shut this pool down,
+    and that is not the harmless omission it looks like, because CPython joins a
+    ``ThreadPoolExecutor``'s workers from an ``atexit`` hook: the interpreter does not exit
+    until every in-flight call has returned. Measured, a pool holding one six-second call
+    delays process exit by 6.03s — and the call this pool exists to isolate is a provider that
+    accepted the connection and stopped answering, which holds its thread for the whole
+    retry-and-failover ladder. So a deploy landing during a provider outage left the outgoing
+    worker sitting on a socket it no longer had any reason to wait for, until systemd's
+    ``TimeoutStopSec`` ran out and SIGKILLed it — and ``deploy.sh`` restarts the service
+    synchronously, so the deploy waited too.
+
+    ``cancel_futures=True`` is the half that is genuinely fixable here: calls that were queued
+    behind a saturated pool are dropped without ever opening a socket, so a shutting-down worker
+    stops starting new provider work. Calls already *running* cannot be interrupted — they are
+    blocked in a synchronous SDK inside a thread, and Python cannot cancel that — so they are
+    left to their own ``llm_request_timeout_seconds`` and the circuit breaker that takes a dead
+    provider out of the ladder (``app.agents.circuit``, which is what bounds the ladder to
+    something much shorter than the sum of its timeouts). ``wait=False`` means shutdown does not
+    block on them; the atexit join still does, and that residual wait is what
+    ``TimeoutStopSec`` is the backstop for.
+
+    Safe to call with work outstanding, and safe to call twice: the pool is dropped under the
+    lock, so the next call to :func:`llm_executor` builds a fresh one.
+    """
     global _llm_executor
     with _llm_executor_lock:
         executor, _llm_executor = _llm_executor, None
     if executor is not None:
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def reset_llm_executor() -> None:
+    """Drop the pool so the next call rebuilds it at the current size. For tests."""
+    shutdown_llm_executor()
 
 
 async def call_llm(

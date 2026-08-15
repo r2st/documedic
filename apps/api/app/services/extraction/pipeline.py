@@ -25,12 +25,26 @@ def _confidence_band(score: float) -> str:
 
 
 def _pdf_text(file_bytes: bytes) -> str:
+    """The PDF's text layer, or '' when there is not one this parser can read.
+
+    The empty string is a real answer here — a scanned prescription is a PDF wrapping a
+    photograph and genuinely has no text layer — so a parse failure degrades to the same value
+    and the caller falls through to OCR either way. That is why this is caught rather than
+    raised, and exactly why it is logged: "pypdf could not read this file" and "this file is a
+    scan" are the same '' downstream, and without a line in the log there is nothing that tells
+    an operator which of the two a document that came back empty actually was. Never logs the
+    bytes or the exception's own message, which can quote document content.
+    """
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(file_bytes))
         return "\n".join((page.extract_text() or "") for page in reader.pages)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — OCR is the fallback for any unreadable PDF
+        logger.warning(
+            "Could not read a text layer from a PDF (%s); falling back to OCR.",
+            describe_exception(exc),
+        )
         return ""
 
 
@@ -55,7 +69,16 @@ def _tesseract_text(file_bytes: bytes, file_type: str) -> str:
                 check=False,
             )
             return result.stdout.decode("utf-8", errors="ignore")
-        except (subprocess.SubprocessError, OSError):
+        except (subprocess.SubprocessError, OSError) as exc:
+            # Includes the 60s ``TimeoutExpired``, which ``subprocess.run`` raises only after
+            # killing the child and reaping it — so nothing is left running behind this.
+            # Logged for the reason ``_pdf_text``'s handler is: the caller cannot tell an OCR
+            # that failed from an image that held no text, and this is the only place that can.
+            logger.warning(
+                "Tesseract could not read a %s document (%s); no text was recovered from it.",
+                file_type,
+                describe_exception(exc),
+            )
             return ""
 
 

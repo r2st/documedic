@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.agents.circuit import breaker as llm_circuit_breaker
+from app.agents.llm import close_provider_clients
 from app.db import session as db_session
 from app.db.seed import seed_all
 from app.db.session import get_db
@@ -72,6 +73,21 @@ def _reset_llm_circuit_breaker():
     llm_circuit_breaker.reset()
     yield
     llm_circuit_breaker.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_provider_clients():
+    """Close and forget the cached provider SDK clients around every test.
+
+    ``app.agents.llm`` keeps one client per (provider, key, endpoint, timeout) so connections
+    are reused instead of re-handshaked per call. The key is read from ``settings``, and tests
+    monkeypatch those settings per case — so without this a test that patched a key or a
+    timeout could be served the client another test's configuration built, and a test asserting
+    on how many clients were constructed would count the whole session's.
+    """
+    close_provider_clients()
+    yield
+    close_provider_clients()
 
 
 @pytest.fixture(autouse=True)
