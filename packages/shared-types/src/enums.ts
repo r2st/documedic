@@ -23,7 +23,12 @@ export type SafetyCheckType =
   | 'unevaluated_allergy'
   | 'hepatic_severity'
   | 'hepatotoxic_burden'
+  | 'bleeding_burden'
   | 'unevaluated_condition'
+  // The two ends of the age axis. Nothing else in the engine can see how old the patient is: an
+  // interaction rule is a pair of drugs and a contraindication rule is a drug and a condition.
+  | 'geriatric_caution'
+  | 'paediatric_caution'
   // Not a conflict either: the chart's medication list is old. Every rule still ran against it
   // as active therapy — see app.core.safety.check_stale_medications — so an absence of other
   // flags reflects how current the list is, not only what is on it.

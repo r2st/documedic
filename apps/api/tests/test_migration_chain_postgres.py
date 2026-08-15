@@ -32,6 +32,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from tests.postgres_required import unavailable
+
 pytestmark = pytest.mark.postgres
 
 DEFAULT_URL = "postgresql+asyncpg://aether:aether@localhost:55432/aether_clinician"
@@ -39,6 +41,12 @@ SCRATCH_DATABASE = "documedic_migration_chain_test"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ALEMBIC_INI = REPO_ROOT / "data" / "migrations" / "alembic.ini"
 API_ROOT = REPO_ROOT / "apps" / "api"
+VERSIONS_DIR = REPO_ROOT / "data" / "migrations" / "versions"
+
+# The one revision that does not roll back, and says so in its own module. The rollback sweep
+# descends to it and stops; see ``test_the_irreversible_revision_refuses_before_it_changes
+# _anything`` for what happens if it is asked to go further.
+IRREVERSIBLE_FLOOR = "0006"
 
 
 def _swap_database(url: str, database: str) -> str:
@@ -68,7 +76,7 @@ async def empty_database() -> str:
         await _admin_execute(url, f'DROP DATABASE IF EXISTS "{SCRATCH_DATABASE}"')
         await _admin_execute(url, f'CREATE DATABASE "{SCRATCH_DATABASE}"')
     except Exception as exc:  # noqa: BLE001 — unreachable, or no privilege to create one
-        pytest.skip(f"no PostgreSQL to build a scratch database on ({type(exc).__name__}): {exc}")
+        unavailable(f"no PostgreSQL to build a scratch database on ({type(exc).__name__}): {exc}")
 
     try:
         yield _swap_database(url, SCRATCH_DATABASE)
@@ -97,18 +105,67 @@ def _alembic(database_url: str, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-async def _columns(database_url: str, table: str) -> set[str]:
+def _revisions() -> list[str]:
+    """Every revision id, oldest first, read off the filenames rather than the chain.
+
+    ``tests/test_migrations.py::test_revision_chain_is_linear_and_complete`` already proves the
+    filename order and the ``down_revision`` links agree, so this can stay a sort.
+    """
+    return [path.name.split("_", 1)[0] for path in sorted(VERSIONS_DIR.glob("[0-9]*.py"))]
+
+
+IRREVERSIBLE_FLOOR_INDEX = _revisions().index(IRREVERSIBLE_FLOOR)
+
+
+def _current_revision(database_url: str) -> str:
+    """The revision the database is stamped at, as `alembic current` reports it.
+
+    The command prints its INFO lines to stderr and the revision on its own line, as either
+    ``0028`` or ``0028 (head)``, so the first token of a line that names a known revision is
+    the answer. An empty string means "stamped at nothing", which is base.
+    """
+    result = _alembic(database_url, "current")
+    known = set(_revisions())
+    for line in (result.stdout + result.stderr).splitlines():
+        head, _, _ = line.strip().partition(" ")
+        if head in known:
+            return head
+    return ""
+
+
+async def _schema_snapshot(database_url: str) -> dict[str, object]:
+    """Columns, types, nullability and indexes for the whole public schema.
+
+    What a rollback has to restore, in a form two runs can be compared on. Deliberately not the
+    ORM's view of the schema: the question is what the migration chain built, which is the thing
+    that can differ from what the models say.
+
+    ``alembic_version`` is excluded — it holds the revision pointer, which is exactly what a
+    downgrade is supposed to change.
+    """
     engine = create_async_engine(database_url)
     try:
         async with engine.connect() as conn:
-            rows = await conn.execute(
+            columns = await conn.execute(
                 text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = :table"
-                ),
-                {"table": table},
+                    "SELECT table_name, column_name, data_type, is_nullable, "
+                    "       character_maximum_length "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name <> 'alembic_version' "
+                    "ORDER BY table_name, column_name"
+                )
             )
-            return {row[0] for row in rows}
+            indexes = await conn.execute(
+                text(
+                    "SELECT tablename, indexname, indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND tablename <> 'alembic_version' "
+                    "ORDER BY tablename, indexname"
+                )
+            )
+            return {
+                "columns": [tuple(row) for row in columns],
+                "indexes": [tuple(row) for row in indexes],
+            }
     finally:
         await engine.dispose()
 
@@ -139,14 +196,83 @@ async def test_running_the_upgrade_twice_changes_nothing(empty_database):
 
 @pytest.mark.asyncio
 async def test_the_newest_revision_rolls_back_and_forward(empty_database):
-    """Rollback safety for the revision this release adds: a bad deploy has to be undoable."""
+    """Rollback safety for the revision this release adds: a bad deploy has to be undoable.
+
+    Deliberately says nothing about *which* revision is newest. This test used to assert on
+    ``sessions.family_started_at``, the column revision 0020 adds, and it kept asserting that
+    through 0021-0028 — eight revisions whose rollback was therefore never checked, while the
+    test itself stayed green by skipping wherever no PostgreSQL was reachable. A test that has
+    to be edited to keep testing the right thing is a test that stops testing the right thing.
+
+    The schema snapshot is what makes that unnecessary: down and back up has to land on exactly
+    the schema it left, whatever the newest revision happens to do.
+    """
     assert _alembic(empty_database, "upgrade", "head").returncode == 0
-    assert "family_started_at" in await _columns(empty_database, "sessions")
+    at_head = await _schema_snapshot(empty_database)
 
     down = _alembic(empty_database, "downgrade", "-1")
     assert down.returncode == 0, f"the newest revision does not roll back:\n{down.stderr}"
-    assert "family_started_at" not in await _columns(empty_database, "sessions")
 
     up = _alembic(empty_database, "upgrade", "head")
     assert up.returncode == 0, f"the newest revision does not re-apply:\n{up.stderr}"
-    assert "family_started_at" in await _columns(empty_database, "sessions")
+    assert await _schema_snapshot(empty_database) == at_head, (
+        "the newest revision does not restore the schema it rolled back from"
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_reversible_revision_rolls_back_and_forward(empty_database):
+    """The whole descent, not just one step — and back up again onto the same schema.
+
+    One revision at a time rather than a single `downgrade 0006`, so a failure names the
+    revision that broke instead of the range that contains it.
+
+    Stops at 0006, which is irreversible by construction and says so
+    (``0006_encrypt_patient_pii.IRREVERSIBLE``): its columns hold ciphertext, and narrowing
+    them back to DATE and VARCHAR(20) is a decryption rather than a type change. Everything
+    above it is ordinary DDL that has to be undoable, because a bad release is rolled back at
+    the point where nobody is in a position to hand-write DDL.
+    """
+    assert _alembic(empty_database, "upgrade", "head").returncode == 0
+    at_head = await _schema_snapshot(empty_database)
+
+    for step in range(len(_revisions()) - IRREVERSIBLE_FLOOR_INDEX - 1):
+        current = _current_revision(empty_database)
+        down = _alembic(empty_database, "downgrade", "-1")
+        assert down.returncode == 0, (
+            f"revision {current} does not roll back (step {step}):\n{down.stderr}"
+        )
+
+    assert _current_revision(empty_database) == IRREVERSIBLE_FLOOR
+
+    up = _alembic(empty_database, "upgrade", "head")
+    assert up.returncode == 0, f"the chain does not re-apply after a rollback:\n{up.stderr}"
+    assert await _schema_snapshot(empty_database) == at_head, (
+        "coming back up from a rollback does not reproduce the schema at head"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_irreversible_revision_refuses_before_it_changes_anything(empty_database):
+    """0006 stops with an explanation and an intact table, not partway through the DDL.
+
+    It could never have rolled back: PostgreSQL refuses TEXT -> DATE without a USING clause
+    even on an empty table. What it *did* was narrow ``full_name`` first and then abort on
+    ``date_of_birth``, leaving an operator mid-rollback holding a driver message about casting.
+    """
+    assert _alembic(empty_database, "upgrade", "head").returncode == 0
+    for _ in range(len(_revisions()) - IRREVERSIBLE_FLOOR_INDEX - 1):
+        assert _alembic(empty_database, "downgrade", "-1").returncode == 0
+    before = await _schema_snapshot(empty_database)
+
+    down = _alembic(empty_database, "downgrade", "-1")
+    assert down.returncode != 0, "0006 now claims to roll back; check it actually does"
+    assert "cannot be reversed automatically" in down.stderr, (
+        f"the refusal does not explain itself:\n{down.stderr}"
+    )
+    assert "app.core.crypto" in down.stderr, "the refusal does not say what to do instead"
+
+    assert _current_revision(empty_database) == IRREVERSIBLE_FLOOR
+    assert await _schema_snapshot(empty_database) == before, (
+        "the refused downgrade still changed the schema"
+    )

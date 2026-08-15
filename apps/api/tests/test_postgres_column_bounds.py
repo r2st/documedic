@@ -37,6 +37,7 @@ from app.models.patient import Patient
 from app.models.user import Account
 from app.services.graph_service import GraphService
 from tests.column_fit import assert_fits_columns
+from tests.postgres_required import unavailable
 
 pytestmark = pytest.mark.postgres
 
@@ -67,7 +68,7 @@ async def pg_session():
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:  # noqa: BLE001 - any connect/DDL failure means "no PostgreSQL here"
         await engine.dispose()
-        pytest.skip(f"no reachable PostgreSQL at {url}: {type(exc).__name__}: {exc}")
+        unavailable(f"no reachable PostgreSQL at {url}: {type(exc).__name__}: {exc}")
 
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     try:
@@ -184,7 +185,16 @@ async def test_pathological_extraction_commits_to_postgres(pg_session):
             },
         ],
     )
-    assert counts == {"medications": 2, "lab_results": 1, "conditions": 1, "allergies": 1}
+    # Written as "these counts, and nothing else merged" rather than as one dict comparison.
+    # The dict form was `== {"medications": 2, "lab_results": 1, "conditions": 1, "allergies": 1}`
+    # and it went stale the moment ``merge_entities`` started reporting encounters, which is a
+    # key this document has none of — a failure that says nothing about column bounds. It stayed
+    # stale because this whole module skips wherever no PostgreSQL is reachable.
+    seeded = {"medications": 2, "lab_results": 1, "conditions": 1, "allergies": 1}
+    assert {k: counts[k] for k in seeded} == seeded
+    assert not {k: v for k, v in counts.items() if k not in seeded and v}, (
+        f"the document merged something it does not contain: {counts}"
+    )
 
     await pg_session.commit()  # the real gate: PostgreSQL validates every column here
 

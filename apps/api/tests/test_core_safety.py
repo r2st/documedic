@@ -165,7 +165,11 @@ def test_normal_egfr_no_renal_flag():
 
 
 def test_no_flags_when_clean():
-    ctx = SafetyContext(current_meds=[METFORMIN])
+    # The age is part of what makes this chart clean, not incidental detail. Aspirin carries a
+    # paediatric caution, and an age-based check on a record with no date of birth reports itself
+    # as *not evaluated* rather than falling silent — so leaving the age off would have this test
+    # asserting the absence of a flag that the engine is supposed to raise.
+    ctx = SafetyContext(current_meds=[METFORMIN], age_years=45)
     assert evaluate_drug_safety(ASPIRIN, ctx) == []
 
 

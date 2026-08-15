@@ -72,6 +72,7 @@ CheckType = Literal[
     "hepatotoxic_burden",
     "bleeding_burden",
     "geriatric_caution",
+    "paediatric_caution",
     "unevaluated_condition",
     "stale_medication",
     # The last two are not statements about the patient at all. They are statements about a
@@ -2174,6 +2175,168 @@ def check_geriatric_cautions(proposed: DrugRef, ctx: SafetyContext) -> list[Safe
     ]
 
 
+@dataclass(frozen=True)
+class _PaediatricCaution:
+    """A curated age-based prescribing caution that applies *below* an age rather than above."""
+
+    below_age_years: int
+    severity: Severity
+    concern: str
+    # Prescriber-framed, per Critical Safety Rule #4 — a consideration, never an instruction.
+    consideration: str
+    reference: str
+
+
+# The other end of the age axis, and until now the missing one. ``check_geriatric_cautions`` was
+# added because nothing in this engine could see that a patient was 82; nothing could see that a
+# patient was 4 either, and the paediatric side is the one where the drugs in question are worse
+# than merely inadvisable. Aspirin given to a child with a viral illness is associated with Reye's
+# syndrome — an encephalopathy with a mortality measured in tens of percent — and "Disprin for the
+# fever" is an over-the-counter decision made in this market without a prescription at all, so the
+# chart the clinician is reading may already carry it.
+#
+# The two tables are separate rather than one table with a range, because the questions differ.
+# A geriatric caution says a routine drug deserves a second look. A paediatric caution says this
+# drug is the wrong drug for this patient's age, which is why the severities here are graded per
+# entry rather than fixed at "warning" the way the geriatric ones are.
+#
+# Still never a hard block, and for the reason Rule #3 exists: a hard block is for a documented
+# conflict between a real drug and a real chart, and it demands an override with written
+# reasoning. Both entries below have a correct paediatric use — aspirin is first-line in Kawasaki
+# disease, and a fluoroquinolone is the right answer in a resistant infection where nothing else
+# is — so a block here would be overridden routinely, which is how a block stops being read.
+#
+# Keyed by generic name where the caution belongs to the molecule and by drug class where it
+# belongs to the family. Aspirin is the reason both exist: its class is "Antiplatelet", which
+# also contains clopidogrel, and Reye's syndrome is a fact about salicylates and not about
+# platelet inhibition. Keying it on the class would put a warning about a childhood
+# encephalopathy under a drug that has nothing to do with one.
+_PAEDIATRIC_CAUTIONS_BY_GENERIC: dict[str, _PaediatricCaution] = {
+    "aspirin": _PaediatricCaution(
+        below_age_years=16,
+        # Graded critical rather than warning: unlike every geriatric entry, this is not "a
+        # routine drug that deserves a second look in this patient". It is a specific, named,
+        # potentially fatal association with the age of the patient in front of the clinician.
+        severity="critical",
+        concern=(
+            "aspirin in children and adolescents is associated with Reye's syndrome, an acute "
+            "encephalopathy with hepatic failure, particularly during or after a viral illness "
+            "such as influenza or varicella"
+        ),
+        consideration=(
+            "Guidelines support considering paracetamol for fever or pain at this age. Where "
+            "aspirin is being used for an indication that specifically calls for it in "
+            "childhood — Kawasaki disease is the usual one — that indication is worth having "
+            "documented on the chart alongside it."
+        ),
+        reference="BNF for Children — aspirin and Reye's syndrome under 16",
+    ),
+}
+
+_PAEDIATRIC_CAUTIONS_BY_CLASS: dict[str, _PaediatricCaution] = {
+    "fluoroquinolone": _PaediatricCaution(
+        below_age_years=18,
+        severity="warning",
+        concern=(
+            "fluoroquinolones are associated with arthropathy and tendon injury in growing "
+            "patients, and the published safety reviews restrict their use in this age group to "
+            "infections where no other agent is suitable"
+        ),
+        consideration=(
+            "Guidelines support considering an alternative agent guided by local sensitivities "
+            "where one is suitable, and recording the indication where a fluoroquinolone is the "
+            "agent that fits."
+        ),
+        reference="MHRA/EMA fluoroquinolone safety review; BNF for Children",
+    ),
+}
+
+
+def _paediatric_cautions(drug: DrugRef) -> list[tuple[_Ingredient, _PaediatricCaution]]:
+    """Every curated paediatric caution this product's identities carry, in a stable order.
+
+    Ingredient by ingredient, for the reason ``_geriatric_cautions`` is: a combination product's
+    own class matches nothing, and the molecule the caution is about is a component of it.
+    Generic name is consulted before class so the more specific entry wins, and a reference
+    already reported is not reported twice for the same product.
+    """
+    seen: set[str] = set()
+    out: list[tuple[_Ingredient, _PaediatricCaution]] = []
+    for ing in _ingredients(drug):
+        caution = _PAEDIATRIC_CAUTIONS_BY_GENERIC.get(
+            _norm(ing.drug.generic_name)
+        ) or _PAEDIATRIC_CAUTIONS_BY_CLASS.get(_norm(ing.drug.drug_class))
+        if caution is None or caution.reference in seen:
+            continue
+        seen.add(caution.reference)
+        out.append((ing, caution))
+    return out
+
+
+def check_paediatric_cautions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
+    """Surface the published age-based prescribing cautions this drug carries for a child.
+
+    Structurally the mirror of ``check_geriatric_cautions`` — the same absent-date-of-birth
+    behaviour, the same ingredient walk, the same refusal to escalate to a hard block — with the
+    comparison the other way round and the severity carried per entry.
+
+    The absent-date-of-birth branch matters more here than it does at the other end of the axis.
+    An adult chart with no date of birth is a chart whose geriatric cautions were not evaluated;
+    a *paediatric* chart with no date of birth is common, because the records this system reads
+    are scanned prescriptions and a child's paper record frequently carries an age in years
+    written by hand rather than a date. Falling silent there would report the check as passed on
+    exactly the population it exists for.
+    """
+    cautions = _paediatric_cautions(proposed)
+    if not cautions:
+        return []
+
+    if ctx.age_years is None:
+        return [
+            SafetyFlag(
+                check_type="paediatric_caution",
+                severity="info",
+                is_hard_block=False,
+                summary=(
+                    f"{ing.label} carries a prescribing caution for patients under "
+                    f"{caution.below_age_years} ({caution.reference}), and this record has no "
+                    "usable date of birth — so the caution was not evaluated for this patient. "
+                    "This is a check that did not run, not a check that passed."
+                ),
+                details={
+                    **ing.details(),
+                    "evaluated": False,
+                    "reason": "no_date_of_birth",
+                    "below_age_years": caution.below_age_years,
+                    "reference": caution.reference,
+                },
+            )
+            for ing, caution in cautions
+        ]
+
+    return [
+        SafetyFlag(
+            check_type="paediatric_caution",
+            severity=caution.severity,
+            is_hard_block=False,
+            summary=(
+                f"This patient is {ctx.age_years}, and under {caution.below_age_years} "
+                f"{caution.concern}. {caution.consideration} ({caution.reference}.)"
+            ),
+            details={
+                **ing.details(),
+                "evaluated": True,
+                "age_years": ctx.age_years,
+                "below_age_years": caution.below_age_years,
+                "drug_class": ing.drug.drug_class,
+                "reference": caution.reference,
+            },
+        )
+        for ing, caution in cautions
+        if ctx.age_years < caution.below_age_years
+    ]
+
+
 def check_unevaluated_conditions(ctx: SafetyContext) -> list[SafetyFlag]:
     """Say so when a charted condition could not be compared to any rule, rather than dropping it.
 
@@ -2554,6 +2717,7 @@ def evaluate_drug_safety(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFl
     flags.extend(check_hepatotoxic_burden(proposed, ctx))
     flags.extend(check_bleeding_burden(proposed, ctx))
     flags.extend(check_geriatric_cautions(proposed, ctx))
+    flags.extend(check_paediatric_cautions(proposed, ctx))
     flags.extend(check_guideline_adherence(proposed, ctx))
     return flags
 

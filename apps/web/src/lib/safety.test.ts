@@ -131,10 +131,20 @@ describe('checkTypeLabel', () => {
     expect(checkTypeLabel('bleeding_burden')).not.toBe(checkTypeLabel('drug_interaction'));
   });
 
-  it('names the age-based caution after the reason it fired, not after the drug', () => {
-    // It fires on how old the patient is, not on anything about the prescription in isolation.
+  it('names the age-based cautions after the reason they fired, not after the drug', () => {
+    // They fire on how old the patient is, not on anything about the prescription in isolation.
     // "Contraindication" or "Dosing" would both send the clinician looking for the wrong thing.
-    expect(checkTypeLabel('geriatric_caution')).toBe('Age-based caution');
+    expect(checkTypeLabel('geriatric_caution')).toContain('Age-based caution');
+    expect(checkTypeLabel('paediatric_caution')).toContain('Age-based caution');
+  });
+
+  it('distinguishes the two ends of the age axis', () => {
+    // A chart raises one or the other, never both, so a shared label would never look wrong on
+    // screen — and would still be wrong. The older-adult criteria say a routine drug deserves a
+    // second look; the paediatric ones say the drug does not belong at this age at all.
+    expect(checkTypeLabel('paediatric_caution')).not.toBe(checkTypeLabel('geriatric_caution'));
+    expect(checkTypeLabel('paediatric_caution')).toContain('child');
+    expect(checkTypeLabel('geriatric_caution')).toContain('older adult');
   });
 
   it('words the unevaluated checks as a check that did not run, not as a finding', () => {

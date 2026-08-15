@@ -84,7 +84,12 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   contraindication: 'Contraindication',
   drug_interaction: 'Drug interaction',
   duplicate_therapy: 'Duplicate therapy',
-  geriatric_caution: 'Age-based caution',
+  // Both ends of the age axis, and they have to be told apart at a glance: the older-adult
+  // criteria say a routine drug deserves a second look, while the paediatric ones say the drug
+  // is the wrong drug for this patient's age. One shared "Age-based caution" would have read as
+  // the same finding on a chart that can only ever raise one of them.
+  geriatric_caution: 'Age-based caution — older adult',
+  paediatric_caution: 'Age-based caution — child',
   guideline_deviation: 'Guideline deviation',
   hepatic_dose: 'Hepatic dosing',
   hepatic_severity: 'Liver function',

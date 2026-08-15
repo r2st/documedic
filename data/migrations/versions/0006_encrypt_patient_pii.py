@@ -13,6 +13,9 @@ production database: EncryptedString/EncryptedDate read a plaintext (undecryptab
 unchanged/None rather than crashing, but those rows should be re-saved (e.g. via a one-off
 backfill script) to actually get encrypted at rest.
 
+It is also the one revision in the chain that does not roll back — see ``downgrade`` and
+``IRREVERSIBLE`` below. Every revision above it does.
+
 Revision ID: 0006
 Revises: 0005
 Create Date: 2026-08-10
@@ -44,13 +47,34 @@ def upgrade() -> None:
     # address_text / notes are already TEXT — no type change needed there.
 
 
+IRREVERSIBLE = (
+    "0006 cannot be reversed automatically. These columns now hold Fernet ciphertext, and "
+    "narrowing them back to their plaintext types is not a type change — it is a decryption. "
+    "PostgreSQL refuses TEXT -> DATE on date_of_birth without a USING clause even on an empty "
+    "table, and there is no USING expression that turns a Fernet token into a date; on a "
+    "populated table phone would additionally overflow VARCHAR(20), since a token for a ten-"
+    "digit number is over a hundred characters. To roll back past this revision, decrypt the "
+    "patients table with app.core.crypto first (a one-off script, with the key that wrote it), "
+    "then apply the DDL by hand — deliberately, because the result is plaintext PII at rest and "
+    "the DPDP obligations in CLAUDE.md do not permit that to happen as a side effect of "
+    "`alembic downgrade`."
+)
+
+
 def downgrade() -> None:
+    """Refuse, rather than fail partway through.
+
+    This body used to issue the three ``alter_column`` calls that mirror ``upgrade``. None of
+    them could ever have succeeded — the failure is in PostgreSQL's type system, not in the
+    data — so what the chain actually had was a downgrade that aborted mid-DDL with a driver-
+    level ``DatatypeMismatchError`` about a USING clause, after ``full_name`` had already been
+    narrowed. An operator rolling a bad release back was left with a half-downgraded
+    ``patients`` table and a message about casting.
+
+    Raising here costs nothing that worked before and changes what the operator is holding when
+    it stops: the revision is still 0006, no DDL has run, and the message says what to do.
+    """
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    op.alter_column("patients", "full_name", type_=sa.String(500), existing_nullable=False)
-    op.alter_column(
-        "patients", "date_of_birth", type_=sa.Date(), existing_type=sa.Text(), existing_nullable=True
-    )
-    op.alter_column("patients", "phone", type_=sa.String(20), existing_nullable=True)
-    op.create_index("ix_patients_phone", "patients", ["phone"])
+    raise RuntimeError(IRREVERSIBLE)

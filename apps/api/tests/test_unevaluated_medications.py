@@ -126,7 +126,12 @@ def test_the_flag_is_not_folded_into_the_per_drug_evaluation() -> None:
     per current medication, so folding it in would repeat one chart-level warning several times
     in a single response.
     """
-    ctx = SafetyContext(unresolved_current_meds=[_GARBLED])
+    # ``age_years`` is given so the assertion below stays an empty list: aspirin carries a
+    # paediatric caution, and an age-based check runs against a record with no date of birth by
+    # reporting itself unevaluated. That flag would be correct here and unrelated to what this
+    # test is about, so the chart is made complete on the age axis instead of the assertion being
+    # loosened to tolerate it.
+    ctx = SafetyContext(unresolved_current_meds=[_GARBLED], age_years=45)
 
     flags = evaluate_drug_safety(DrugRef("ASP-75", "Aspirin", "Antiplatelet"), ctx)
 

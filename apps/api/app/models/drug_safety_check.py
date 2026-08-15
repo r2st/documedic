@@ -23,7 +23,7 @@ class DrugSafetyCheck(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "'unevaluated_medication', 'unevaluated_allergy', 'hepatic_severity', "
             "'hepatotoxic_burden', 'unevaluated_condition', 'bleeding_burden', "
             "'geriatric_caution', 'stale_medication', 'unverified_drug_name', "
-            "'implausible_dose')",
+            "'implausible_dose', 'paediatric_caution')",
             name="ck_dsc_check_type",
         ),
         CheckConstraint(

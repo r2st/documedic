@@ -21,15 +21,19 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
+from app.core.safety import CheckType
 from app.schemas import common
 
 ENUMS_TS = Path(__file__).resolve().parents[3] / "packages" / "shared-types" / "src" / "enums.ts"
 
-# TS unions with no Python counterpart: SafetyCheckType is produced by the safety service as a
-# plain string, so it is declared for the client without a schema enum behind it.
+# TS unions with no ``StrEnum`` counterpart in ``app.schemas.common``. SafetyCheckType's Python
+# side is ``app.core.safety.CheckType``, a ``Literal`` rather than an enum, so the enum-walking
+# checks below cannot see it — ``test_the_safety_check_types_match_the_typescript_union`` covers
+# it directly, because being exempt from every check is how it drifted in the first place.
 TS_ONLY = {"SafetyCheckType"}
 
 
@@ -41,9 +45,20 @@ def _python_enums() -> dict[str, type[StrEnum]]:
     }
 
 
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
 def _typescript_unions() -> dict[str, list[str]]:
-    """Parse ``export type Name = 'a' | 'b';`` (single- or multi-line) out of enums.ts."""
-    source = ENUMS_TS.read_text(encoding="utf-8")
+    """Parse ``export type Name = 'a' | 'b';`` (single- or multi-line) out of enums.ts.
+
+    Comments are stripped first, and that is load-bearing rather than tidy. The members are
+    picked out with ``'([^']+)'``, and these unions are commented in prose — "the chart's
+    medication list", "this patient's age" — so an apostrophe inside a ``//`` line opens a quote
+    that closes on the next apostrophe, and everything between becomes a "member". The union it
+    happened to be in parsed as a set of paragraph fragments with real members missing from it,
+    which is a sync check that passes by comparing nothing.
+    """
+    source = _LINE_COMMENT.sub("", ENUMS_TS.read_text(encoding="utf-8"))
     unions: dict[str, list[str]] = {}
     for match in re.finditer(r"export type (\w+)\s*=\s*([^;]+);", source):
         name, body = match.group(1), match.group(2)
@@ -93,6 +108,30 @@ def test_members_stringify_to_their_wire_value(name: str) -> None:
         )
         assert f"{member}" == member.value
         assert member == member.value, "comparison against the raw wire string must still hold"
+
+
+def test_the_safety_check_types_match_the_typescript_union() -> None:
+    """``SafetyCheckType`` is the one wire union with no ``StrEnum`` behind it, and it drifted.
+
+    Every check above walks ``app.schemas.common``'s StrEnums, so a union with no enum to walk is
+    exempt from all of them — ``TS_ONLY`` names this one and the exemption is what let two check
+    types the API had been emitting for months, ``bleeding_burden`` and ``geriatric_caution``, be
+    absent from the TypeScript the client is narrowed by.
+
+    The consequence is quiet in the way this project's worst bugs are. ``checkTypeLabel`` falls
+    back to a readable spelling of the raw string, so an unrepresentable type still renders and
+    nothing looks broken on screen; what breaks is the compile-time claim that the client handles
+    every finding the safety engine can produce. The Python side here is a ``Literal`` rather than
+    an enum, so this reads its members directly instead of going through ``_python_enums``.
+    """
+    python_values = set(get_args(CheckType))
+    ts_values = set(_typescript_unions().get("SafetyCheckType", []))
+
+    assert python_values == ts_values, (
+        "SafetyCheckType has drifted: the engine can emit "
+        f"{sorted(python_values - ts_values)} that the client cannot represent, and the client "
+        f"accepts {sorted(ts_values - python_values)} that the engine never emits"
+    )
 
 
 def test_members_are_lower_snake_case() -> None:
