@@ -3,13 +3,65 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.agents.context import ReasoningContext
 from app.agents.llm import LLMUnavailable
 from app.agents.untrusted import UNTRUSTED_DATA_FRAMING
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _BANDS = {"high", "moderate", "low", "very_low"}
+
+_llm_executor: ThreadPoolExecutor | None = None
+_llm_executor_lock = threading.Lock()
+
+
+def llm_executor() -> ThreadPoolExecutor:
+    """The thread pool provider SDK calls run on — deliberately not the loop's default one.
+
+    The SDKs are synchronous, so a call has to leave the event loop, and ``asyncio.to_thread``
+    would put it on the default executor. That executor is shared with everything else in the
+    process that leaves the loop: bcrypt behind ``verify_password``, document blob I/O, upload
+    hashing, the guideline embedder. It holds ``min(32, cpu_count + 4)`` threads — six on the box
+    this runs on — and one reasoning run's hypothesis panel takes four of them at once.
+
+    A provider that accepts the connection and then stops answering holds each of those threads
+    for the full retry-and-failover ladder, minutes at a time. Two clinicians running the panel
+    during such an outage filled the pool, and every unrelated request that needed a thread
+    queued behind them: logging in stopped working because a third party's socket was hanging.
+    An LLM outage is supposed to degrade reasoning, which the deterministic path exists for, and
+    nothing else.
+
+    Bounded at ``settings.llm_max_concurrent_calls``, so saturation is contained here: reasoning
+    queues for a slot while auth, uploads and the record continue at full speed. Built lazily
+    under a lock because the setting is read at first use rather than import — tests and workers
+    both override it — and because a module-level pool would start threads in every process that
+    imports an agent, including ones that never make a call.
+    """
+    global _llm_executor
+    if _llm_executor is None:
+        with _llm_executor_lock:
+            if _llm_executor is None:
+                _llm_executor = ThreadPoolExecutor(
+                    max_workers=max(1, settings.llm_max_concurrent_calls),
+                    thread_name_prefix="llm",
+                )
+    return _llm_executor
+
+
+def reset_llm_executor() -> None:
+    """Drop the pool so the next call rebuilds it at the current size. For tests."""
+    global _llm_executor
+    with _llm_executor_lock:
+        executor, _llm_executor = _llm_executor, None
+    if executor is not None:
+        executor.shutdown(wait=False)
 
 
 async def call_llm(
@@ -27,13 +79,42 @@ async def call_llm(
 
     It goes last so it is the final thing in the system prompt, after each agent's own hard
     rules — closest to the untrusted text it governs.
+
+    Refuses to start a call once the run is out of budget (``ReasoningContext.deadline``), and
+    returns ``None`` to do it — the same answer a provider failure gives, so every agent's
+    existing deterministic fallback handles it and the run comes back marked ``degraded`` and
+    escalated to flag-for-review. Nothing bounded a run before that: ``llm_request_timeout_seconds``
+    bounds one socket and the run lease bounds one *claim*, but a provider that hung rather than
+    refusing was retried and failed over at every one of the pipeline's nodes in turn, and the
+    clinician watched a Theatre that had stopped emitting for half an hour. See
+    ``settings.reasoning_llm_budget_seconds`` for why the check is here, before the call, rather
+    than as a cancellation around it.
+
+    The check is deliberately not an error. A run that runs out of budget has already produced
+    real output from the nodes that answered in time, and the deterministic path covers the rest;
+    failing the run instead would throw away both and leave the clinician with nothing.
     """
     client = ctx.verifier_llm if verifier else ctx.llm
     if not client.available():
         return None
+    if ctx.out_of_budget():
+        logger.warning(
+            "Reasoning run exceeded its LLM budget of %ss; remaining agents will run on the "
+            "deterministic path and the case will be marked degraded.",
+            settings.reasoning_llm_budget_seconds,
+        )
+        return None
     framed = f"{system}\n{UNTRUSTED_DATA_FRAMING}"
+    # What ``asyncio.to_thread`` does, against our own pool instead of the default one: the
+    # current context is copied so contextvars set per request (the request id the logs are
+    # correlated by) still resolve inside the worker thread.
+    context = contextvars.copy_context()
+
+    def call() -> dict[str, Any]:
+        return context.run(client.complete_json, framed, user)
+
     try:
-        return await asyncio.to_thread(client.complete_json, framed, user)
+        return await asyncio.get_running_loop().run_in_executor(llm_executor(), call)
     except LLMUnavailable:
         return None
 

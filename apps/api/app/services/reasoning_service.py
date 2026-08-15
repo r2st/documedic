@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -220,6 +221,12 @@ class ReasoningService:
             info_gain_threshold=settings.reasoning_info_gain_threshold,
             question_cap=settings.reasoning_question_cap,
             retrieval_threshold=settings.guideline_retrieval_threshold,
+            # The run's LLM budget starts here rather than at ``run``'s entry, and the difference
+            # is deliberate: this method is where the two heaviest pre-panel steps happen — the
+            # safety evaluator's chart read above, and the guideline corpus load below — and both
+            # are inside the window a clinician is waiting through. A budget that started at the
+            # first agent call would exclude them and understate the wait by whatever they cost.
+            deadline=time.monotonic() + settings.reasoning_llm_budget_seconds,
         )
         # Pre-fetch guideline chunks so the (sync) retriever closure has no DB dependency.
         ctx.retrieve = await self._make_retriever()

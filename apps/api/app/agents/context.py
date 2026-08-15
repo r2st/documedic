@@ -8,6 +8,7 @@ event emitter used to stream the Reasoning Theatre over SSE.
 from __future__ import annotations
 
 import inspect
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -78,6 +79,17 @@ class ReasoningContext:
     info_gain_threshold: float = 0.35
     question_cap: int = 6
     retrieval_threshold: float = 0.75
+    # ``time.monotonic()`` after which no further LLM call is started and the rest of the run
+    # finishes deterministically — see ``util.call_llm`` and
+    # ``settings.reasoning_llm_budget_seconds``.
+    # Monotonic rather than wall clock because it is a duration, and the wall clock can step.
+    # ``None`` means unbounded, which is what the agent unit tests and any direct construction
+    # get: a budget is a property of a *run*, and the ReasoningService is what starts one.
+    deadline: float | None = None
+
+    def out_of_budget(self) -> bool:
+        """Whether this run has spent its LLM budget and should finish on the offline path."""
+        return self.deadline is not None and time.monotonic() >= self.deadline
 
     def llm_available(self) -> bool:
         return self.llm.available()

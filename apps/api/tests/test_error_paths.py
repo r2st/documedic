@@ -389,6 +389,7 @@ async def test_call_llm_returns_none_when_the_provider_is_unavailable(monkeypatc
     If this raised instead, an LLM outage would surface as a 500 rather than the deterministic
     offline path the safety rules require.
     """
+    from app.agents.context import ReasoningContext
     from app.agents.llm import LLMUnavailable
     from app.agents.util import call_llm
 
@@ -399,15 +400,14 @@ async def test_call_llm_returns_none_when_the_provider_is_unavailable(monkeypatc
         def complete_json(self, system: str, user: str) -> dict:
             raise LLMUnavailable("provider down")
 
-    class _Ctx:
-        llm = _Client()
-        verifier_llm = _Client()
+    ctx = ReasoningContext(llm=_Client(), verifier_llm=_Client())  # type: ignore[arg-type]
 
-    assert await call_llm(_Ctx(), "sys", "user") is None
-    assert await call_llm(_Ctx(), "sys", "user", verifier=True) is None
+    assert await call_llm(ctx, "sys", "user") is None
+    assert await call_llm(ctx, "sys", "user", verifier=True) is None
 
 
 async def test_call_llm_returns_none_when_no_client_is_available():
+    from app.agents.context import ReasoningContext
     from app.agents.util import call_llm
 
     class _Client:
@@ -417,11 +417,9 @@ async def test_call_llm_returns_none_when_no_client_is_available():
         def complete_json(self, system: str, user: str) -> dict:  # pragma: no cover
             raise AssertionError("must not be called when unavailable")
 
-    class _Ctx:
-        llm = _Client()
-        verifier_llm = _Client()
+    ctx = ReasoningContext(llm=_Client(), verifier_llm=_Client())  # type: ignore[arg-type]
 
-    assert await call_llm(_Ctx(), "sys", "user") is None
+    assert await call_llm(ctx, "sys", "user") is None
 
 
 # --------------------------------------------------------------------------------------

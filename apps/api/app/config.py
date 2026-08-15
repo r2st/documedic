@@ -60,6 +60,42 @@ class Settings(BaseSettings):
     # one whose probe is slowest, so re-running it per poll would make the status endpoint
     # hang for the length of the outage — and turn a monitoring poller into provider traffic.
     llm_health_probe_ttl_seconds: float = 60.0
+    # Size of the thread pool the provider SDKs are called on, and the reason that pool exists
+    # separately at all. The SDKs are synchronous, so every call runs on a worker thread, and
+    # `asyncio.to_thread` puts it on the event loop's *default* executor — which is shared with
+    # everything else in the process that has to leave the loop: bcrypt in `verify_password`,
+    # document blob reads and writes, upload hashing, the guideline embedder.
+    #
+    # That pool holds `min(32, cpu_count + 4)` threads, which is 6 on the 2-vCPU box this runs
+    # on. One reasoning run's hypothesis panel occupies 4 of them at once (four specialists under
+    # `asyncio.gather`), and a provider that accepts a connection and then stops answering holds
+    # each for `llm_request_timeout_seconds` x (retries + 1) x every provider in the chain — 4.5
+    # minutes on these defaults. So two clinicians running the panel against a hanging upstream
+    # filled the default executor, and the next request needing a thread waited behind them:
+    # logging in stopped working, uploads stopped working, and the cause was a third party's
+    # socket. An LLM outage should degrade reasoning — the deterministic path is built for
+    # exactly that — not take authentication down with it.
+    #
+    # Sized for two concurrent panels. Beyond that, runs queue for a slot, which is the correct
+    # degradation: reasoning gets slower under load while nothing outside it is affected.
+    llm_max_concurrent_calls: int = 8
+    # Wall-clock budget for the LLM calls of one reasoning run, after which the run stops issuing
+    # them and finishes on the deterministic path (marked degraded, escalated to flag-for-review).
+    #
+    # Nothing bounded a run before this. `llm_request_timeout_seconds` bounds one socket, and
+    # `reasoning_run_lease_minutes` bounds how long a claim is honoured — neither stops a run
+    # continuing to make calls. A hanging provider therefore cost 4.5 minutes per agent call
+    # across seven sequential nodes plus the panel: past half an hour, of which the clinician
+    # spends every minute watching a Reasoning Theatre that has stopped producing events, and at
+    # the end of which the run has outlived its lease and may have to discard its own output.
+    # Ten minutes of nothing, then a degraded answer, is strictly better than thirty minutes of
+    # nothing and possibly no answer.
+    #
+    # Deliberately below the lease with room to spare. The budget is checked before each call
+    # rather than interrupting one in flight — a synchronous SDK call on a worker thread cannot be
+    # cancelled — so the real ceiling is this plus one worst-case call: 600 + 270 seconds, still
+    # inside the 15-minute lease. Keep that inequality if either value moves.
+    reasoning_llm_budget_seconds: float = 600.0
 
     # --- OpenAI (primary LLM) ---
     openai_api_key: str = ""
