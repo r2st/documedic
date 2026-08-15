@@ -23,11 +23,75 @@ the safe default for anything else.
 
 from __future__ import annotations
 
+import logging
+
 from starlette.requests import Request
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 _FORWARDED_FOR = "x-forwarded-for"
+
+# Set once, when a request carries ``X-Forwarded-For`` while ``trusted_proxy_hops`` is 0.
+# Reported by :func:`proxy_configuration_report`; see :func:`_note_untrusted_forwarded_for`
+# for why this is a signal worth surfacing and not a conclusion.
+_forwarded_for_seen_while_untrusted = False
+
+
+def _note_untrusted_forwarded_for(request: Request) -> None:
+    """Record that a forwarded-for header arrived on a deployment configured to ignore it.
+
+    ``TRUSTED_PROXY_HOPS`` is the one setting in this area that nothing can validate at
+    startup: whether a proxy sits in front of the API is a property of the deployment's
+    topology, not of its configuration, so the process cannot know at boot that its default of
+    0 is wrong. Left wrong it is *silent* — every per-address control keeps working, keyed on
+    an address that is the same for everyone (see this module's docstring). That is the
+    failure this whole module exists to fix, and shipping ``nginx/nginx.conf`` while leaving
+    the setting at 0 puts it straight back.
+
+    So the deployment is asked at runtime instead. A request carrying ``X-Forwarded-For`` on a
+    deployment that trusts no hops is evidence that *something* in front is setting it.
+
+    Evidence, not proof: the header is client-settable, so on a directly-exposed uvicorn — the
+    configuration for which 0 is correct — any caller can set it and raise this flag. It is
+    therefore reported, never acted on, and never used to change how an address is resolved. A
+    false positive costs one log line and one true field on an authenticated health endpoint;
+    the operator reading it knows their own topology and can tell instantly which it is.
+
+    Logged once rather than per request: this fires on every request once a proxy is in front,
+    and a warning per request is how an operator learns to filter the warning out.
+    """
+    global _forwarded_for_seen_while_untrusted
+    if _forwarded_for_seen_while_untrusted or _FORWARDED_FOR not in request.headers:
+        return
+    _forwarded_for_seen_while_untrusted = True
+    logger.warning(
+        "Received X-Forwarded-For while TRUSTED_PROXY_HOPS=0, so it is being ignored and the "
+        "peer address is used instead. If this API runs behind a reverse proxy you operate "
+        "(the reference nginx/nginx.conf is one hop), set TRUSTED_PROXY_HOPS to the number of "
+        "hops: until then every caller shares the proxy's address, which makes the login "
+        "lockout a deployment-wide sign-in block, the signup ceiling a global one, and the "
+        "address on sessions and auth audit entries the proxy's rather than the clinician's. "
+        "If uvicorn is exposed directly then 0 is correct and a caller simply sent the header."
+    )
+
+
+def proxy_configuration_report() -> dict:
+    """What this process has observed about the proxy in front of it, for health output."""
+    return {
+        "trusted_proxy_hops": settings.trusted_proxy_hops,
+        # True once a request arrived carrying X-Forwarded-For while trusting no hops. A
+        # deployment behind a proxy should read this as "TRUSTED_PROXY_HOPS is unset"; one
+        # with uvicorn exposed directly should read it as "a caller sent a header we ignored".
+        "forwarded_for_seen_while_untrusted": _forwarded_for_seen_while_untrusted,
+    }
+
+
+def reset_proxy_observations() -> None:
+    """Forget what has been observed about the proxy. For tests, and for nothing else."""
+    global _forwarded_for_seen_while_untrusted
+    _forwarded_for_seen_while_untrusted = False
 
 
 def client_address(request: Request) -> str | None:
@@ -51,6 +115,7 @@ def client_address(request: Request) -> str | None:
     peer = request.client.host if request.client else None
     hops = settings.trusted_proxy_hops
     if hops <= 0:
+        _note_untrusted_forwarded_for(request)
         return peer
 
     chain = [part.strip() for part in request.headers.get(_FORWARDED_FOR, "").split(",")]

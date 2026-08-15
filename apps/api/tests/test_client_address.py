@@ -13,11 +13,17 @@ at all by default.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from starlette.datastructures import Headers
 
 from app.config import settings
-from app.core.client_address import client_address
+from app.core.client_address import (
+    client_address,
+    proxy_configuration_report,
+    reset_proxy_observations,
+)
 
 
 class _Peer:
@@ -150,3 +156,81 @@ async def test_a_spoofed_header_cannot_move_a_caller_off_its_rate_limit_key(clie
         )
         statuses.append(resp.status_code)
     assert statuses == [201, 201, 429]
+
+
+# --- Noticing that TRUSTED_PROXY_HOPS was never set --------------------------------------
+#
+# Nothing can validate this setting at startup: whether a proxy sits in front of the API is a
+# property of the deployment's topology, not of its configuration. Left at the default of 0
+# behind a proxy it fails silently — every control above keeps working, on an address that is
+# the same for everyone — so the process reports what it observes instead.
+
+
+@pytest.fixture(autouse=True)
+def _forget_observations():
+    """Module-level observation, so it has to be cleared around every test that reads it."""
+    reset_proxy_observations()
+    yield
+    reset_proxy_observations()
+
+
+def test_a_forwarded_header_on_an_untrusting_deployment_is_reported(hops):
+    """The signal. Something in front is setting the header and the API is ignoring it."""
+    hops(0)
+    assert proxy_configuration_report()["forwarded_for_seen_while_untrusted"] is False
+    _address("10.0.0.2", "203.0.113.7")
+    report = proxy_configuration_report()
+    assert report["forwarded_for_seen_while_untrusted"] is True
+    assert report["trusted_proxy_hops"] == 0
+
+
+def test_no_header_leaves_the_report_clean(hops):
+    """A directly-exposed uvicorn with no proxy in front says nothing at all."""
+    hops(0)
+    _address("203.0.113.7")
+    assert proxy_configuration_report()["forwarded_for_seen_while_untrusted"] is False
+
+
+def test_a_header_that_is_being_honoured_is_not_a_misconfiguration(hops):
+    """With hops declared the header is used, not ignored, so there is nothing to report."""
+    hops(1)
+    assert _address("10.0.0.2", "203.0.113.7") == "203.0.113.7"
+    assert proxy_configuration_report()["forwarded_for_seen_while_untrusted"] is False
+
+
+def test_the_observation_never_changes_the_address_that_is_resolved(hops):
+    """Evidence, never acted on: the header is client-settable, so raising the flag must not
+    also start trusting it. This is the property that keeps a false positive harmless."""
+    hops(0)
+    assert _address("10.0.0.2", "198.51.100.9") == "10.0.0.2"
+    assert proxy_configuration_report()["forwarded_for_seen_while_untrusted"] is True
+    # Still the peer on the next request, too — the flag is a report, not a mode switch.
+    assert _address("10.0.0.3", "198.51.100.9") == "10.0.0.3"
+
+
+def test_it_warns_once_and_not_per_request(hops, caplog):
+    """This fires on every single request once a proxy is in front. A warning per request is
+    how an operator learns to filter the warning out."""
+    hops(0)
+    with caplog.at_level(logging.WARNING, logger="app.core.client_address"):
+        for _ in range(5):
+            _address("10.0.0.2", "203.0.113.7")
+    warnings = [r for r in caplog.records if "TRUSTED_PROXY_HOPS" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_health_endpoint_reports_it(auth_client, monkeypatch):
+    """Where an operator actually finds it: the same probe that reports the database and the
+    LLM providers, since this is a deployment fault of exactly that kind."""
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 0)
+    await auth_client.post(
+        "/api/v1/auth/signup",
+        json={"email": "proxyreport@example.com", "password": "password123"},
+        headers={"X-Forwarded-For": "203.0.113.7"},
+    )
+    body = (await auth_client.get("/health/dependencies")).json()
+    assert body["proxy_configuration"] == {
+        "trusted_proxy_hops": 0,
+        "forwarded_for_seen_while_untrusted": True,
+    }

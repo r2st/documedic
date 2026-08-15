@@ -15,6 +15,7 @@ from app.agents.llm import (
     using_simulated_llm,
 )
 from app.config import settings
+from app.core.client_address import proxy_configuration_report
 from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.openapi import errors
@@ -110,6 +111,11 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
     reachable = [name for name, state in providers.items() if state["reachable"]]
     return {
         "database": "ok" if db_ok else "error",
+        # What this process has observed about the proxy in front of it. Nothing can validate
+        # TRUSTED_PROXY_HOPS at startup — whether a proxy is there is topology, not
+        # configuration — and left wrong it fails silently, so the observation is reported
+        # here instead. See app.core.client_address.
+        "proxy_configuration": proxy_configuration_report(),
         # Pool occupancy, so connection-pool exhaustion is diagnosable while it is happening
         # rather than afterwards from a wall of timeouts. `checked_out` climbing to
         # `pool_size + overflow` is the signal; the long-running reasoning routes hold a
