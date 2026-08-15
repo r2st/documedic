@@ -347,6 +347,12 @@ class PatientExportService:
         # A stop event is a stopped medication whatever `is_current` says; otherwise the flag
         # the chart is actually driven by decides. "unknown" rather than a guess for anything
         # else, because "active" is the reading with consequences at the far end.
+        #
+        # The first clause used to be the only thing in the system reading a discontinuation
+        # correctly: the merge wrote `is_current=True` for every event type, so this export said
+        # "stopped" while the safety engine and the records list said the patient was on the
+        # drug. Both ends now agree (`GraphService._merge_medication`, migration 0022), and this
+        # stays as the statement of which one wins if they ever disagree again.
         if row.event_type == "stop":
             status = "stopped"
         elif row.is_current:

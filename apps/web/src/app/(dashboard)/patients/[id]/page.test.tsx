@@ -172,10 +172,35 @@ describe('PatientDetailPage', () => {
     expect(within(allergies).getByText('Penicillin · severe · active')).toBeInTheDocument();
     expect(within(allergies).getByText('1')).toBeInTheDocument();
     expect(
-      within(section('Active medications')).getByText('Metformin · 500mg · BD'),
+      within(section('Medications')).getByText('Metformin · 500mg · BD'),
     ).toBeInTheDocument();
     expect(within(section('Conditions')).getByText('No conditions')).toBeInTheDocument();
     expect(within(section('Lab results')).getByText('No labs')).toBeInTheDocument();
+  });
+
+  it('marks a discontinued medication instead of listing it like the rest', async () => {
+    // Until a `stop` line could actually land in the graph, every row here was current and the
+    // panel could call itself "Active medications" without checking. Now that a drug can leave
+    // the list, an unmarked row would tell a clinician the patient is still on it.
+    mockAll({
+      record: record({
+        medications: [
+          { id: 'm1', generic_name: 'Metformin', dose: '500mg', is_current: true },
+          { id: 'm2', generic_name: 'Warfarin', dose: '5mg', is_current: false },
+        ],
+      }),
+    });
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByRole('heading', { name: 'Asha Reddy' });
+
+    const meds = section('Medications');
+    // Kept, not filtered away: "warfarin was stopped" is the fact a longitudinal record exists
+    // to carry, and a list that silently drops it reads as a drug never prescribed.
+    expect(within(meds).getByText('Warfarin · 5mg')).toBeInTheDocument();
+    expect(within(meds).getAllByText('Stopped')).toHaveLength(1);
+    expect(within(meds).getByText('Metformin · 500mg').closest('li')).not.toHaveTextContent(
+      'Stopped',
+    );
   });
 
   it('confirms the audit hash chain when the backend verifies it', async () => {

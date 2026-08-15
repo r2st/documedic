@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
-from sqlalchemy import Numeric, select
+from sqlalchemy import Numeric, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clinical import (
@@ -367,12 +367,41 @@ class GraphService:
         resolved = await self.resolver.resolve(brand)
         generic = resolved.generic_name if resolved else fields.get("generic_name")
         vocab_id = resolved.vocabulary_id if resolved else None
+        event_type = _enum(MedicationEvent, "event_type", fields.get("event_type"), "continue")
 
-        # Dedup: same generic + dose among the patient's current medications.
+        # A discontinuation is a different clinical fact about the same drug, so it takes a
+        # different key and a different landing. Under the one key below it collided with the
+        # very row it was meant to retire — the drug was already a current medication at that
+        # generic and dose, so ``stop`` matched, returned False, and was discarded before it was
+        # ever written. A prescription that read "STOP Warfarin" changed nothing: warfarin stayed
+        # current for good, kept interacting with everything started after it, and kept counting
+        # toward the cumulative bleeding burden, on a patient who had been taken off it.
+        #
+        # Both halves of that were wrong in a direction that matters. The chart-wide safety view
+        # raised a major-interaction and a bleeding-burden flag for a combination nobody was
+        # taking — noise on the screen that exists to be read carefully — and ``GET /records``
+        # listed an anticoagulant as current for a patient who was not anticoagulated, which is
+        # the sort of thing a clinician makes the next decision on.
         key = ((generic or "").lower(), fields.get("dose") or "")
-        if generic and key in seen:
+        if event_type == "stop":
+            if generic and ("stop", *key) in seen:
+                return False
+            seen.add(("stop", *key))
+            await self._retire_current(patient, vocab_id, generic)
+            if generic:
+                # The keys of the rows just retired go with them. ``seen`` was loaded from the
+                # patient's *current* medications to stop this document re-inserting one, and
+                # those rows are no longer current — so leaving the keys behind would make a
+                # line that restarts the drug look like a duplicate of the row that stopped it.
+                # A prescription switching a patient from Glycomet 500 to generic Metformin 500
+                # is exactly that shape, and it would have ended with the drug on neither.
+                seen.difference_update(
+                    {entry for entry in seen if len(entry) == 2 and entry[0] == key[0]}
+                )
+        elif generic and key in seen:
             return False
-        seen.add(key)
+        else:
+            seen.add(key)
 
         med = MedicationEvent(
             **_fitted(
@@ -386,11 +415,14 @@ class GraphService:
                 dose_unit=fields.get("dose_unit"),
                 frequency=fields.get("frequency"),
                 route=fields.get("route"),
-                event_type=_enum(
-                    MedicationEvent, "event_type", fields.get("event_type"), "continue"
-                ),
+                event_type=event_type,
                 event_date=_parse_date(fields.get("event_date")),
-                is_current=True,
+                # The stop row records that the drug was discontinued; it is not itself a drug
+                # the patient is on. ``export_service`` already had to special-case this —
+                # "a stop event is a stopped medication whatever ``is_current`` says" — which
+                # left the FHIR export saying ``stopped`` while the safety engine and the
+                # records list, both of which read only ``is_current``, said current.
+                is_current=event_type != "stop",
                 extraction_region=region,
                 extraction_confidence=confidence,
                 clinician_confirmed=True,
@@ -399,6 +431,49 @@ class GraphService:
         )
         self.db.add(med)
         return True
+
+    async def _retire_current(
+        self, patient: Patient, vocab_id: object, generic: str | None
+    ) -> None:
+        """Take the patient off a drug a newly merged ``stop`` event discontinues.
+
+        Without this the stop row lands beside the rows it contradicts and changes nothing: the
+        earlier "continue Warfarin 5mg" is still ``is_current``, so the safety engine, the
+        records list and every count derived from them still have the patient on it.
+
+        Matched by drug, not by drug *and dose*. A line that reads "stop Metformin 500mg" is a
+        clinician stopping metformin, and requiring the dose to agree would leave a row charted
+        without one — which is most of what OCR produces from a handwritten prescription —
+        running forever. The vocabulary id is the match when the name resolved, so Crocin
+        discontinues Dolo; a name that resolved to nothing falls back to its own folded text,
+        which is all there is to compare.
+
+        Only rows already in the database, which is exactly right and worth stating because it
+        rests on the session's ``autoflush=False``: rows added earlier in this same merge are
+        still pending, so a stop line cannot retire a start line from the document it arrived
+        in. A prescription that stops one dose and starts another lands as the switch it is,
+        whichever order the two lines were extracted in.
+        """
+        if vocab_id is None and not (generic or "").strip():
+            # Nothing to match on. A stop line whose drug neither resolved nor carries a name
+            # cannot say what it discontinues, so it retires nothing rather than everything —
+            # an unreadable line must not be able to empty a medication list.
+            return
+        match = (
+            MedicationEvent.drug_vocabulary_id == vocab_id
+            if vocab_id is not None
+            else func.lower(MedicationEvent.generic_name) == (generic or "").lower()
+        )
+        rows = await self.db.execute(
+            select(MedicationEvent).where(
+                MedicationEvent.patient_id == patient.id,
+                MedicationEvent.is_deleted.is_(False),
+                MedicationEvent.is_current.is_(True),
+                match,
+            )
+        )
+        for row in rows.scalars().all():
+            row.is_current = False
 
     async def _merge_lab(
         self,

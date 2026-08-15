@@ -25,7 +25,7 @@ const SECTION_ICONS: Record<string, JSX.Element> = {
       />
     </svg>
   ),
-  'Active medications': (
+  Medications: (
     <svg
       aria-hidden="true"
       className="h-5 w-5 text-blue-500"
@@ -395,12 +395,21 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
               fields={['allergen_name', 'severity', 'status']}
               empty="No allergies recorded"
             />
+            {/* "Medications", not "Active medications". The list is every medication event on
+                the chart, and once a discontinuation could actually land (a `stop` line used to
+                be dropped at merge, so nothing here was ever anything but current) the old
+                heading was asserting something about rows it did not check. The API orders
+                current first; each stopped row says so on its face. */}
             <RecordSection
-              title="Active medications"
-              icon={SECTION_ICONS['Active medications']}
+              title="Medications"
+              icon={SECTION_ICONS['Medications']}
               rows={record.medications}
               fields={['generic_name', 'dose', 'frequency']}
               empty="No medications"
+              // A drug the patient was taken off must not read as one they are on. Shown rather
+              // than filtered out: "stopped in March" is what makes the record longitudinal, and
+              // a silently shortened list is how a clinician concludes a drug was never given.
+              badge={(row) => (row.is_current === false ? 'Stopped' : null)}
             />
             <RecordSection
               title="Conditions"
@@ -501,12 +510,15 @@ function RecordSection({
   rows,
   fields,
   empty,
+  badge,
 }: {
   title: string;
   icon?: JSX.Element;
   rows: Array<Record<string, unknown>>;
   fields: string[];
   empty: string;
+  /** Optional short qualifier for a row — returns null for rows that need none. */
+  badge?: (row: Record<string, unknown>) => string | null;
 }) {
   return (
     <Card>
@@ -526,14 +538,31 @@ function RecordSection({
         <p className="text-sm text-slate-400 italic">{empty}</p>
       ) : (
         <ul className="space-y-1.5">
-          {rows.map((row, i) => (
-            <li key={i} className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              {fields
-                .map((f) => row[f])
-                .filter((v) => v !== null && v !== undefined && v !== '')
-                .join(' · ')}
-            </li>
-          ))}
+          {rows.map((row, i) => {
+            const label = badge?.(row) ?? null;
+            return (
+              <li
+                key={i}
+                className={`flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm ${
+                  label ? 'bg-slate-50/60 text-slate-500' : 'bg-slate-50 text-slate-700'
+                }`}
+              >
+                <span>
+                  {fields
+                    .map((f) => row[f])
+                    .filter((v) => v !== null && v !== undefined && v !== '')
+                    .join(' · ')}
+                </span>
+                {/* Text, not colour alone: the distinction between a drug the patient is on and
+                    one they were taken off cannot rest on a shade of grey. */}
+                {label && (
+                  <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {label}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>
