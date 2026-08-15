@@ -237,6 +237,19 @@ class Settings(BaseSettings):
     # Minimum interval between sweeps, per process. Without it every refresh would issue a
     # delete.
     session_sweep_interval_minutes: int = 60
+    # Ceiling on how many sign-ins one account may hold at once. 0 disables the cap.
+    #
+    # Enforced by evicting the least recently used sessions on a *new* sign-in, never by
+    # refusing one: refusing would hand anyone who learns a password a way to lock the
+    # clinician out of their own account by filling the cap, and a clinician refused sign-in
+    # mid-shift is a worse outcome than the extra session. Rotation is not a new sign-in and
+    # does not evict — `refresh` revokes the row it rotates, so the count is unchanged.
+    #
+    # Ten rather than two or three: a clinician legitimately holds several at once (ward
+    # workstation, consulting room, phone, a tablet on rounds), and the control is aimed at
+    # the account quietly accumulating dozens over months of shared terminals — each one a
+    # live refresh token on a machine nobody remembers signing out of.
+    session_max_concurrent: int = 10
 
     # --- Reverse proxy ---
     # How many reverse proxies this deployment operates in front of the API. 0 means uvicorn

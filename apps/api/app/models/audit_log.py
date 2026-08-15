@@ -28,6 +28,11 @@ AUDIT_ACTIONS = (
     "auth_refresh_token_reuse_detected",
     "auth_session_revoked",
     "auth_session_idle_expired",
+    # A sign-in ended by the concurrent-session ceiling rather than by anyone asking. Separate
+    # from the two revocation actions above precisely because nobody asked for it: an incident
+    # review must be able to tell a sign-out the clinician performed from one performed on
+    # their behalf. See AuthService._enforce_concurrent_session_limit.
+    "auth_session_evicted",
     "auth_password_changed",
     "auth_password_change_failed",
     # The reset flow. All four are recorded even though the endpoint tells the caller nothing:

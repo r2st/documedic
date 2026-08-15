@@ -153,7 +153,13 @@ async def refresh(
 async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> MessageResponse:
     """End this device's session. Idempotent: an unknown or already-revoked token still
     reports success, so a client retrying a logout is never left believing it is still signed
-    in. Access tokens already issued stay valid until they expire.
+    in.
+
+    The access token already issued stops working too, immediately — it names this sign-in in
+    its `asid` claim and every authenticated route re-checks that the sign-in is still live.
+    This used to say the opposite, and the opposite used to be true: a JWT was good until its
+    own expiry, so "log out" left the device reading charts for up to `JWT_ACCESS_TTL_MINUTES`
+    more.
     """
     service = AuthService(db)
     await service.logout(body.refresh_token)

@@ -475,9 +475,19 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "auth_session_idle_expired": {"ip_address", "session_id"},
     "auth_logout": set(),
     "auth_logout_all": {"revoked_count"},
+    # Two counts and the ceiling that produced them. No session ids and no addresses: the rows
+    # are still in ``sessions`` for the retention window and can be read there, and the fact
+    # this entry has to carry forever is that the ceiling acted and how hard it was set — which
+    # is what tells an operator months later whether SESSION_MAX_CONCURRENT is too low for how
+    # this deployment actually works.
+    "auth_session_evicted": {"evicted_count", "limit"},
     # --- password change and reset. No token, raw or hashed, and no new password: the trail
     # records that a credential moved, never anything that helps move it again.
-    "auth_password_changed": {"revoked_sessions"},
+    # ``invalidated_reset_tokens`` is a count of the reset links the change retired. It is the
+    # answer to "was a live way into this account outstanding when the password moved?", which
+    # is the first question asked of this entry in an incident, and a count cannot be used to
+    # find or spend any of them.
+    "auth_password_changed": {"revoked_sessions", "invalidated_reset_tokens"},
     # Empty on purpose: the action name is the whole fact, and there is nothing about a wrong
     # password that can be recorded without recording something about the password.
     "auth_password_change_failed": set(),
@@ -489,7 +499,12 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # the same reason: it is what scopes the row to one account's failed-login budget. A
     # completed reset proves control of the account, so it clears that budget — see
     # AuthService._recent_failures.
-    "auth_password_reset_completed": {"email", "token_id", "revoked_sessions"},
+    "auth_password_reset_completed": {
+        "email",
+        "token_id",
+        "revoked_sessions",
+        "invalidated_reset_tokens",
+    },
     "auth_password_reset_token_reused": {"token_id"},
     # Retention sweep. Counts and configuration, no identifiers: the rows it removed are gone,
     # and naming them would recreate in this table the record the sweep exists to retire.

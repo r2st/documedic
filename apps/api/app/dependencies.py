@@ -60,14 +60,16 @@ async def get_current_account(
             "This account is no longer active. Contact your administrator to restore access.",
             detail=f"account {account_id} absent or soft-deleted",
         )
-    await assert_auth_session_live(db, payload)
+    await assert_auth_session_live(db, payload, account_id=account_id)
     # Stashed so a handler that needs to mint a token scoped to this same sign-in (see
     # `routers.reasoning.mint_stream_token`) does not have to re-parse the header to find it.
     request.state.auth_session_id = uuid.UUID(str(payload["asid"]))
     return account
 
 
-async def assert_auth_session_live(db: AsyncSession, payload: dict) -> None:
+async def assert_auth_session_live(
+    db: AsyncSession, payload: dict, *, account_id: uuid.UUID
+) -> None:
     """Reject a token whose sign-in has since been revoked or expired.
 
     A JWT is valid until it expires, so on its own an access token is a credential that cannot
@@ -93,6 +95,20 @@ async def assert_auth_session_live(db: AsyncSession, payload: dict) -> None:
     practice. Tokens minted before this claim existed are refused the same way; the client's
     refresh flow answers a 401 by rotating, so the cost is one extra round-trip per signed-in
     browser at deploy, not a re-login.
+
+    ``account_id`` asserts the two identities in the token agree: the sign-in named by ``asid``
+    must belong to the account named by ``sub``. Nothing in the service mints a mismatched pair
+    — both claims are written in one place, from one account, by ``_issue_tokens`` — so this is
+    not a hole being closed but an invariant being *stated*. It was true only by the good
+    behaviour of every current call site, which is the kind of truth that survives until someone
+    adds an impersonation route or a token-minting helper and pairs the wrong session with the
+    wrong subject. Checked here because both rows are already in hand and the comparison is
+    free.
+
+    Required rather than defaulted to ``None``, for the same reason ``asid`` itself is not
+    optional: a security check a caller can silently skip is one a caller will eventually skip.
+    Every call site already resolves the account before reaching here, so passing it costs
+    nothing and a new one that forgets fails to type-check rather than failing open.
     """
     raw = payload.get("asid")
     if raw is None:
@@ -105,6 +121,13 @@ async def assert_auth_session_live(db: AsyncSession, payload: dict) -> None:
     session = await db.get(AuthSession, auth_session_id)
     if session is None:
         raise TokenError(detail=f"no session row for asid {auth_session_id}")
+    if session.account_id != account_id:
+        raise TokenError(
+            detail=(
+                f"session {auth_session_id} belongs to account {session.account_id}, "
+                f"not to the token subject {account_id}"
+            )
+        )
     if session.is_revoked:
         raise TokenError(
             "You have been signed out of this device. Sign in again to continue.",

@@ -154,7 +154,14 @@ class AuthService:
         off a device kept working for as long as its holder cared to keep rotating it — reuse
         detection cannot see that, because it needs the *legitimate* client to present the
         stale token, and a device that has been put away never does.
+
+        A fresh sign-in also enforces ``session_max_concurrent`` — see
+        :meth:`_enforce_concurrent_session_limit`. ``family_started_at`` is what tells the two
+        cases apart: a rotation carries one and must not evict, because it has already revoked
+        the row it is replacing and so leaves the count where it found it.
         """
+        if family_started_at is None:
+            await self._enforce_concurrent_session_limit(account.id)
         refresh = generate_refresh_token()
         now = datetime.now(UTC)
         started = _aware(family_started_at) if family_started_at else now
@@ -511,6 +518,18 @@ class AuthService:
         a suspected compromise — leaving the attacker's refresh token live would make the
         change cosmetic. The caller's own session survives when it identifies itself, so the
         clinician is not signed out of the tab they did this from mid-consultation.
+
+        Any outstanding password-reset token is retired at the same time, for exactly the same
+        reason and against exactly the same threat. Revoking sessions alone treated the password
+        as the only credential that opens the account, and it is not: a reset token is a bearer
+        credential equal to it, and this method existed while one was still live and unspent in
+        every case the feature is *for*. Someone who reaches an unlocked workstation can request
+        a reset (the endpoint is unauthenticated and answers the same 202 to anyone), let the
+        clinician notice and change the password, and then spend their token — which sets a
+        password of the attacker's choosing and, by ``reset_password``'s own design, signs the
+        clinician out everywhere. The benign version needs no attacker at all: a clinician who
+        asked for a link, then remembered the password and changed it, left a working link in a
+        mailbox for the rest of its TTL. See tests/test_password_change_invalidates_reset_tokens.py.
         """
         if not await verify_password_async(current_password, account.password_hash):
             await self.audit.record(
@@ -531,12 +550,20 @@ class AuthService:
         account.password_hash = await hash_password_async(new_password)
         await self.db.flush()
         revoked = await self.revoke_all_sessions(account.id, keep_refresh_token=keep_refresh_token)
+        # After the password is written, not before: only a change that actually happened
+        # retires anything. The rejected-current-password branch above has already raised, so a
+        # wrong guess at a borrowed keyboard cannot burn the clinician's reset link and deny
+        # them the one recovery route the product offers.
+        invalidated = await self._invalidate_live_reset_tokens(account.id, datetime.now(UTC))
         await self.audit.record(
             action="auth_password_changed",
             account_id=account.id,
             entity_type="account",
             entity_id=account.id,
-            payload={"revoked_sessions": revoked},
+            # Both counts on the one row: "was a reset link live when this password was
+            # changed?" is a question an incident review asks of this event, and it should not
+            # have to join two rows to answer it.
+            payload={"revoked_sessions": revoked, "invalidated_reset_tokens": invalidated},
         )
         return revoked
 
@@ -671,6 +698,13 @@ class AuthService:
         account.password_hash = await hash_password_async(new_password)
         await self.db.flush()
         revoked = await self.revoke_all_sessions(account.id)
+        # Every *other* outstanding link for this account, so "setting a password retires the
+        # links that were live when it happened" holds whichever route set it — see
+        # `change_password`. Normally there are none, because `request_password_reset` retires
+        # the previous one as it issues the next; this closes the case where two requests
+        # interleave and both read an empty set before either inserts, which would otherwise
+        # leave the loser live and unspent after this reset completed.
+        invalidated = await self._invalidate_live_reset_tokens(account.id, now)
         await self.audit.record(
             action="auth_password_reset_completed",
             account_id=account.id,
@@ -685,6 +719,7 @@ class AuthService:
                 "email": account.email,
                 "token_id": str(row.id),
                 "revoked_sessions": revoked,
+                "invalidated_reset_tokens": invalidated,
             },
         )
         return account
@@ -704,6 +739,57 @@ class AuthService:
             .order_by(Session.last_used_at.desc())
         )
         return list(result.scalars().all())
+
+    async def _enforce_concurrent_session_limit(self, account_id: uuid.UUID) -> int:
+        """Make room for one more sign-in under ``session_max_concurrent``. Returns evictions.
+
+        ``sessions`` had no ceiling at all. Nothing ever ended a sign-in except its own absolute
+        expiry, an explicit sign-out, or the clinician noticing it in ``GET /auth/sessions`` —
+        so an account signed in from every shared terminal it had ever touched accumulated live
+        refresh tokens indefinitely, each one a way back into a chart on a machine nobody
+        remembers using. Seven days of ``jwt_refresh_ttl_days`` is the only thing that was
+        collecting them, and a clinician who signs in daily never lets one lapse.
+
+        **Evicts, never refuses.** The obvious reading of a session cap is to reject the sign-in
+        that would exceed it, and that is the wrong one here twice over. It would hand anyone
+        who learns a password a denial-of-service — fill the cap, and the clinician cannot sign
+        in to their own account — and it would fail in the direction that keeps someone out of a
+        patient record during a consultation. Evicting the least recently used session fails the
+        other way: the person at the keyboard with the correct password always gets in, and what
+        gives way is the oldest sign-in, which is the one most likely to be the forgotten
+        terminal this control exists to close.
+
+        Least-recently-*used*, not oldest-created, because rotation stamps ``last_used_at`` on
+        every refresh: a session created months ago but refreshed this morning is a device in
+        active use, and a session created this morning and untouched since is not.
+
+        Evicting the row also withdraws its access token — ``assert_auth_session_live`` reads
+        ``is_revoked`` on exactly this row — so an evicted device stops reading charts now
+        rather than at the end of its fifteen-minute token.
+        """
+        cap = settings.session_max_concurrent
+        if cap <= 0:
+            return 0
+        # Newest first, so the tail is what gives way. One slot is left free for the sign-in
+        # about to be issued, which is why this is `cap - 1` and not `cap`.
+        active = await self.list_sessions(account_id)
+        doomed = active[max(cap - 1, 0) :]
+        if not doomed:
+            return 0
+        for session in doomed:
+            session.is_revoked = True
+        await self.db.flush()
+        await self.audit.record(
+            action="auth_session_evicted",
+            account_id=account_id,
+            entity_type="account",
+            entity_id=account_id,
+            # Distinct from `auth_logout_all` and `auth_session_revoked`: nobody asked for this
+            # one, so an incident review must be able to tell a sign-out the clinician performed
+            # from one the ceiling performed on their behalf.
+            payload={"evicted_count": len(doomed), "limit": cap},
+        )
+        return len(doomed)
 
     async def revoke_session(self, account_id: uuid.UUID, session_id: uuid.UUID) -> None:
         """Revoke one of the account's own sessions (e.g. "sign out of that device")."""

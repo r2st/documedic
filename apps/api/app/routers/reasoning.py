@@ -247,7 +247,7 @@ async def _account_from_query_or_header(
     # the reason in `assert_auth_session_live`. This endpoint holds its connection open for the
     # length of a reasoning run, so it is the one place where "the token is still inside its
     # TTL" is furthest from "this device is still signed in".
-    await assert_auth_session_live(db, payload)
+    await assert_auth_session_live(db, payload, account_id=account_id)
     return account
 
 
