@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.client_address import client_address
+from app.core.timing import with_minimum_duration
 from app.db.session import get_db
 from app.dependencies import get_current_account, rate_limit_by_ip
 from app.models.user import Account
@@ -213,16 +214,30 @@ async def request_password_reset(
     back in `reset_token` below, which makes the flow usable with nothing but this API and is
     refused in production; with `log` it is written to the application log for an operator to
     relay, and `reset_token` is null.
+
+    "Always the same body" was only ever half of it: issuing a token costs a count, an
+    invalidation sweep, an insert, an audit row and a commit, and an address with no account
+    returned after one indexed SELECT — so the endpoint answered the question in latency that
+    its body refuses to answer in words. Both branches are now held to
+    `PASSWORD_RESET_MIN_RESPONSE_SECONDS`; see `app.core.timing`.
     """
-    service = AuthService(db)
-    token = await service.request_password_reset(body.email, ip_address=client_address(request))
-    await db.commit()
-    return PasswordResetResponse(
-        message=(
-            "If that address has an account, a password-reset link is on its way. "
-            "The link expires shortly and can be used once."
-        ),
-        reset_token=deliver_reset_token(token),
+
+    async def handle() -> PasswordResetResponse:
+        service = AuthService(db)
+        token = await service.request_password_reset(body.email, ip_address=client_address(request))
+        await db.commit()
+        return PasswordResetResponse(
+            message=(
+                "If that address has an account, a password-reset link is on its way. "
+                "The link expires shortly and can be used once."
+            ),
+            reset_token=deliver_reset_token(token),
+        )
+
+    return await with_minimum_duration(
+        settings.password_reset_min_response_seconds,
+        handle,
+        label="POST /auth/password-reset/request",
     )
 
 
@@ -242,11 +257,25 @@ async def confirm_password_reset(
     Every failure — unknown, expired, spent, superseded — returns the same 401
     (`invalid_reset_token`). Telling them apart would confirm to a holder of someone else's
     token that the address is a live account mid-reset.
+
+    Held to `PASSWORD_RESET_MIN_RESPONSE_SECONDS` for the same reason as the request route, and
+    with the branches the other way round: here the *failures* are the fast path — one indexed
+    SELECT that finds nothing — while a token that works goes on to hash a password and revoke
+    every session. Timing therefore separated "this token is real" from "this token never
+    existed", which is the distinction the single shared 401 message is written to withhold.
     """
-    await AuthService(db).reset_password(body.token, body.new_password)
-    await db.commit()
-    return MessageResponse(
-        message="Password reset. Sign in with your new password — all devices were signed out."
+
+    async def handle() -> MessageResponse:
+        await AuthService(db).reset_password(body.token, body.new_password)
+        await db.commit()
+        return MessageResponse(
+            message="Password reset. Sign in with your new password — all devices were signed out."
+        )
+
+    return await with_minimum_duration(
+        settings.password_reset_min_response_seconds,
+        handle,
+        label="POST /auth/password-reset/confirm",
     )
 
 

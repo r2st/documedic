@@ -201,6 +201,24 @@ class Settings(BaseSettings):
     #                than the default and is REFUSED in production (see
     #                production_config_errors).
     password_reset_delivery: Literal["response", "log"] = "log"
+    # Floor on how long both password-reset routes take to answer, whichever branch they took.
+    #
+    # Everything above is written so the two routes cannot be used to ask "does this address
+    # have an account?" — always 202, always the same body, one 401 message for all four ways a
+    # token can be bad. The clock said otherwise. Issuing a token costs a count, an invalidation
+    # sweep, an insert, an audit row and a commit; an address with no account returns after one
+    # indexed SELECT. Measured against SQLite in-process that is 2.1x — and every one of those
+    # extra steps is a network round-trip against a real PostgreSQL, so the gap is wider in the
+    # deployment than on the bench, not narrower. `confirm` splits 1.9x the same way.
+    #
+    # 250ms is roughly fifty times the slower branch's own cost here, which is the headroom the
+    # floor needs: it only equalises the branches while it exceeds both of them (see
+    # `app.core.timing`, which logs when it stops doing so). It is charged only to these two
+    # routes — a clinician meets them when they have forgotten their password, where a quarter
+    # of a second is not a cost anyone can perceive, and never on the sign-in path.
+    #
+    # Zero disables it, for a test measuring something else.
+    password_reset_min_response_seconds: float = 0.25
 
     # --- Session retention ---
     # How long a dead session row (revoked, or past its absolute expiry) is kept before the

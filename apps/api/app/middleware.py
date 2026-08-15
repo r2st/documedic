@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 
@@ -25,6 +26,46 @@ SECURITY_HEADERS = {
 }
 
 HSTS_VALUE = "max-age=63072000; includeSubDomains"
+
+# What an inbound X-Request-Id may look like to be adopted as this request's correlation id.
+#
+# The header is client-controlled and lands in three places at once: echoed back in the response
+# header, interpolated into the 500 body's clinician-facing prose, and written into every log
+# line the request produces. Unfiltered, all three took whatever was sent — 4 KB of it, or an
+# ANSI escape. The last is the one that bites: the request id is written into logs an operator
+# reads in a terminal while an incident is running, and `\x1b[2J` clears their screen. Nothing
+# needed guarding against because "the framework strips it" — h11 rejects CR and LF in a header
+# value and nothing else, so escapes, control characters and kilobyte values all arrive intact.
+#
+# The character set is every punctuation mark correlation ids are actually built out of — UUIDs
+# and W3C `traceparent` (hex and `-`), base64url (`-`, `_`, `=`), and the separators gateways
+# join segments with. It excludes whitespace, quotes, angle brackets and anything below 0x20,
+# none of which appear in a real id and all of which exist here only to be interpreted by
+# whatever reads the log.
+_SAFE_REQUEST_ID = re.compile(r"\A[A-Za-z0-9._~:@+/=-]{1,128}\Z")
+
+
+def resolve_request_id(supplied: str | None) -> str:
+    """This request's correlation id: the client's, if it is one, else a fresh one.
+
+    A rejected value is replaced rather than refused with a 400. The id is a diagnostic aid, not
+    a credential or an input the request means anything without, so a client that sends a
+    malformed one should still get its answer — it simply does not get to choose how it is
+    filed. Substitution is logged, without the value: writing the rejected id into the log to
+    explain that it was unsafe to write into the log defeats the purpose.
+
+    Adopting the client's id at all is deliberate and unchanged — it is how a request is
+    followed across a proxy and the frontend — and it does mean a caller can make two requests
+    share an id. That is inherent to client-supplied correlation and is not what this guards.
+    """
+    if supplied is not None and _SAFE_REQUEST_ID.match(supplied):
+        return supplied
+    if supplied:
+        logger.info(
+            "Ignored a malformed X-Request-Id (%d chars) and generated one instead.",
+            len(supplied),
+        )
+    return uuid.uuid4().hex
 
 
 def apply_security_headers(response: Response) -> None:
@@ -72,7 +113,7 @@ def internal_error_response(request_id: str | None) -> JSONResponse:
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        request_id = request.headers.get("X-Request-Id") or uuid.uuid4().hex
+        request_id = resolve_request_id(request.headers.get("X-Request-Id"))
         request.state.request_id = request_id
         start = time.perf_counter()
         try:

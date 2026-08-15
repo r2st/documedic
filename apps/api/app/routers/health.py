@@ -14,6 +14,7 @@ from app.agents.llm import (
     probe_all_providers,
     using_simulated_llm,
 )
+from app.agents.util import llm_executor
 from app.config import settings
 from app.core.client_address import proxy_configuration_report
 from app.db.session import get_db
@@ -105,9 +106,24 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
         await db.execute(text("SELECT 1"))
     except Exception:
         db_ok = False
-    # Off the event loop: the provider SDKs are synchronous, and an unreachable provider
-    # blocks for the whole probe timeout. Same offload idiom as `agents.util.call_llm`.
-    providers = await asyncio.to_thread(probe_all_providers)
+    # Off the event loop, and onto the bounded LLM pool rather than the default executor.
+    #
+    # This said "same offload idiom as `agents.util.call_llm`" while doing the opposite of what
+    # that function does. `call_llm` goes out of its way to run on `llm_executor()` precisely so
+    # a provider that stops answering cannot occupy the default pool — which is where bcrypt
+    # runs, so that pool filling up is what "logging in stopped working during an LLM outage"
+    # looked like. `asyncio.to_thread` is the default pool.
+    #
+    # The bound alone is not the whole reason. There is no single-flight around the probe cache,
+    # so a cold cache and N concurrent callers make N probe runs, and the callers are a
+    # monitoring poller and whichever operators are refreshing the status page — which is to say
+    # they arrive together, during the outage, at exactly the moment a clinician is trying to
+    # sign in. Each run holds its thread for up to `llm_health_probe_timeout_seconds` per
+    # configured provider, sequentially. Contained here, that queues status probes behind each
+    # other, which is the correct thing for it to cost.
+    providers = await asyncio.get_running_loop().run_in_executor(
+        llm_executor(), probe_all_providers
+    )
     reachable = [name for name, state in providers.items() if state["reachable"]]
     return {
         "database": "ok" if db_ok else "error",
