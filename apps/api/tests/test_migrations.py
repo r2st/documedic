@@ -167,3 +167,42 @@ def test_no_mutation_of_immutable_clinical_tables(path: Path):
             assert not forbidden, (
                 f"{path.name} mutates the append-only table {table}: {forbidden.group(0)!r}"
             )
+
+
+def _called_functions(tree: ast.AST) -> set[str]:
+    """Every function name called anywhere in the module, bare or attribute-qualified."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute):
+            names.add(node.func.attr)
+        elif isinstance(node.func, ast.Name):
+            names.add(node.func.id)
+    return names
+
+
+@pytest.mark.parametrize("path", _migration_files(), ids=lambda p: p.name)
+def test_a_migration_that_adds_a_column_checks_whether_it_is_already_there(path: Path):
+    """A bare ADD COLUMN aborts `alembic upgrade head` on a *fresh* database.
+
+    0001 does not spell its tables out — it builds the schema from the live ORM models — so a
+    database created today already carries every column the later revisions were written to
+    add. Three revisions added one without asking, and the consequence was not subtle: against
+    an empty PostgreSQL the upgrade died at 0010 with `DuplicateColumnError` and left the
+    deployment stamped 0009. Nothing caught it, because the suite runs on SQLite where the
+    PostgreSQL-only revisions return before doing anything and these migration checks are
+    deliberately static.
+
+    So this is the static check that stands in for the database: a module that calls
+    `op.add_column` must also call `column_exists`. See app.db.migration_guards.
+    """
+    called = _called_functions(ast.parse(path.read_text()))
+    if "add_column" not in called:
+        return
+    assert "column_exists" in called, (
+        f"{path.name} adds a column without checking whether the database already has it. "
+        "A database created by 0001 today already carries it (0001 builds from the ORM "
+        "models), so `alembic upgrade head` aborts here on a fresh deployment. Guard the "
+        "add with app.db.migration_guards.column_exists."
+    )

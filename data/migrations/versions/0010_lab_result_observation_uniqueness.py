@@ -48,6 +48,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from app.db.migration_guards import column_exists
 from app.models.lab_result import lab_observation_key
 
 revision: str = "0010"
@@ -124,7 +125,14 @@ def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    op.add_column("lab_results", sa.Column("dedup_key", sa.String(length=64), nullable=True))
+    # 0001 builds the schema from the live ORM models, so a database created today already has
+    # this column and a bare ADD COLUMN aborts the upgrade — which is exactly what
+    # `alembic upgrade head` against an empty PostgreSQL did, stopping the deployment here on
+    # 0009. Only the ADD is skipped: everything below is already idempotent (the backfill
+    # matches nothing when no row has a NULL key, the duplicate sweep nothing on an empty
+    # table, and the index is IF NOT EXISTS). See app.db.migration_guards.
+    if not column_exists(bind, "lab_results", "dedup_key"):
+        op.add_column("lab_results", sa.Column("dedup_key", sa.String(length=64), nullable=True))
     _backfill(bind)
     _retire_existing_duplicates(bind)
     op.alter_column("lab_results", "dedup_key", nullable=False)

@@ -31,6 +31,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from app.db.migration_guards import column_exists
+
 revision: str = "0016"
 down_revision: Union[str, None] = "0015"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -39,10 +41,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    # 0001 builds the schema from the live ORM models, so a database created today already has
+    # this column and a bare ADD COLUMN aborts the upgrade. See app.db.migration_guards.
+    if column_exists(bind, "drug_vocabulary", "components"):
+        return
     column_type = (
-        postgresql.JSONB(astext_type=sa.Text())
-        if bind.dialect.name == "postgresql"
-        else sa.JSON()
+        postgresql.JSONB(astext_type=sa.Text()) if bind.dialect.name == "postgresql" else sa.JSON()
     )
     op.add_column("drug_vocabulary", sa.Column("components", column_type, nullable=True))
 

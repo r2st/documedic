@@ -29,6 +29,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from app.db.migration_guards import column_exists
+
 revision: str = "0019"
 down_revision: Union[str, None] = "0018"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -41,7 +43,7 @@ def upgrade() -> None:
         return
     # 0001 builds the schema from the live ORM models, so a database created today already has
     # this column and a bare ADD COLUMN would abort the upgrade. Same guard as 0005.
-    if _column_exists(bind, "reasoning_sessions", "run_claimed_at"):
+    if column_exists(bind, "reasoning_sessions", "run_claimed_at"):
         return
     op.add_column(
         "reasoning_sessions",
@@ -53,15 +55,6 @@ def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    if not _column_exists(bind, "reasoning_sessions", "run_claimed_at"):
+    if not column_exists(bind, "reasoning_sessions", "run_claimed_at"):
         return
     op.drop_column("reasoning_sessions", "run_claimed_at")
-
-
-def _column_exists(bind: sa.engine.Connection, table: str, column: str) -> bool:
-    return bool(
-        bind.exec_driver_sql(
-            "SELECT 1 FROM information_schema.columns "
-            f"WHERE table_name = '{table}' AND column_name = '{column}'"
-        ).scalar()
-    )

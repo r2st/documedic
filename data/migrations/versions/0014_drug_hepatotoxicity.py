@@ -20,6 +20,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from app.db.migration_guards import column_exists
+
 revision: str = "0014"
 down_revision: Union[str, None] = "0013"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -39,11 +41,14 @@ _NEW_CHECK = (
 
 
 def upgrade() -> None:
-    op.add_column(
-        "drug_vocabulary",
-        sa.Column("hepatotoxicity", sa.String(length=30), nullable=True),
-    )
     bind = op.get_bind()
+    # 0001 builds the schema from the live ORM models, so a database created today already has
+    # this column and a bare ADD COLUMN aborts the upgrade. See app.db.migration_guards.
+    if not column_exists(bind, "drug_vocabulary", "hepatotoxicity"):
+        op.add_column(
+            "drug_vocabulary",
+            sa.Column("hepatotoxicity", sa.String(length=30), nullable=True),
+        )
     if bind.dialect.name != "postgresql":
         return
     op.drop_constraint("ck_dsc_check_type", "drug_safety_checks", type_="check")

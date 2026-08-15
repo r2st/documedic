@@ -17,6 +17,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from app.db.migration_guards import column_exists
+
 revision: str = "0005"
 down_revision: Union[str, None] = "0004"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -31,7 +33,7 @@ def upgrade() -> None:
     # database created today already has this column and a bare ADD COLUMN aborts the whole
     # upgrade with DuplicateColumnError. Databases stamped before this revision still need it.
     # (0007 solves the same problem with checkfirst=True, 0008 with IF NOT EXISTS.)
-    if _column_exists(bind, "sessions", "last_used_at"):
+    if column_exists(bind, "sessions", "last_used_at"):
         return
     op.add_column(
         "sessions",
@@ -49,15 +51,6 @@ def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    if not _column_exists(bind, "sessions", "last_used_at"):
+    if not column_exists(bind, "sessions", "last_used_at"):
         return
     op.drop_column("sessions", "last_used_at")
-
-
-def _column_exists(bind: sa.engine.Connection, table: str, column: str) -> bool:
-    return bool(
-        bind.exec_driver_sql(
-            "SELECT 1 FROM information_schema.columns "
-            f"WHERE table_name = '{table}' AND column_name = '{column}'"
-        ).scalar()
-    )
