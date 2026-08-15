@@ -260,3 +260,98 @@ async def test_cannot_override_a_non_hard_block_flag(auth_client):
         },
     )
     assert override_resp.status_code == 422
+
+
+# --- A contraindicated interaction cannot be dismissed, only overridden on the record ------------
+
+
+@pytest.mark.asyncio
+async def test_a_contraindicated_interaction_still_blocks_after_it_has_been_overridden(
+    auth_client, db
+):
+    """An override documents a decision; it does not retire the finding.
+
+    Nitrate + sildenafil is the table's one contraindicated pair. Once a clinician has recorded
+    their reasoning for prescribing past it, the tempting implementation is to stop raising it —
+    and that is precisely the silent dismissal Critical Safety Rule #3 forbids. The next check,
+    for the next prescriber, on the next day, has to say the same thing: the patient is on a
+    nitrate and this drug is contraindicated with it.
+    """
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+    await _add_current_medication(db, pid, "ISMN-20")
+
+    first = await _check(auth_client, pid, drug_reference_id="SIL-50")
+    blocked = next(f for f in first.json()["flags"] if f["is_hard_block"])
+    override = await auth_client.post(
+        f"/api/v1/patients/{pid}/drug-safety/override",
+        json={
+            "drug_safety_check_id": blocked["id"],
+            "reasoning": "Cardiology confirmed the nitrate was stopped more than 48 hours ago; "
+            "documented before prescribing.",
+        },
+    )
+    assert override.status_code == 201
+
+    second = await _check(auth_client, pid, drug_reference_id="SIL-50")
+    body = second.json()
+
+    assert body["is_blocked"] is True, "the override silenced the block for every later check"
+    still_blocked = next(f for f in body["flags"] if f["is_hard_block"])
+    assert still_blocked["check_type"] == "drug_interaction"
+    # A new check row, so the second prescriber's decision is documented on its own record
+    # rather than inheriting the first one's.
+    assert still_blocked["id"] != blocked["id"]
+
+
+@pytest.mark.asyncio
+async def test_overriding_one_hard_block_leaves_the_others_standing(auth_client, db):
+    """Overrides are per finding, not per prescription.
+
+    A chart can hard-block a drug for more than one reason at once, and an override is recorded
+    against one ``drug_safety_checks`` row. If clearing one cleared the screen, a clinician who
+    documented their reasoning about the renal threshold would have dismissed an allergy conflict
+    they never read.
+    """
+    pid = await _setup_patient_with_record(auth_client)
+    await _add_current_medication(db, pid, "ISMN-20")
+
+    resp = await _check(auth_client, pid, drug_reference_id="MET-500")
+    hard_blocks = [f for f in resp.json()["flags"] if f["is_hard_block"]]
+    assert hard_blocks, "expected the renal hard block on this chart"
+
+    await auth_client.post(
+        f"/api/v1/patients/{pid}/drug-safety/override",
+        json={
+            "drug_safety_check_id": hard_blocks[0]["id"],
+            "reasoning": "Nephrology reviewed and accepted the risk with closer monitoring.",
+        },
+    )
+
+    unrelated = await _check(auth_client, pid, drug_reference_id="SIL-50")
+    body = unrelated.json()
+    assert body["is_blocked"] is True
+    assert any(
+        f["check_type"] == "drug_interaction" and f["is_hard_block"] for f in body["flags"]
+    ), "an override on another drug's check cleared the nitrate interaction"
+
+
+@pytest.mark.asyncio
+async def test_every_interaction_on_a_polypharmacy_chart_is_returned(auth_client, db):
+    """Three interacting current medications produce three findings, not the worst one.
+
+    The screen's job is the whole picture. A response that names one interacting drug is
+    indistinguishable, to the clinician reading it, from a chart that has only one.
+    """
+    patient = await create_patient(auth_client)
+    pid = patient["id"]
+    for reference_id in ("WARF-5", "DIC-50", "CIP-500"):
+        await _add_current_medication(db, pid, reference_id)
+
+    resp = await _check(auth_client, pid, drug_reference_id="ASP-75")
+    interactions = [f for f in resp.json()["flags"] if f["check_type"] == "drug_interaction"]
+
+    named = {f["details"]["interacting_drug"] for f in interactions}
+    assert {"Warfarin", "Diclofenac"} <= named, named
+    # And each one carries its own persisted id, so each is separately overridable.
+    assert len({f["id"] for f in interactions}) == len(interactions)

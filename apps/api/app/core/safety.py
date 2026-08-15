@@ -461,6 +461,18 @@ _INTERACTION_SEVERITY_MAP: dict[str, tuple[Severity, bool]] = {
 # ``ck_drug_interactions_severity`` makes unreachable through the supported write path anyway.
 _UNRECOGNISED_INTERACTION_SEVERITY: tuple[Severity, bool] = ("warning", False)
 
+# Display/precedence order for the curated bands, most serious first. Only used to order the
+# rules curated for one pair against each other — see ``_rules_for_pair``. A band this engine
+# cannot read sorts with ``moderate``, which is where ``_UNRECOGNISED_INTERACTION_SEVERITY``
+# grades it; the two have to agree or a rule would sort above the flag it produces.
+_INTERACTION_SEVERITY_ORDER: dict[str, int] = {
+    "contraindicated": 0,
+    "major": 1,
+    "moderate": 2,
+    "minor": 3,
+}
+_UNRECOGNISED_INTERACTION_ORDER = _INTERACTION_SEVERITY_ORDER["moderate"]
+
 
 def _norm(text: str | None) -> str:
     return (text or "").strip().lower()
@@ -516,6 +528,65 @@ _TOKEN_SEPARATOR_RE = re.compile(r"[\s\-_]+")
 def _interaction_key(a: str, b: str) -> tuple[str, str]:
     """Pairs are stored alphabetically (drug_a < drug_b)."""
     return (a, b) if a <= b else (b, a)
+
+
+def _rules_by_pair(rules: list[InteractionRule]) -> dict[tuple[str, str], list[InteractionRule]]:
+    """Curated interaction rules grouped by the unordered pair they are about.
+
+    This was a dict comprehension — ``{_interaction_key(...): r for r in rules}`` — which is to
+    say: when a pair carried more than one curated rule, every rule but the last one the query
+    happened to return was discarded, and nothing anywhere said so.
+
+    That is not a hypothetical shape for this table. ``uq_drug_interactions_pair`` is on the
+    *ordered* columns, so ``(ASP-75, WARF-5)`` and ``(WARF-5, ASP-75)`` are two rows the
+    database accepts happily, and the interaction they describe is the same one — a pair is
+    symmetric, and nothing in ``interactions.json`` states which of the two ids goes in
+    ``drug_a``. The seed reconciler keys on this same unordered key and so cannot itself create
+    the second row, but "the loader we ship today happens not to produce it" is the kind of
+    guarantee that a second curated source, a corrected duplicate, or a hand-written INSERT
+    ends. And the consequence was the worst available: with a ``contraindicated`` rule and a
+    ``minor`` rule for one pair, the engine returned whichever came last — so this module's
+    canonical hard block became a blue informational note, on the strength of row order.
+
+    Every rule for the pair is kept, most serious first, so what the engine reports is decided
+    by clinical weight rather than by the query planner. Duplicates are collapsed: see
+    :func:`_distinct_rules`.
+    """
+    grouped: dict[tuple[str, str], list[InteractionRule]] = {}
+    for rule in rules:
+        key = _interaction_key(rule.drug_a_reference_id, rule.drug_b_reference_id)
+        grouped.setdefault(key, []).append(rule)
+    return {key: _distinct_rules(group) for key, group in grouped.items()}
+
+
+def _distinct_rules(rules: list[InteractionRule]) -> list[InteractionRule]:
+    """One entry per distinct curated statement, ordered most serious first.
+
+    Two rules that grade the pair the same way and describe it in the same words are one
+    clinical fact entered twice — the shape a reversed-pair duplicate takes — and reporting it
+    twice puts the same sentence on the card twice. Two rules that differ in either are two
+    facts (a second source, a second mechanism), and both are shown: a clinician who is told
+    only the milder of two curated statements about the same pair has been told the wrong thing.
+
+    Sorted by severity and then by description rather than left in insertion order, so the card
+    does not silently reorder itself between two reads of an unchanged chart.
+    """
+    out: list[InteractionRule] = []
+    seen: set[tuple[str, str]] = set()
+    for rule in sorted(rules, key=_rule_sort_key):
+        identity = (_token(rule.severity), _norm(rule.description))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        out.append(rule)
+    return out
+
+
+def _rule_sort_key(rule: InteractionRule) -> tuple[int, str]:
+    return (
+        _INTERACTION_SEVERITY_ORDER.get(_token(rule.severity), _UNRECOGNISED_INTERACTION_ORDER),
+        _norm(rule.description),
+    )
 
 
 def _allergy_conflict(allergy: PatientAllergy, ing: _Ingredient) -> str | None:
@@ -678,12 +749,13 @@ def check_interactions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag
     fact, so each is flagged. What is *not* evaluated is a pair inside one product: a licensed
     fixed-dose combination is a formulation decision already made, and flagging it as an
     interaction would put an alert on the card that the prescriber cannot act on.
+
+    A single pair can also carry more than one curated rule, and every one of those is reported
+    too, most serious first — see :func:`_rules_by_pair` for why reporting one of them was a
+    hard block that could be lost to row order.
     """
     flags: list[SafetyFlag] = []
-    rules_by_pair = {
-        _interaction_key(r.drug_a_reference_id, r.drug_b_reference_id): r
-        for r in ctx.interaction_rules
-    }
+    rules_by_pair = _rules_by_pair(ctx.interaction_rules)
     proposed_ingredients = _ingredients(proposed)
     for med in _distinct_current_meds(ctx.current_meds):
         if med.reference_id == proposed.reference_id:
@@ -698,36 +770,37 @@ def check_interactions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag
                 key = _interaction_key(ing.drug.reference_id, med_ing.drug.reference_id)
                 if key in seen:
                     continue
-                rule = rules_by_pair.get(key)
-                if rule is None:
+                rules = rules_by_pair.get(key)
+                if not rules:
                     continue
                 seen.add(key)
-                severity, hard = _INTERACTION_SEVERITY_MAP.get(
-                    _token(rule.severity), _UNRECOGNISED_INTERACTION_SEVERITY
-                )
-                flags.append(
-                    SafetyFlag(
-                        check_type="drug_interaction",
-                        severity=severity,
-                        is_hard_block=hard,
-                        summary=(
-                            f"{rule.severity.capitalize()} interaction between "
-                            f"{ing.label} and {med_ing.label}: {rule.description}"
-                        ),
-                        details={
-                            **ing.details(),
-                            "interacting_drug": med.generic_name,
-                            **(
-                                {"interacting_component": med_ing.drug.generic_name}
-                                if med_ing.is_component
-                                else {}
-                            ),
-                            "severity": rule.severity,
-                            "management": rule.management,
-                        },
-                        drug_interaction_id=rule.interaction_id,
+                for rule in rules:
+                    severity, hard = _INTERACTION_SEVERITY_MAP.get(
+                        _token(rule.severity), _UNRECOGNISED_INTERACTION_SEVERITY
                     )
-                )
+                    flags.append(
+                        SafetyFlag(
+                            check_type="drug_interaction",
+                            severity=severity,
+                            is_hard_block=hard,
+                            summary=(
+                                f"{rule.severity.capitalize()} interaction between "
+                                f"{ing.label} and {med_ing.label}: {rule.description}"
+                            ),
+                            details={
+                                **ing.details(),
+                                "interacting_drug": med.generic_name,
+                                **(
+                                    {"interacting_component": med_ing.drug.generic_name}
+                                    if med_ing.is_component
+                                    else {}
+                                ),
+                                "severity": rule.severity,
+                                "management": rule.management,
+                            },
+                            drug_interaction_id=rule.interaction_id,
+                        )
+                    )
     return flags
 
 

@@ -320,3 +320,121 @@ def test_an_anticoagulant_and_an_antiplatelet_is_never_merely_informational():
         assert rule["severity"] == "major", (other, rule["severity"])
 
     assert checked >= 4, "expected the aspirin and NSAID pairs to be curated"
+
+
+# --- More than one curated rule for the same pair -------------------------------------------------
+#
+# ``uq_drug_interactions_pair`` is on the ordered columns, so nothing in the schema stops the same
+# pair being curated twice — ``(ASP-75, WARF-5)`` and ``(WARF-5, ASP-75)`` are two rows the
+# database accepts, and they are the same interaction. The engine used to key its rule lookup with
+# a dict comprehension, which kept whichever of them the query returned last and silently dropped
+# the rest. With a ``contraindicated`` row and a ``minor`` row for one pair, this module's
+# canonical hard block came back as an informational note because of row order.
+
+
+def _reversed_pair_rules() -> list[InteractionRule]:
+    """One pair, curated twice in opposite column orders, disagreeing about severity."""
+    return [
+        InteractionRule("ASP-75", "WARF-5", "contraindicated", "absolute per source A"),
+        InteractionRule("WARF-5", "ASP-75", "minor", "watch per source B"),
+    ]
+
+
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_the_hard_block_survives_whichever_curated_row_is_read_last(order):
+    """The defect, stated as the property that fixes it: the answer cannot depend on row order.
+
+    Both orderings are tested because that is exactly what varied — nothing constrains the order
+    the rule table comes back in, so a chart could grade the same pair differently between two
+    reads with no change to the data underneath.
+    """
+    rules = _reversed_pair_rules()
+    ctx = SafetyContext(
+        current_meds=[_drug("ASP-75")],
+        interaction_rules=[rules[order[0]], rules[order[1]]],
+    )
+
+    flags = check_interactions(_drug("WARF-5"), ctx)
+
+    assert has_hard_block(flags), "the contraindicated rule was lost to row order"
+    assert [f.severity for f in flags] == ["hard_block", "info"], (
+        "every curated rule for the pair is reported, most serious first"
+    )
+
+
+def test_a_pair_curated_twice_in_the_same_words_is_reported_once():
+    """The other half: a duplicate is one fact entered twice, not two facts.
+
+    This is the shape a reversed-pair duplicate normally takes — the same statement, at the same
+    severity, with the two ids swapped — and putting the identical sentence on the card twice is
+    noise on a screen whose value is that it is short enough to read.
+    """
+    ctx = SafetyContext(
+        current_meds=[_drug("ASP-75")],
+        interaction_rules=[
+            InteractionRule("ASP-75", "WARF-5", "contraindicated", "Absolute contraindication"),
+            InteractionRule("WARF-5", "ASP-75", "contraindicated", "absolute contraindication "),
+        ],
+    )
+
+    flags = check_interactions(_drug("WARF-5"), ctx)
+
+    assert len(flags) == 1
+    assert flags[0].is_hard_block is True
+
+
+def test_two_genuinely_different_statements_about_one_pair_are_both_shown():
+    """Two sources describing two mechanisms are two clinical facts, and a clinician told only
+    the milder of them has been told the wrong thing."""
+    ctx = SafetyContext(
+        current_meds=[_drug("ASP-75")],
+        interaction_rules=[
+            InteractionRule("ASP-75", "WARF-5", "major", "additive antiplatelet effect"),
+            InteractionRule("WARF-5", "ASP-75", "moderate", "protein-binding displacement"),
+        ],
+    )
+
+    flags = check_interactions(_drug("WARF-5"), ctx)
+
+    assert [f.severity for f in flags] == ["critical", "warning"]
+    assert {f.details["management"] for f in flags} == {None}
+    assert len({f.summary for f in flags}) == 2
+
+
+def test_every_rule_for_a_pair_keeps_its_own_id_so_each_can_be_overridden():
+    """Each flag has to carry the id of the rule it came from.
+
+    A hard block is cleared only by an override recorded against the check it produced (Critical
+    Safety Rule #3). Two rules collapsed into one flag, or two flags sharing one rule id, would
+    make "which finding did the clinician document their reasoning against" unanswerable months
+    later — which is the whole point of the override record.
+    """
+    ctx = SafetyContext(
+        current_meds=[_drug("ASP-75")],
+        interaction_rules=[
+            InteractionRule("ASP-75", "WARF-5", "contraindicated", "source A", interaction_id="a"),
+            InteractionRule("WARF-5", "ASP-75", "major", "source B", interaction_id="b"),
+        ],
+    )
+
+    flags = check_interactions(_drug("WARF-5"), ctx)
+
+    assert [f.drug_interaction_id for f in flags] == ["a", "b"]
+
+
+def test_several_interacting_medications_all_surface_not_just_the_first():
+    """Every current medication the proposal meets is reported, not the worst or the first one.
+
+    A patient on warfarin, an NSAID and a macrolide is the ordinary polypharmacy case, and a
+    screen that names one of three interacting drugs reads as a complete answer.
+    """
+    ctx = SafetyContext(
+        current_meds=[_drug("WARF-5"), _drug("DIC-50"), _drug("AZI-500")],
+        interaction_rules=_rules(),
+    )
+
+    flags = check_interactions(_drug("ASP-75"), ctx)
+
+    interacting = {f.details["interacting_drug"] for f in flags}
+    assert {"Warfarin", "Diclofenac"} <= interacting
+    assert len(flags) >= 2
