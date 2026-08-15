@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_address import client_address
 from app.db.session import get_db
 from app.dependencies import get_current_account, rate_limit_by_ip
 from app.models.user import Account
@@ -27,8 +28,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _client_meta(request: Request) -> tuple[str | None, str | None]:
-    ip = request.client.host if request.client else None
-    return ip, request.headers.get("user-agent")
+    """The caller's address and user agent, as recorded on sessions and the auth audit trail.
+
+    ``client_address`` rather than ``request.client.host``: behind the reference reverse proxy
+    the peer is nginx, so every clinician's session row and every auth audit entry recorded
+    the proxy's address and the access trail could not say where a sign-in came from. See
+    :mod:`app.core.client_address`.
+    """
+    return client_address(request), request.headers.get("user-agent")
 
 
 @router.post(
@@ -90,6 +97,11 @@ async def refresh(
     Presenting an already-rotated token is treated as theft rather than as a retry — the whole
     token family is revoked, the event is audited, and every device on that family must sign
     in again. Clients must therefore store the newest pair before retrying anything.
+
+    Rotation does not extend the sign-in. Every pair in a family expires
+    `JWT_REFRESH_TTL_DAYS` after the password sign-in that began it, however often it has been
+    rotated since, so a client that has been refreshing for the whole window gets a 401 and has
+    to sign in again rather than a pair it can keep rotating.
     """
     service = AuthService(db)
     ip, ua = _client_meta(request)

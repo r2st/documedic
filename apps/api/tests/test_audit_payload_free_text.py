@@ -464,7 +464,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "auth_signup": {"email"},
     "auth_login_success": {"email", "ip_address", "user_agent"},
     "auth_login_failed": {"email", "ip_address"},
-    "auth_login_locked_out": {"email", "ip_address", "failed_attempts"},
+    # ``scope`` is "email" or "ip_address": which of the two separately-budgeted arms tripped.
+    # They call for different operator responses — a guessing run against one clinician versus
+    # a distributed run or a shared egress address whose ceiling needs raising — so an entry
+    # that does not say which one is not actionable.
+    "auth_login_locked_out": {"email", "ip_address", "failed_attempts", "scope"},
     "auth_token_refreshed": {"ip_address", "user_agent"},
     "auth_refresh_token_reuse_detected": {"reused_session_id", "revoked_count"},
     "auth_session_revoked": {"session_id"},

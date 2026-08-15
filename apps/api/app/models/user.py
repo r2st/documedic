@@ -50,5 +50,13 @@ class Session(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # When the *family* this row belongs to began — the password sign-in that started it.
+    # Carried unchanged across every rotation, unlike created_at, so `expires_at` can be
+    # anchored to the sign-in rather than to the newest token. Without it a client that kept
+    # refreshing pushed its own absolute expiry forward forever and JWT_REFRESH_TTL_DAYS
+    # bounded nothing; see migration 0020 and `AuthService._issue_tokens`.
+    family_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
     account: Mapped[Account] = relationship(back_populates="sessions")

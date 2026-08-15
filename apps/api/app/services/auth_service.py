@@ -14,6 +14,10 @@ Two abuse controls read that same trail, so both survive a process restart and n
 * **Refresh-token reuse detection** — a refresh token is single-use (rotation revokes it).
   Presenting an already-revoked token is the classic stolen-token signal, so it revokes every
   live session for that account rather than merely failing the one call.
+
+A sign-in also has an absolute end. Rotation carries ``family_started_at`` forward and anchors
+each new row's ``expires_at`` to it, so ``jwt_refresh_ttl_days`` bounds the sign-in rather than
+the newest token in it — see :meth:`AuthService._issue_tokens`.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -52,6 +56,11 @@ from app.services.audit_service import AuditService
 # oracle. Generated once at import, not per call -- and with the synchronous `hash_password`,
 # because at import time there is no event loop yet to keep clear of.
 _DUMMY_PASSWORD_HASH = hash_password(uuid.uuid4().hex)
+
+# Hard row cap on one lockout dimension's history read. The query is already scoped to a
+# single email or a single address inside a window of minutes, so this is far above any real
+# budget and exists only to keep a flood from turning the check into an unbounded scan.
+_MAX_ATTEMPTS_SCANNED = 500
 
 
 def _aware(dt: datetime) -> datetime:
@@ -95,16 +104,32 @@ class AuthService:
         *,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        family_started_at: datetime | None = None,
     ) -> TokenResponse:
+        """Mint an access/refresh pair, as a new sign-in or as the next link in a family.
+
+        ``family_started_at`` is the moment the family's password sign-in happened, passed in
+        by :meth:`refresh` and left unset by :meth:`login`. ``expires_at`` is anchored to it
+        rather than to now, which is what makes ``jwt_refresh_ttl_days`` an absolute ceiling
+        on a sign-in instead of a rolling one on whichever token is currently newest.
+
+        Without that anchor a client refreshing inside the idle timeout renewed its own
+        absolute expiry on every rotation, so a session never ended and a refresh token taken
+        off a device kept working for as long as its holder cared to keep rotating it — reuse
+        detection cannot see that, because it needs the *legitimate* client to present the
+        stale token, and a device that has been put away never does.
+        """
         refresh = generate_refresh_token()
         now = datetime.now(UTC)
+        started = _aware(family_started_at) if family_started_at else now
         session = Session(
             account_id=account.id,
             token_hash=hash_token(refresh),
-            expires_at=now + timedelta(days=settings.jwt_refresh_ttl_days),
+            expires_at=started + timedelta(days=settings.jwt_refresh_ttl_days),
             ip_address=ip_address,
             user_agent=user_agent,
             last_used_at=now,
+            family_started_at=started,
         )
         self.db.add(session)
         await self.db.flush()
@@ -115,77 +140,143 @@ class AuthService:
             expires_in=settings.jwt_access_ttl_minutes * 60,
         )
 
-    async def _recent_auth_events(self, since: datetime) -> list[AuditLog]:
-        """Auth login outcomes recorded since ``since``, newest first.
+    async def _recent_failures(
+        self,
+        since: datetime,
+        *,
+        payload_key: str,
+        payload_value: str,
+        stop_at_success: bool,
+    ) -> list[datetime]:
+        """Failed-login timestamps since ``since`` for one lockout dimension, newest first.
 
-        Bounded by a hard row limit so a flood of failures can't turn the lockout check into
-        an unbounded load. The window is short (minutes), so this stays a small, indexed scan.
+        The filter is applied **in SQL**, against the payload field that identifies the
+        dimension, so the row cap below bounds one email's or one address's history rather
+        than the deployment's. It used to read the newest 500 auth rows across every account
+        and sort them out in Python, which broke the control in both directions: a busy
+        deployment doing more than 500 sign-ins inside the window silently stopped locking
+        anyone out, and an attacker could deliberately produce that state by interleaving
+        junk attempts against other addresses to age their own failures out of the window.
+
+        ``stop_at_success`` implements "a successful sign-in clears the budget", and only the
+        email dimension asks for it. On the address dimension a success would mean *any* one
+        of the people behind a shared address signing in successfully wipes the record of a
+        guessing run against everyone else there.
         """
+        actions = ["auth_login_failed"]
+        if stop_at_success:
+            actions.append("auth_login_success")
         result = await self.db.execute(
-            select(AuditLog)
+            select(AuditLog.action, AuditLog.created_at)
             .where(
                 AuditLog.created_at >= since,
-                or_(
-                    AuditLog.action == "auth_login_failed",
-                    AuditLog.action == "auth_login_success",
-                ),
+                AuditLog.action.in_(actions),
+                AuditLog.payload[payload_key].as_string() == payload_value,
             )
             .order_by(AuditLog.sequence.desc())
-            .limit(500)
+            .limit(_MAX_ATTEMPTS_SCANNED)
         )
-        return list(result.scalars().all())
+        failures: list[datetime] = []
+        for action, created_at in result:
+            if action == "auth_login_success":
+                break
+            failures.append(_aware(created_at))
+        return failures
 
     async def _assert_not_locked_out(self, email: str, ip_address: str | None) -> None:
-        """Raise TooManyAttemptsError when this email or IP has burned its attempt budget.
+        """Raise TooManyAttemptsError when this email, or this address, has burned its budget.
 
         Counted from the audit log rather than an in-memory counter so the control holds
-        across restarts and across API workers. Failures older than the most recent *success*
-        for the same email are ignored — a legitimate sign-in resets the budget.
-        """
-        max_attempts = settings.login_max_failed_attempts
-        if max_attempts <= 0:  # explicitly disabled
-            return
+        across restarts and across API workers.
 
+        The two dimensions are budgeted **separately**. Pooling them into one counter — which
+        is what this did — means failures against one account spend every other account's
+        budget on the same address, and behind the reference reverse proxy every clinician on
+        the deployment shares one address (see :mod:`app.core.client_address`). Eight typos at
+        a shift change therefore locked the entire hospital out of the system for fifteen
+        minutes, with the correct password and an untouched account. A credential-guessing
+        control that denies sign-in to every clinician on a ward is a worse outcome than the
+        guessing it prevents.
+
+        So: the email budget is tight (``login_max_failed_attempts``) because it protects one
+        account and only that account's own failures feed it, and the address budget is loose
+        (``login_max_failed_attempts_per_ip``) because a legitimate shared egress address
+        accumulates other people's typos.
+        """
         now = datetime.now(UTC)
         window_start = now - timedelta(minutes=settings.login_attempt_window_minutes)
-        events = await self._recent_auth_events(window_start)
-
         needle_email = email.lower()
-        failures: list[datetime] = []
-        for event in events:  # newest first
-            payload = event.payload or {}
-            same_email = payload.get("email") == needle_email
-            if event.action == "auth_login_success":
-                # Only a success for THIS email clears its budget; another account's
-                # success must not unlock the attacker's target.
-                if event.account_id is not None and same_email:
-                    break
-                continue
-            same_ip = ip_address is not None and payload.get("ip_address") == ip_address
-            if same_email or same_ip:
-                failures.append(_aware(event.created_at))
 
-        if len(failures) < max_attempts:
+        if settings.login_max_failed_attempts > 0:
+            failures = await self._recent_failures(
+                window_start,
+                payload_key="email",
+                payload_value=needle_email,
+                stop_at_success=True,
+            )
+            await self._assert_within_budget(
+                failures,
+                budget=settings.login_max_failed_attempts,
+                now=now,
+                scope="email",
+                email=needle_email,
+                ip_address=ip_address,
+            )
+
+        if ip_address is not None and settings.login_max_failed_attempts_per_ip > 0:
+            failures = await self._recent_failures(
+                window_start,
+                payload_key="ip_address",
+                payload_value=ip_address,
+                stop_at_success=False,
+            )
+            await self._assert_within_budget(
+                failures,
+                budget=settings.login_max_failed_attempts_per_ip,
+                now=now,
+                scope="ip_address",
+                email=needle_email,
+                ip_address=ip_address,
+            )
+
+    async def _assert_within_budget(
+        self,
+        failures: list[datetime],
+        *,
+        budget: int,
+        now: datetime,
+        scope: str,
+        email: str,
+        ip_address: str | None,
+    ) -> None:
+        """Lock out when ``failures`` (newest first) has exhausted ``budget`` and is still hot."""
+        if len(failures) < budget:
             return
         # Locked until `login_lockout_minutes` after the most recent failure, so continued
         # hammering keeps extending the lock rather than resetting it.
-        if failures[0] + timedelta(minutes=settings.login_lockout_minutes) > now:
-            # Audited (and committed, like a failed login) so lockouts are visible to the
-            # security trail rather than only to the caller.
-            await self.audit.record(
-                action="auth_login_locked_out",
-                entity_type="account",
-                payload={
-                    "email": needle_email,
-                    "ip_address": ip_address,
-                    "failed_attempts": len(failures),
-                },
-            )
-            await self.db.commit()
-            raise TooManyAttemptsError(
-                "Too many failed sign-in attempts. Try again in "
-                f"{settings.login_lockout_minutes} minutes."
-            )
+        if failures[0] + timedelta(minutes=settings.login_lockout_minutes) <= now:
+            return
+        # Audited (and committed, like a failed login) so lockouts are visible to the
+        # security trail rather than only to the caller. `scope` names which of the two
+        # budgets tripped, because they call for different responses: an email lockout is a
+        # guessing run against one clinician, an address lockout is either a distributed run
+        # or a shared egress address that needs its ceiling raised.
+        await self.audit.record(
+            action="auth_login_locked_out",
+            entity_type="account",
+            payload={
+                "email": email,
+                "ip_address": ip_address,
+                "failed_attempts": len(failures),
+                "scope": scope,
+            },
+        )
+        await self.db.commit()
+        raise TooManyAttemptsError(
+            "Too many failed sign-in attempts. Try again in "
+            f"{settings.login_lockout_minutes} minutes.",
+            detail=f"login lockout on {scope}; {len(failures)} failures within the window",
+        )
 
     async def login(
         self,
@@ -258,7 +349,9 @@ class AuthService:
             raise TokenError(detail=f"refresh token reuse detected on session {session.id}")
         now = datetime.now(UTC)
         if _aware(session.expires_at) < now:
-            # Generic message too, for the same reason as the reuse branch above.
+            # Generic message too, for the same reason as the reuse branch above. This is the
+            # check that ends a session at `jwt_refresh_ttl_days` after the *sign-in*, because
+            # `expires_at` is anchored to `family_started_at` — see `_issue_tokens`.
             raise TokenError(detail=f"session {session.id} past its absolute expiry")
         idle_cutoff = _aware(session.last_used_at) + timedelta(
             minutes=settings.session_idle_timeout_minutes
@@ -277,7 +370,10 @@ class AuthService:
             await self.db.commit()
             raise SessionExpiredError(detail=f"session {session.id} idle past the timeout")
 
-        # Rotate: revoke the presented token, issue a new pair.
+        # Rotate: revoke the presented token, issue a new pair. Read before the flush below,
+        # because the new row inherits it and the old row is about to stop being the one the
+        # family is dated from.
+        family_started_at = _aware(session.family_started_at)
         session.is_revoked = True
         await self.db.flush()
         account = await self.db.get(Account, session.account_id)
@@ -286,7 +382,12 @@ class AuthService:
                 "This account is no longer active. Contact your administrator to restore access.",
                 detail=f"account {session.account_id} absent or soft-deleted",
             )
-        tokens = await self._issue_tokens(account, ip_address=ip_address, user_agent=user_agent)
+        tokens = await self._issue_tokens(
+            account,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            family_started_at=family_started_at,
+        )
         await self.audit.record(
             action="auth_token_refreshed",
             account_id=account.id,

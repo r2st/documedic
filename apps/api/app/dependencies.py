@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.client_address import client_address
 from app.core.rate_limit import RateLimit, SlidingWindowLimiter, retry_after_seconds
 from app.core.security import decode_token
 from app.db.session import get_db
@@ -158,20 +159,20 @@ def rate_limit_by_ip(bucket: str) -> Callable[[Request], Awaitable[None]]:
     unlimited account creation would otherwise walk straight around every per-account ceiling
     above.
 
-    Caveat, shared with the login lockout in ``auth_service`` which keys the same way: uvicorn
-    is not started with ``--proxy-headers``, so behind the nginx front end ``request.client``
-    is the proxy and every caller collapses onto one key. That makes this a global ceiling
-    rather than a per-address one, which is why it is set generously — a limit that is blunter
-    than intended is still a limit, but it must not be tight enough to lock out a clinic
-    onboarding its staff. ``X-Forwarded-For`` is not consulted: it is client-settable, so
-    trusting it here would hand an attacker an unlimited supply of keys.
+    The key comes from ``client_address``, which consults ``X-Forwarded-For`` for as many hops
+    as ``TRUSTED_PROXY_HOPS`` says this deployment operates and ignores it entirely otherwise.
+    Read straight off ``request.client`` — as this did — every caller behind the reference
+    nginx front end collapses onto the proxy's address, turning a per-address ceiling into a
+    global one: ten signups an hour for an entire hospital, so a clinic onboarding its staff
+    locks itself out. The header is client-settable, which is exactly why the hop count is
+    configuration and defaults to not trusting it at all.
     """
     limit_for(bucket)
 
     async def enforce(request: Request) -> None:
-        # No client on the connection happens for ASGI transports that do not report a peer
-        # (in-process test clients, unix sockets). One shared key is the conservative reading.
-        key = request.client.host if request.client else "unknown"
+        # No address happens for ASGI transports that do not report a peer (in-process test
+        # clients, unix sockets). One shared key is the conservative reading.
+        key = client_address(request) or "unknown"
         enforce_rate_limit(bucket, key, subject="address")
 
     return enforce

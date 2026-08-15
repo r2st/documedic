@@ -123,6 +123,15 @@ class Settings(BaseSettings):
     # carries a narrowly scoped, very short-lived token instead of the real access token.
     stream_token_ttl_seconds: int = 60
 
+    # --- Reverse proxy ---
+    # How many reverse proxies this deployment operates in front of the API. 0 means uvicorn
+    # is exposed directly and ``X-Forwarded-For`` is ignored entirely (the safe default: the
+    # header is client-settable). The reference deployment in nginx/nginx.conf is one hop, so
+    # it must run with TRUSTED_PROXY_HOPS=1 — otherwise every clinician reaches the
+    # application under nginx's address and every per-address control collapses onto one key.
+    # See app.core.client_address.
+    trusted_proxy_hops: int = 0
+
     # --- Brute-force protection (login) ---
     # Counted from the append-only audit log (auth_login_failed), so the control survives a
     # process restart and needs no Redis — it is deterministic and offline-capable.
@@ -130,6 +139,13 @@ class Settings(BaseSettings):
     login_max_failed_attempts: int = 8
     login_attempt_window_minutes: int = 15
     login_lockout_minutes: int = 15
+    # The address arm of the same control, budgeted separately and far more loosely. It exists
+    # to slow guessing spread across many accounts from one source; it is NOT a per-account
+    # control and must never be able to lock out an account that has had no failures of its
+    # own. Sized for a shared egress address — a clinic, a hospital NAT, or (when
+    # trusted_proxy_hops is misconfigured) the reverse proxy itself — where honest typos from
+    # dozens of clinicians accumulate on one key. Set to 0 to disable the address arm alone.
+    login_max_failed_attempts_per_ip: int = 60
 
     # --- Rate limiting (expensive clinical endpoints) ---
     # Per-account ceilings on the routes that cost an LLM call, enforced in-process by
