@@ -485,7 +485,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "auth_password_reset_throttled": {"ip_address", "requests_in_window"},
     # ``token_id`` is the row's own primary key, not the token — the token exists only as a
     # SHA-256 hash and never leaves ``password_reset_tokens`` even in that form.
-    "auth_password_reset_completed": {"token_id", "revoked_sessions"},
+    # `email` is the same identifier auth_login_success/failed already carry, and is here for
+    # the same reason: it is what scopes the row to one account's failed-login budget. A
+    # completed reset proves control of the account, so it clears that budget — see
+    # AuthService._recent_failures.
+    "auth_password_reset_completed": {"email", "token_id", "revoked_sessions"},
     "auth_password_reset_token_reused": {"token_id"},
     # Retention sweep. Counts and configuration, no identifiers: the rows it removed are gone,
     # and naming them would recreate in this table the record the sweep exists to retire.

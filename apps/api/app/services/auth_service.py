@@ -182,7 +182,7 @@ class AuthService:
         *,
         payload_key: str,
         payload_value: str,
-        stop_at_success: bool,
+        stop_at_proof_of_control: bool,
     ) -> list[datetime]:
         """Failed-login timestamps since ``since`` for one lockout dimension, newest first.
 
@@ -194,14 +194,28 @@ class AuthService:
         anyone out, and an attacker could deliberately produce that state by interleaving
         junk attempts against other addresses to age their own failures out of the window.
 
-        ``stop_at_success`` implements "a successful sign-in clears the budget", and only the
-        email dimension asks for it. On the address dimension a success would mean *any* one
-        of the people behind a shared address signing in successfully wipes the record of a
-        guessing run against everyone else there.
+        ``stop_at_proof_of_control`` implements "whoever just proved they own this account
+        clears its budget", and only the email dimension asks for it. Two events count, and
+        both are things only the account holder can produce:
+
+        * ``auth_login_success`` — they knew the password, and
+        * ``auth_password_reset_completed`` — they held a token sent to the address on file,
+          which is the stronger claim of the two, and the only remedy the product offers for
+          the forgotten password that generated the failures in the first place.
+
+        Without the second, the lockout outlived the reset: the clinician most likely to reach
+        the reset flow is by definition the one who has just failed to sign in, and completing
+        it left them refused for another fifteen minutes with a correct password that was never
+        looked at. See :meth:`reset_password` and tests/test_reset_clears_lockout.py.
+
+        The address dimension takes neither, because it is shared. Behind the reference nginx
+        front end every clinician reports one address (see :mod:`app.core.client_address`), so
+        *any* one of them succeeding — or resetting a password on an account they own — would
+        wipe the record of a guessing run against everyone else there.
         """
         actions = ["auth_login_failed"]
-        if stop_at_success:
-            actions.append("auth_login_success")
+        if stop_at_proof_of_control:
+            actions += ["auth_login_success", "auth_password_reset_completed"]
         result = await self.db.execute(
             select(AuditLog.action, AuditLog.created_at)
             .where(
@@ -214,7 +228,9 @@ class AuthService:
         )
         failures: list[datetime] = []
         for action, created_at in result:
-            if action == "auth_login_success":
+            # Anything that is not a failure is one of the barrier actions above — the scan is
+            # already filtered to the two — so the budget starts from the most recent one.
+            if action != "auth_login_failed":
                 break
             failures.append(_aware(created_at))
         return failures
@@ -248,7 +264,7 @@ class AuthService:
                 window_start,
                 payload_key="email",
                 payload_value=needle_email,
-                stop_at_success=True,
+                stop_at_proof_of_control=True,
             )
             await self._assert_within_budget(
                 failures,
@@ -264,7 +280,7 @@ class AuthService:
                 window_start,
                 payload_key="ip_address",
                 payload_value=ip_address,
-                stop_at_success=False,
+                stop_at_proof_of_control=False,
             )
             await self._assert_within_budget(
                 failures,
@@ -657,7 +673,16 @@ class AuthService:
             account_id=account.id,
             entity_type="account",
             entity_id=account.id,
-            payload={"token_id": str(row.id), "revoked_sessions": revoked},
+            # `email` is what scopes this row to the account whose failed-login budget it
+            # clears — `_recent_failures` matches the email dimension on exactly this payload
+            # key, as it already does for auth_login_success/failed. Without it the reset is
+            # invisible to the lockout and the clinician stays locked out of the account they
+            # just proved they own.
+            payload={
+                "email": account.email,
+                "token_id": str(row.id),
+                "revoked_sessions": revoked,
+            },
         )
         return account
 
