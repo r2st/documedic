@@ -184,6 +184,27 @@ async def test_requesting_a_reset_does_not_clear_the_lockout(client):
     )
 
 
+@pytest.mark.asyncio
+async def test_the_lockout_lifts_however_the_clinician_capitalised_their_address(client):
+    """The barrier is matched on an exact string, so case must not decide whether it is found.
+
+    Three separate points take the address as typed — the failed sign-ins, the reset request,
+    and the sign-in afterwards — and a clinician has no reason to capitalise the same way at
+    each. Accounts are stored lowercased and every one of those paths normalises to that, which
+    is what makes the match hold; a change to any of them would silently restore the lockout
+    for anyone who typed a capital letter, and only for them.
+    """
+    email = "Mixed.Case@Example.com"
+    await _signup(client, email)
+    for _ in range(settings.login_max_failed_attempts):
+        assert (await _login(client, email.upper(), "wrong-password")).status_code == 401
+    assert (await _login(client, email, OLD_PASSWORD)).status_code == 429
+
+    await _reset(client, email.lower())
+
+    assert (await _login(client, email.upper(), NEW_PASSWORD)).status_code == 200
+
+
 # --- The audit trail --------------------------------------------------------------------
 
 
