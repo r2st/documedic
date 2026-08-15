@@ -508,8 +508,20 @@ class GraphService:
         )
         return {
             "medications": med_keys,
-            "conditions": {name.lower() for (name,) in conditions.all() if name},
-            "allergies": {name.lower() for (name,) in allergies.all() if name},
+            # Folded exactly as ``_merge_condition`` and ``_merge_allergy`` fold the incoming
+            # line — lowercased *and* trimmed. Both halves have to agree or the comparison is
+            # against a value nothing produces; this is the same requirement ``_med_identity``
+            # states for the medication arm, and the padding OCR leaves on a scanned diagnosis
+            # is what breaks it. Names that are only whitespace fold to the empty string and are
+            # dropped rather than collapsed into one key.
+            # `folded`, not `key`: the medication loop above already binds `key` to a tuple in
+            # this scope, and reusing the name here makes it two types.
+            "conditions": {
+                folded for (name,) in conditions.all() if (folded := (name or "").strip().lower())
+            },
+            "allergies": {
+                folded for (name,) in allergies.all() if (folded := (name or "").strip().lower())
+            },
             "encounters": set(encounters.all()),
             # Read back as stored rather than recomputed from the row's columns: the digest is
             # what the unique index constrains, so comparing against anything else could let the
@@ -823,11 +835,24 @@ class GraphService:
         encounter_id: uuid.UUID | None = None,
     ) -> bool:
         name = fields.get("condition_name")
-        if not name:
+        # Trimmed as well as lowercased, exactly as ``_med_identity`` folds a drug — and for the
+        # same reason, which is that OCR pads what it reads. A condition first charted from a
+        # scan as ``"  Type 2 Diabetes Mellitus "`` is stored with its padding, and a key that
+        # only lowercased never matched the same diagnosis read cleanly off the next document.
+        # The chart then carried the condition twice, and a duplicated condition is not inert:
+        # every contraindication and guideline-adherence rule iterates the condition list, so it
+        # raises its flags once per copy — noise on the one screen that exists to be read
+        # carefully. ``core.safety`` already folds both ways before it matches (``_norm``), so
+        # nothing was mis-evaluated; there were simply two of it.
+        key = (name or "").strip().lower()
+        # A name that is only whitespace is not a diagnosis. It used to pass the ``if not name``
+        # guard, chart a blank-named condition, and take the empty string as its dedup key —
+        # which then collided with every other unnamed condition on the chart.
+        if not key:
             return False
-        if name.lower() in seen:
+        if key in seen:
             return False
-        seen.add(name.lower())
+        seen.add(key)
         cond = Condition(
             **_fitted(
                 Condition,
@@ -858,11 +883,19 @@ class GraphService:
         encounter_id: uuid.UUID | None = None,
     ) -> bool:
         name = fields.get("allergen_name")
-        if not name:
+        # Folded both ways, like the condition above and the drug identity in ``_med_identity``.
+        # A duplicated allergy is the worst of the three to leave in: it is what the hard blocks
+        # are computed from, so the same contraindication is raised once per copy on the screen
+        # that must never be scrolled past, and the allergy list a clinician checks before
+        # prescribing shows one documented reaction as two.
+        key = (name or "").strip().lower()
+        # Whitespace is not an allergen, and charting it as one puts a blank row on the safety
+        # board — an allergy the clinician can neither act on nor dismiss.
+        if not key:
             return False
-        if name.lower() in seen:
+        if key in seen:
             return False
-        seen.add(name.lower())
+        seen.add(key)
         # Normalised before the resolve decision below, not just before the INSERT: an
         # unreadable allergen type falls back to "drug", which is the reading that gets
         # cross-checked against the vocabulary rather than the one that skips the check.
