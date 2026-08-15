@@ -83,6 +83,25 @@ def _components(raw: object) -> tuple[DrugRef, ...]:
     return tuple(out)
 
 
+# Stands in for a medication row carrying no drug name in either column, so it is counted among
+# the lines that could not be evaluated rather than vanishing from both lists. Phrased to read
+# inside the flag's sentence, which quotes each entry: "could not be matched to a known drug
+# (“a line with no drug name”)".
+_UNNAMED_MEDICATION = "a line with no drug name"
+
+
+def _charted_names(med: MedicationEvent) -> list[str]:
+    """Every name a medication row carries, generic first — what there is to resolve it by.
+
+    Generic first because it is the vocabulary's own key and the one a resolved row was written
+    from; the raw brand is what remains when nothing resolved, which is precisely the row that
+    needs a second chance here.
+    """
+    return [
+        name.strip() for name in (med.generic_name, med.brand_name_raw) if name and name.strip()
+    ]
+
+
 def _drug_ref(row: DrugVocabulary | ResolvedDrug) -> DrugRef:
     """A vocabulary row (however it was reached) as the safety engine's drug identity.
 
@@ -292,12 +311,26 @@ class SafetyService:
         absence was indistinguishable from there being nothing to find — see
         ``check_unevaluated_medications``, which is what turns it back into something the
         clinician is told.
+
+        Both halves read every name the row carries, not just ``generic_name``, and that is the
+        load-bearing part. ``_merge_medication`` resolves the brand and writes the INN it found;
+        when the brand resolves to *nothing* — an Indian brand this fifty-drug vocabulary has
+        not been seeded with, which is the ordinary case and the one the product exists to
+        handle — there is no INN to write, so the only name the row ends up carrying is
+        ``brand_name_raw``. Keyed on ``generic_name`` alone, such a row was neither evaluated nor
+        reported: it did not reach ``current_meds`` and it did not reach the unresolved list
+        either, so a chart openly listing "Zerodol-SP" to the clinician returned the empty flag
+        list of a chart with nothing on it. That is the exact failure
+        ``check_unevaluated_medications`` was written to end, arriving through the other door.
         """
         # Rows with no *active* vocabulary row behind them fall through to name resolution
         # below — an absent link, or a link to a row curation has since deactivated. Resolving
         # them one at a time is a query per such medication; prefetching makes it one for all.
         await self.resolver.prefetch(
-            med.generic_name for med in med_rows if med.drug_vocabulary_id not in vocab_by_id
+            name
+            for med in med_rows
+            if med.drug_vocabulary_id not in vocab_by_id
+            for name in _charted_names(med)
         )
         out: list[DrugRef] = []
         unresolved: list[str] = []
@@ -307,12 +340,19 @@ class SafetyService:
                 out.append(_drug_ref(vocab))
                 continue
             # Unlinked row (e.g. imported before the vocabulary knew the brand): fall back to
-            # name resolution so the drug still participates in the safety evaluation.
-            resolved = await self.resolver.resolve(med.generic_name)
+            # name resolution so the drug still participates in the safety evaluation. Retried
+            # here rather than trusted to the merge, because the vocabulary can be seeded with
+            # the brand after the row was written and this is where that becomes visible.
+            names = _charted_names(med)
+            resolved = None
+            for name in names:
+                resolved = await self.resolver.resolve(name)
+                if resolved:
+                    break
             if resolved:
                 out.append(_drug_ref(resolved))
-            elif med.generic_name and med.generic_name.strip():
-                unresolved.append(med.generic_name.strip())
+            else:
+                unresolved.append(names[0] if names else _UNNAMED_MEDICATION)
         return out, unresolved
 
     async def _allergies(
