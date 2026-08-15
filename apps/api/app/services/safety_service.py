@@ -450,6 +450,13 @@ class SafetyService:
                     drug_reference_id=ref_id,
                     drug_class=drug_class,
                     allergy_id=str(a.id),
+                    # Carried for every allergy, including the ones nothing resolved: how badly
+                    # the patient reacted is documented on the row itself and does not depend on
+                    # the vocabulary knowing what the allergen was. It is what the flag quotes
+                    # back, and — at ``life_threatening`` — what promotes a cross-reactivity
+                    # finding to a hard block. See ``core.safety.check_allergies``.
+                    severity=a.severity,
+                    reaction=a.reaction_description,
                 )
             )
         return out, unidentified

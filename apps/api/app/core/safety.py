@@ -298,10 +298,30 @@ def _distinct_current_meds(meds: list[DrugRef]) -> list[DrugRef]:
 
 @dataclass(frozen=True)
 class PatientAllergy:
+    """A documented allergy, and how badly the patient reacted the last time.
+
+    ``severity`` and ``reaction`` are the ``allergies.severity`` and
+    ``allergies.reaction_description`` columns verbatim. They are carried here rather than left
+    on the row for two reasons, and the second is the one that changes behaviour.
+
+    A flag that says only "documented allergy to penicillin" is asking the clinician to go and
+    read the chart before they can weigh it, and a hard block a clinician has to leave the
+    screen to understand is a hard block they will override on the strength of what they
+    remember. "Documented allergy to penicillin (life-threatening: anaphylaxis, airway
+    involvement)" is the same block carrying the one fact the override decision turns on.
+
+    And the documented severity is *evidence about risk*, not decoration. A recognised
+    cross-reactive class is dismissible when the index reaction was a rash and is not when it
+    was anaphylaxis — the arithmetic of "a minority of patients cross-react" changes entirely
+    when the reaction being risked can kill. See ``check_allergies``.
+    """
+
     allergen_name: str
     drug_reference_id: str | None = None
     drug_class: str | None = None
     allergy_id: str | None = None
+    severity: str | None = None
+    reaction: str | None = None
 
 
 @dataclass(frozen=True)
@@ -589,6 +609,66 @@ def _rule_sort_key(rule: InteractionRule) -> tuple[int, str]:
     )
 
 
+# The documented-reaction bands ``ck_allergies_severity`` admits, worst first, in the spelling a
+# clinician reads them in. ``unknown`` is a permitted value and is deliberately absent from the
+# escalation set below: nobody having recorded how bad the reaction was is not evidence that it
+# was mild, and it is not evidence that it was fatal either.
+_ALLERGY_SEVERITY_LABELS: dict[str, str] = {
+    "life_threatening": "life-threatening",
+    "severe": "severe",
+    "moderate": "moderate",
+    "mild": "mild",
+    "unknown": "severity not recorded",
+}
+
+# The one band that turns a recognised cross-reactivity from a dismissible warning into a block.
+# Penicillin/cephalosporin cross-reactivity runs at a few percent, which is why this file grades
+# it "critical, dismissible" rather than as a hard block — that arithmetic is about *how often*.
+# It says nothing about what is being risked, and a few percent of anaphylaxis is not the same
+# decision as a few percent of a rash. So the escalation is keyed on the documented reaction
+# rather than on the class pair, and a clinician who judges the alternative worse can still
+# proceed — through the override path, with written reasoning on the chart, which is exactly
+# the difference between the two grades.
+_ALLERGY_SEVERITY_BLOCKS_CROSS_REACTIVITY = frozenset({"life_threatening"})
+
+
+def _allergy_severity_token(allergy: PatientAllergy) -> str:
+    return _norm(allergy.severity)
+
+
+def _documented_reaction_phrase(allergy: PatientAllergy) -> str:
+    """ "(life-threatening: anaphylaxis)" — what the chart says the last reaction was.
+
+    Empty when the chart records neither a severity nor a reaction, so a flag about an allergy
+    documented as a bare name reads exactly as it did before this existed rather than carrying
+    an empty parenthesis suggesting something was checked.
+    """
+    severity = _ALLERGY_SEVERITY_LABELS.get(_allergy_severity_token(allergy))
+    reaction = (allergy.reaction or "").strip()
+    if severity and reaction:
+        return f" ({severity}: {reaction})"
+    if severity:
+        return f" ({severity})"
+    if reaction:
+        return f" (documented reaction: {reaction})"
+    return ""
+
+
+def _allergy_details(allergy: PatientAllergy) -> dict:
+    """The documented-reaction fields, for the flag's structured half.
+
+    Keys are omitted rather than set to null when the chart has nothing to say, for the reason
+    the phrase above is empty: a null ``documented_severity`` in a persisted check reads, later,
+    as "this was assessed and found to be nothing".
+    """
+    out: dict = {}
+    if severity := _allergy_severity_token(allergy):
+        out["documented_severity"] = severity
+    if reaction := (allergy.reaction or "").strip():
+        out["documented_reaction"] = reaction
+    return out
+
+
 def _allergy_conflict(allergy: PatientAllergy, ing: _Ingredient) -> str | None:
     """``"direct"``/``"cross_class"`` if this allergy hard-blocks this identity, else None."""
     drug = ing.drug
@@ -612,6 +692,13 @@ def check_allergies(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
     ingredient outright and cross-reacts with another is one conflict, not two, and stacking the
     dismissible flag on top of the undismissible one only adds noise to a card that already
     cannot be cleared.
+
+    Every flag quotes what the chart documented about the reaction — see
+    ``_documented_reaction_phrase`` — and a **life-threatening** documented reaction promotes a
+    cross-reactivity finding to a hard block. The direct and same-class matches are hard blocks
+    at every severity, including the ones documented as mild and the ones documented as nothing
+    at all: a mild rash recorded once is not a promise about the next exposure, and Critical
+    Safety Rule #3 does not grade its blocks by how bad the first reaction was.
     """
     flags: list[SafetyFlag] = []
     for allergy in ctx.allergies:
@@ -636,11 +723,13 @@ def check_allergies(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
                     severity="hard_block",
                     is_hard_block=True,
                     summary=(
-                        f"Documented allergy to {allergy.allergen_name} conflicts with "
+                        f"Documented allergy to {allergy.allergen_name}"
+                        f"{_documented_reaction_phrase(allergy)} conflicts with "
                         f"{ing.label} ({reason}). This is a hard block."
                     ),
                     details={
                         "allergen": allergy.allergen_name,
+                        **_allergy_details(allergy),
                         **ing.details(),
                         "match_type": match_type,
                     },
@@ -661,21 +750,29 @@ def check_allergies(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag]:
             None,
         )
         if cross is not None:
+            blocks = _allergy_severity_token(allergy) in _ALLERGY_SEVERITY_BLOCKS_CROSS_REACTIVITY
+            closing = (
+                "The documented reaction was life-threatening, so this is a hard block: "
+                "recorded reasoning is required before prescribing."
+                if blocks
+                else "Evidence suggests considering an alternative or confirming tolerance "
+                "before prescribing."
+            )
             flags.append(
                 SafetyFlag(
                     check_type="allergy_conflict",
-                    severity="critical",
-                    is_hard_block=False,
+                    severity="hard_block" if blocks else "critical",
+                    is_hard_block=blocks,
                     summary=(
-                        f"Documented allergy to {allergy.allergen_name} "
+                        f"Documented allergy to {allergy.allergen_name}"
+                        f"{_documented_reaction_phrase(allergy)} "
                         f"({allergy.drug_class}) has recognised cross-reactivity with "
-                        f"{cross.label} ({cross.drug.drug_class}). Evidence "
-                        "suggests considering an alternative or confirming tolerance "
-                        "before prescribing."
+                        f"{cross.label} ({cross.drug.drug_class}). {closing}"
                     ),
                     details={
                         "allergen": allergy.allergen_name,
                         "allergen_class": allergy.drug_class,
+                        **_allergy_details(allergy),
                         **cross.details(),
                         "proposed_drug_class": cross.drug.drug_class,
                         "match_type": "cross_reactivity",
