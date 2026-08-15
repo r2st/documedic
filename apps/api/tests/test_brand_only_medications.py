@@ -218,11 +218,17 @@ async def test_the_generic_wins_when_a_row_carries_both_names(db):
 
 
 @pytest.mark.asyncio
-async def test_a_chart_with_nothing_unreadable_still_raises_no_note(db):
-    """The regression that matters most: a clean chart must stay silent.
+async def test_a_chart_with_nothing_unreadable_raises_no_unreadable_note(db):
+    """The regression that matters most: nothing unreadable, nothing said about readability.
 
     Widening what counts as a name widens what can be reported, and a note on every chart is the
     thing that teaches clinicians to stop reading notes.
+
+    Both rows here resolve — that is the point of the fixture, one through its generic and one
+    through its brand — and both resolve to *metformin*, which is also a chart carrying two live
+    orders for one drug. ``check_duplicate_orders`` says so, correctly, so this asserts what the
+    test is actually about rather than that the chart-level list is empty. The plain "a clean
+    chart stays silent" guarantee is the test below, on a chart of two different drugs.
     """
     _account, patient = await _patient(db)
     await _approve(
@@ -230,6 +236,27 @@ async def test_a_chart_with_nothing_unreadable_still_raises_no_note(db):
         patient,
         {"generic_name": "Metformin", "event_type": "continue"},
         {"brand_name_raw": "Glycomet", "dose": "1000mg", "event_type": "continue"},
+    )
+
+    notes = await _notes(db, patient)
+    assert "unevaluated_medication" not in notes
+    assert set(notes) == {"duplicate_therapy"}, notes
+
+
+@pytest.mark.asyncio
+async def test_a_clean_chart_of_two_readable_drugs_stays_completely_silent(db):
+    """The other half of the guarantee above, on a chart with nothing at all to report.
+
+    Two *different* drugs, still one resolved through its generic and one through its brand, so
+    this keeps the original assertion — an empty chart-level list — on a fixture that has no
+    duplicate order in it to report.
+    """
+    _account, patient = await _patient(db)
+    await _approve(
+        db,
+        patient,
+        {"generic_name": "Metformin", "event_type": "continue"},
+        {"brand_name_raw": "Januvia", "dose": "100mg", "event_type": "continue"},
     )
 
     assert await SafetyService(db).chart_completeness_flags(patient.id) == []

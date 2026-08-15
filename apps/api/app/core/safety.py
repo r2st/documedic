@@ -253,6 +253,41 @@ def ingredient_reference_ids(drug: DrugRef) -> set[str]:
     return {i.drug.reference_id for i in _ingredients(drug) if i.drug.reference_id}
 
 
+def _distinct_current_meds(meds: list[DrugRef]) -> list[DrugRef]:
+    """``current_meds`` with a drug charted more than once collapsed to a single entry.
+
+    How many rows chart a drug is a fact about the record, not about the pharmacology, and the
+    checks that walk this list are asking pharmacological questions: does the proposal interact
+    with what the patient is on, does it duplicate it. Answering those once per *row* multiplies
+    one clinical finding by a bookkeeping accident — a patient charted with two live orders for
+    aspirin had the aspirin/warfarin major interaction reported twice against warfarin, the same
+    rule and the same pair, on the screen whose whole value is that it is short enough to read.
+
+    Two rows for one drug is not rare and not a data error: the merge keys a medication on
+    ``(generic name, dose)`` so that a dose change lands as a new row rather than being swallowed
+    as a duplicate of the old one. That the chart carries two is worth saying exactly once, which
+    is ``check_duplicate_orders``' job, and this is what keeps every other check from saying it
+    again in its own words.
+
+    First occurrence kept, so the flags that name a medication keep naming the row the chart
+    lists first rather than an arbitrary one. Entries with an empty reference id are never
+    collapsed: that is an ingredient with no standalone vocabulary row, and two *different* such
+    molecules are not the same drug — the same trap every reference-id comparison in this module
+    guards against.
+    """
+    out: list[DrugRef] = []
+    seen: set[str] = set()
+    for med in meds:
+        if not med.reference_id:
+            out.append(med)
+            continue
+        if med.reference_id in seen:
+            continue
+        seen.add(med.reference_id)
+        out.append(med)
+    return out
+
+
 @dataclass(frozen=True)
 class PatientAllergy:
     allergen_name: str
@@ -632,7 +667,7 @@ def check_interactions(proposed: DrugRef, ctx: SafetyContext) -> list[SafetyFlag
         for r in ctx.interaction_rules
     }
     proposed_ingredients = _ingredients(proposed)
-    for med in ctx.current_meds:
+    for med in _distinct_current_meds(ctx.current_meds):
         if med.reference_id == proposed.reference_id:
             continue
         seen: set[tuple[str, str]] = set()
@@ -1351,7 +1386,9 @@ def check_duplicate_therapy(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
     flags: list[SafetyFlag] = []
     proposed_ingredients = _ingredients(proposed)
 
-    for med in ctx.current_meds:
+    # Distinct drugs, not rows: a drug charted twice duplicates one clinical finding rather than
+    # making two. ``check_duplicate_orders`` is what reports the doubled order itself.
+    for med in _distinct_current_meds(ctx.current_meds):
         if med.reference_id == proposed.reference_id:
             flags.append(
                 SafetyFlag(
@@ -1449,6 +1486,78 @@ def check_duplicate_therapy(proposed: DrugRef, ctx: SafetyContext) -> list[Safet
                 )
             )
 
+    return flags
+
+
+def check_duplicate_orders(ctx: SafetyContext) -> list[SafetyFlag]:
+    """Flag a product the chart already carries as current more than once.
+
+    ``check_duplicate_therapy`` above answers "does this *proposed* drug duplicate something the
+    patient is on", and its ``same_product`` branch is the one that fires when the proposal is a
+    drug already ordered. That branch is unreachable from the standing safety board. ``GET
+    ../flags`` evaluates each current medication against "everyone but me", and it derives that
+    set by dropping *every* row sharing the drug's reference id — which is right, because a
+    drug is not a duplicate of itself and the board would otherwise flag every medication on the
+    chart. So the one check that exists to notice a doubled order is the one check the board's
+    own context removes the evidence for, and the board reported a clean chart.
+
+    Two current rows for the same product is not a hypothetical. The merge keys a medication on
+    ``(generic name, dose)``, which is deliberate — a dose change has to land as a new row rather
+    than be swallowed as a duplicate of the old one — so a second prescription at a *different*
+    dose inserts a second current row for the same drug. "Dolo 650" beside "Dolo 500", both
+    live, is the ordinary shape of it, and it is the shape that does harm: the patient plausibly
+    takes both, and paracetamol is dose-limited by hepatotoxicity rather than by effect. A
+    clinician looking at the standing board saw two rows and no flag.
+
+    Written as a statement about the chart rather than about a drug, and so evaluated once for
+    the whole context alongside the other chart-level checks, for two reasons. It has no
+    proposed drug to be attributed to — it is true of the record whatever anyone prescribes
+    next. And keeping it out of the per-drug context is what keeps it from corrupting the
+    cumulative checks: leaving a drug's own second copy in ``current_meds`` so the pairwise
+    check could see it would also let ``check_hepatotoxic_burden`` and
+    ``check_bleeding_burden`` count that drug twice toward a burden it contributes to once.
+
+    A warning, never a block. Two live orders is most often a refill or a titration that nobody
+    closed out, and the clinician is the one who can tell that from a genuine double order —
+    which is the whole ask here, so the summary gives the count and names the drug rather than
+    guessing which it is.
+    """
+    by_ref: dict[str, list[DrugRef]] = {}
+    for med in ctx.current_meds:
+        # Non-empty ids only, for the reason the combination note above gives: an ingredient
+        # with no standalone vocabulary row carries an empty reference id, and two unrelated
+        # such molecules would otherwise group together and be reported as one drug ordered
+        # twice.
+        if med.reference_id:
+            by_ref.setdefault(med.reference_id, []).append(med)
+
+    flags: list[SafetyFlag] = []
+    # Sorted by reference id so the board's output does not depend on medication row order.
+    for reference_id in sorted(by_ref):
+        group = by_ref[reference_id]
+        if len(group) < 2:
+            continue
+        name = group[0].generic_name
+        flags.append(
+            SafetyFlag(
+                check_type="duplicate_therapy",
+                severity="warning",
+                is_hard_block=False,
+                summary=(
+                    f"This chart lists {len(group)} separate current orders for {name}. "
+                    "Confirm which one the patient is actually taking — concurrent orders for "
+                    "the same product risk unintentional double-dosing."
+                ),
+                details={
+                    "existing_drug": name,
+                    "order_count": len(group),
+                    "match_type": "same_product",
+                    # Distinguishes this from the identically-typed pairwise flag, which is
+                    # raised about a proposed drug and carries a "proposed_drug" instead.
+                    "scope": "chart",
+                },
+            )
+        )
     return flags
 
 

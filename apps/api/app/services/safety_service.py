@@ -28,6 +28,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     SafetyFlag,
+    check_duplicate_orders,
     check_hepatic_severity,
     check_stale_medications,
     check_unevaluated_allergies,
@@ -727,6 +728,7 @@ class SafetyService:
             + check_unevaluated_allergies(ctx)
             + check_unevaluated_conditions(ctx)
             + check_stale_medications(ctx)
+            + check_duplicate_orders(ctx)
             + check_hepatic_severity(ctx)
         )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
@@ -752,6 +754,7 @@ class SafetyService:
             + check_unevaluated_allergies(facts)
             + check_unevaluated_conditions(facts)
             + check_stale_medications(facts)
+            + check_duplicate_orders(facts)
             + check_hepatic_severity(facts)
         )
 
