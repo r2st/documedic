@@ -162,7 +162,7 @@ async def samd_dossier(
     response_model=SafetyReportOut,
     status_code=201,
     summary="File a near-miss or adverse-event report",
-    responses=AUTH_ERRORS,
+    responses=errors(401, 404),
 )
 async def file_safety_report(
     body: SafetyReportIn,
@@ -174,6 +174,11 @@ async def file_safety_report(
     `severity` is one of `near_miss`, `non_serious`, `serious`, `sentinel_event`. Linking
     `patient_id` and `session_id` is optional but is what makes a report investigable against
     the audit trail afterwards.
+
+    Both links must be to a chart and a session this account holds — anything else is a 404 and
+    nothing is filed. The report is audited against the patient it names, so an unchecked link
+    would write into another clinician's append-only trail. A chart that has since been
+    withdrawn is still linkable: a near-miss on it is precisely what this register is for.
     """
     report = await SafetyReportService(db).file_report(
         account_id=account.id,
