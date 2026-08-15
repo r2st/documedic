@@ -304,10 +304,16 @@ async def test_the_audit_insert_is_the_last_statement_of_a_read_request(
 
 
 async def test_an_audited_read_appends_without_a_second_chain_tail_read(auth_client, engine):
-    """One entry costs one tail read and one insert — the floor for an append.
+    """One entry about one chart costs two tail reads and one insert — the floor for an append.
 
     Guards the incremental cost of the decision to audit reads at all: if a read endpoint ever
     grew a second append, it would double the work done under the global lock.
+
+    Two reads, not one, since migration 0025: the global chain tail, and this patient's own.
+    The second is what the per-patient link is bought with, and it buys the only check that
+    notices an entry *deleted* from a chart's trail — see ``AuditService._patient_tails``. It is
+    one indexed lookup per distinct patient in the batch rather than per entry, so a reasoning
+    run appending nine entries about one chart still pays it once.
     """
     patient = await create_patient(auth_client)
 
@@ -319,7 +325,7 @@ async def test_an_audited_read_appends_without_a_second_chain_tail_read(auth_cli
     audit_statements = [s for s in counter["statements"] if "audit_logs" in s]
     selects = [s for s in audit_statements if s.lstrip().upper().startswith("SELECT")]
     inserts = [s for s in audit_statements if s.lstrip().upper().startswith("INSERT")]
-    assert (len(selects), len(inserts)) == (1, 1), (
+    assert (len(selects), len(inserts)) == (2, 1), (
         f"an audited read cost {len(selects)} tail reads and {len(inserts)} inserts"
     )
 

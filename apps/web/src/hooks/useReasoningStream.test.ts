@@ -157,6 +157,48 @@ describe('useReasoningStream', () => {
     expect(result.current.state.lanes[0].status).toBe('done');
   });
 
+  it('marks a lane failed when its agent crashes', async () => {
+    // An advisory agent that raises no longer fails the whole run: the case continues,
+    // degraded and escalated, and this lane is how the clinician is told part of the panel is
+    // missing. A lane left at 'running' would read as "still working" instead.
+    const { result } = renderHook(() => useReasoningStream());
+    const es = await openStream(result.current.start);
+
+    act(() => es.emit('reasoning_start', { sequence: ['devils_advocate', 'verifier'] }));
+    act(() => es.emit('agent_start', { agent: 'devils_advocate' }));
+    act(() =>
+      es.emit('agent_failed', { agent: 'devils_advocate', reason: "TypeError: not iterable" }),
+    );
+
+    expect(result.current.state.lanes[0].status).toBe('failed');
+    expect(result.current.state.lanes[0].reason).toBe('TypeError: not iterable');
+    expect(result.current.state.lanes[1].status).toBe('idle');
+  });
+
+  it('does not repaint a failed lane as done when the run finishes', async () => {
+    // reasoning_complete sweeps every lane to 'done'. Sweeping a failed one too would turn the
+    // exact fact the case is escalated for into a green tick — the automation bias the
+    // Reasoning Theatre exists to work against.
+    const { result } = renderHook(() => useReasoningStream());
+    const es = await openStream(result.current.start);
+
+    act(() => es.emit('reasoning_start', { sequence: ['devils_advocate', 'verifier'] }));
+    act(() => es.emit('agent_failed', { agent: 'devils_advocate', reason: 'boom' }));
+    act(() => es.emit('reasoning_complete', {}));
+
+    expect(result.current.state.lanes.map((l) => l.status)).toEqual(['failed', 'done']);
+  });
+
+  it('ignores an agent_failed event whose shape does not match', async () => {
+    const { result } = renderHook(() => useReasoningStream());
+    const es = await openStream(result.current.start);
+
+    act(() => es.emit('reasoning_start', { sequence: ['devils_advocate'] }));
+    act(() => es.emit('agent_failed', { agent: 42 }));
+
+    expect(result.current.state.lanes[0].status).toBe('idle');
+  });
+
   it('keeps the existing label when agent_start omits one', async () => {
     const { result } = renderHook(() => useReasoningStream());
     const es = await openStream(result.current.start);

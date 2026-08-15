@@ -125,6 +125,21 @@ class AuditLog(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
     payload: Mapped[dict] = mapped_column(JSONBType, nullable=False, default=dict)
     prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The record_hash of this patient's *previous* entry — a second chain, running through one
+    # chart's rows only, alongside the global one in ``prev_hash``.
+    #
+    # It exists because the per-patient verification endpoint could not deliver what it says.
+    # ``prev_hash`` links a row to whatever was appended before it anywhere in the system, so a
+    # walk restricted to one patient cannot check linkage at all: it can only recompute each
+    # surviving row's own hash, which a *deleted* row passes trivially. Removing the entry that
+    # records who exported a chart is the tamper that matters — nobody edits an audit row, they
+    # delete it — and ``GET /patients/{id}/audit/verify`` answered ``chain_valid: true`` for it
+    # while its own documentation promised the opposite.
+    #
+    # NULL on every row written before migration 0025, and excluded from the hash when NULL so
+    # those rows still verify byte-identically. A patient's first post-migration entry chains to
+    # its legacy predecessor, so the two eras join up rather than restarting.
+    patient_prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Deliberately unindexed. Verification recomputes each hash from the row it already holds
     # (app.core.audit_hash) and never searches by hash, so an index here only cost writes on
     # the busiest table in the system. See migration 0009.

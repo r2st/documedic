@@ -221,6 +221,46 @@ describe('ReasoningTheatre', () => {
     expect(laneStatus('synthesis')).toBe('waiting');
   });
 
+  it('shows a crashed agent as a lane that did not complete, not as a finished one', async () => {
+    // The run carries on without an advisory agent that raised, degraded and escalated. This
+    // lane is where the clinician is told which cross-check is missing from what they are
+    // reading — so it must not look like the lanes that finished, in either channel.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('reasoning_start', { sequence: ['devils_advocate', 'verifier'] });
+      source.emit('agent_start', { agent: 'devils_advocate', label: "Devil's Advocate" });
+      source.emit('agent_failed', { agent: 'devils_advocate', reason: 'TypeError' });
+    });
+
+    const lane = screen.getByText("Devil's Advocate").closest('li');
+    expect(lane?.querySelector('.sr-only')?.textContent).toBe(
+      'did not complete — contributed nothing to this case',
+    );
+    expect(lane?.textContent).toContain('did not complete');
+    // No tick, which is the visual cue every finished lane carries.
+    expect(lane?.querySelector('svg')).toBeNull();
+  });
+
+  it('keeps the failed lane marked failed once the run finishes', async () => {
+    // reasoning_complete sweeps the lanes to done. Sweeping this one too would repaint the
+    // exact fact the case is escalated for as a green tick.
+    render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
+    const source = await latestSource();
+
+    act(() => {
+      source.emit('reasoning_start', { sequence: ['devils_advocate', 'verifier'] });
+      source.emit('agent_failed', { agent: 'devils_advocate', reason: 'TypeError' });
+      source.emit('reasoning_complete', {});
+    });
+
+    const lane = screen.getByText('devils advocate').closest('li');
+    expect(lane?.textContent).toContain('did not complete');
+    expect(lane?.querySelector('svg')).toBeNull();
+    expect(screen.getByText('verifier').closest('li')?.querySelector('svg')).not.toBeNull();
+  });
+
   it('renders the live hypothesis ranking with each probability band', async () => {
     render(<ReasoningTheatre sessionId="s1" onComplete={vi.fn()} />);
     const source = await latestSource();

@@ -23,6 +23,7 @@ from app.core.audit_hash import (
     canonical_payload,
     compute_record_hash,
     verify_chain_from,
+    verify_patient_chain_from,
 )
 from app.models.audit_log import AuditLog
 
@@ -65,6 +66,7 @@ def _canonical_for(row: Any) -> str:
         entity_id=str(row.entity_id) if row.entity_id else None,
         payload=row.payload,
         created_at=_iso_utc(row.created_at),
+        patient_prev_hash=row.patient_prev_hash,
     )
 
 
@@ -82,6 +84,7 @@ _CHAIN_COLUMNS = (
     AuditLog.created_at,
     AuditLog.prev_hash,
     AuditLog.record_hash,
+    AuditLog.patient_prev_hash,
 )
 
 
@@ -102,6 +105,7 @@ def _chain_entry(row: Any) -> dict[str, Any]:
         "created_at": _iso_utc(row.created_at),
         "prev_hash": row.prev_hash,
         "record_hash": row.record_hash,
+        "patient_prev_hash": row.patient_prev_hash,
     }
 
 
@@ -145,6 +149,33 @@ class AuditService:
     async def _latest(self) -> AuditLog | None:
         result = await self.db.execute(select(AuditLog).order_by(AuditLog.sequence.desc()).limit(1))
         return result.scalar_one_or_none()
+
+    async def _patient_tails(self, patient_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """The last ``record_hash`` written for each of these patients, for the per-patient link.
+
+        One indexed lookup per *distinct* patient in the batch, not per entry — a run that
+        appends nine entries about one chart costs one. The read walks
+        ``ix_audit_logs_patient_sequence`` backwards to its first row, so it does not degrade
+        with the size of a table that is never pruned.
+
+        A patient with no entries yet is absent from the result; :meth:`record_many` starts
+        their chain at ``GENESIS_HASH``. That is deliberately not the same as ``None``, which
+        means "this row predates the per-patient chain" — a first entry that recorded no link
+        at all would be indistinguishable from a legacy row, and deleting the true first
+        entries of a trail would then go unnoticed.
+        """
+        tails: dict[uuid.UUID, str] = {}
+        for patient_id in patient_ids:
+            tails[patient_id] = (
+                await self.db.scalar(
+                    select(AuditLog.record_hash)
+                    .where(AuditLog.patient_id == patient_id)
+                    .order_by(AuditLog.sequence.desc())
+                    .limit(1)
+                )
+                or GENESIS_HASH
+            )
+        return tails
 
     async def record(
         self,
@@ -212,14 +243,26 @@ class AuditService:
 
         await self._lock()
 
+        patient_ids = {d.patient_id for d in drafts if d.patient_id is not None}
+
         for attempt in range(_MAX_SEQUENCE_ATTEMPTS):
             latest = await self._latest()
             sequence = (latest.sequence + 1) if latest else 1
             prev_hash = latest.record_hash if latest else GENESIS_HASH
+            # Re-read inside the retry loop for the same reason the sequence is: a collision
+            # means someone else appended, and what they appended may have been about one of
+            # these patients.
+            patient_prev = await self._patient_tails(patient_ids)
 
             entries: list[AuditLog] = []
             for offset, draft in enumerate(drafts):
                 created_at = datetime.now(UTC)
+                # Entries with no patient — the auth trail — take no per-patient link. There is
+                # no chart-scoped walk that would ever check one, and the global chain already
+                # covers them.
+                patient_prev_hash = (
+                    patient_prev[draft.patient_id] if draft.patient_id is not None else None
+                )
                 canonical = canonical_payload(
                     sequence=sequence + offset,
                     action=draft.action,
@@ -229,6 +272,7 @@ class AuditService:
                     entity_id=str(draft.entity_id) if draft.entity_id else None,
                     payload=draft.payload,
                     created_at=_iso_utc(created_at),
+                    patient_prev_hash=patient_prev_hash,
                 )
                 record_hash = compute_record_hash(prev_hash, canonical)
                 entries.append(
@@ -242,12 +286,18 @@ class AuditService:
                         payload=draft.payload,
                         prev_hash=prev_hash,
                         record_hash=record_hash,
+                        patient_prev_hash=patient_prev_hash,
                         created_at=created_at,
                     )
                 )
                 # The next entry chains to this one, exactly as it would have done had it been
-                # appended in its own call straight after this one.
+                # appended in its own call straight after this one — on both chains. A batch
+                # carrying several entries about the same chart links them to each other, so
+                # removing one from the middle of a run is as visible as removing one written
+                # in its own call.
                 prev_hash = record_hash
+                if draft.patient_id is not None:
+                    patient_prev[draft.patient_id] = record_hash
 
             try:
                 async with self.db.begin_nested():
@@ -330,9 +380,23 @@ class AuditService:
     async def verify_patient_chain(self, patient_id: uuid.UUID) -> tuple[int, bool]:
         """Recompute the hash chain for a patient's entries, in batches, in sequence order.
 
-        Per-patient slice: validate each record's own hash recomputes; chain linkage is
-        validated globally (:meth:`verify_full_chain`). Here we recompute each record's hash
-        from its stored prev_hash.
+        Two checks, because they catch different tampering. Each row's own ``record_hash`` is
+        recomputed from what it stores, which catches an *edited* row. And each row's
+        ``patient_prev_hash`` is checked against the previous row for the same patient, which
+        catches a *deleted* one.
+
+        The second check is the one this method used to be missing, and its absence made the
+        endpoint's own promise false. ``prev_hash`` links a row to whatever was appended before
+        it anywhere in the system, so a walk restricted to one chart had no linkage available:
+        it recomputed surviving rows, all of which passed, and a removed entry left nothing
+        behind to fail. That is the tamper worth doing — an entry recording that someone opened
+        or exported a chart is deleted, not rewritten — and ``chain_valid: true`` came back.
+        Migration 0025 added the per-patient link that makes the check possible; see
+        :func:`~app.core.audit_hash.verify_patient_chain_from`.
+
+        Rows written before that migration carry no link and are checked only on their own
+        hash, which is what they were written under. The trail joins up at the boundary: the
+        first linked row points at its legacy predecessor.
 
         This used to read the patient's whole trail in one statement, hydrate every row into an
         ORM instance, and hash the lot in a single expression. ``audit_logs`` is append-only and
@@ -359,6 +423,7 @@ class AuditService:
         checked = 0
         valid = True
         after = -1
+        expected_prev: str | None = None
         while True:
             result = await self.db.execute(
                 select(*_CHAIN_COLUMNS)
@@ -374,6 +439,12 @@ class AuditService:
             for row in rows:
                 if compute_record_hash(row.prev_hash, _canonical_for(row)) != row.record_hash:
                     valid = False
+            # Carried across the batch boundary, so a row deleted at the seam is as visible as
+            # one deleted in the middle of a batch.
+            links_valid, expected_prev = verify_patient_chain_from(
+                [_chain_entry(r) for r in rows], expected_prev
+            )
+            valid = valid and links_valid
 
     async def verify_full_chain(self) -> tuple[int, bool]:
         """Verify the entire global chain is unbroken (genesis -> latest), in batches.

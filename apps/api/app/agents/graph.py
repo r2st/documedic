@@ -12,6 +12,8 @@ edge that reaches synthesis without passing through it (Critical Safety Rule #1)
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.agents import (
@@ -28,6 +30,9 @@ from app.agents import (
 from app.agents.context import ReasoningContext, resolve_safety
 from app.agents.llm import using_simulated_llm
 from app.agents.state import CaseState, HardBlock
+from app.core.logsafe import describe_exception
+
+logger = logging.getLogger(__name__)
 
 # Order in which the Reasoning Theatre should show the agent lanes.
 AGENT_SEQUENCE = [
@@ -132,6 +137,56 @@ def record_hard_block(state: CaseState, flag: dict[str, Any]) -> None:
     )
 
 
+AgentNode = Callable[[CaseState, ReasoningContext], Awaitable[None]]
+
+
+async def _advisory(agent: str, node: AgentNode, state: CaseState, ctx: ReasoningContext) -> None:
+    """Run one *advisory* node so that a crash costs its lane rather than the whole case.
+
+    Every node in the pipeline already has a deterministic fallback for "the model gave us
+    nothing usable", and the recurring defect in this engine has been that the fallback never
+    gets to run: the response arrives, something in it is the wrong *shape*, and the exception
+    escapes the node — past the point where "no usable answer" would have routed offline.
+    Individual parse sites have been hardened one at a time (``objects``, ``_parse_evidence``,
+    ``as_float``, ``_recognised``); each of those was found by a clinician losing a run. This is
+    the same guarantee stated once, for the class rather than the instance: whatever an advisory
+    node does, the case does not die with it.
+
+    Failing the whole run instead is not the conservative choice it looks like. A crash in the
+    Devil's-Advocate after the panel has produced a full differential currently throws that
+    differential away and hands the clinician an error; nothing is safer about an empty screen.
+
+    What makes this safe rather than merely lenient is that the degradation is *loud* — this is
+    not a swallowed exception. ``record_agent_failure`` marks the case degraded and names the
+    lane, the Verifier's deterministic floor escalates to flag-for-review and says which agent
+    did not run (Critical Safety Rule #2), the Theatre paints the lane as failed rather than
+    done, and the whole thing is in the immutable ``case_state`` snapshot. The clinician is told
+    that part of the panel is missing; they are not quietly shown a thinner case as if it were a
+    whole one.
+
+    Only advisory nodes are run this way. The deterministic drug-safety node, the Verifier and
+    synthesis are not: a case that reached the clinician without the allergy check, without the
+    gate (Rule #1) or without an output is not a degraded case, it is a wrong one, so a failure
+    in any of those still fails the run.
+    """
+    try:
+        await node(state, ctx)
+    except Exception as exc:  # noqa: BLE001 — the point of this function
+        reason = describe_exception(exc)
+        logger.exception(
+            "Reasoning agent %r failed; the case continues without it, degraded and escalated.",
+            agent,
+        )
+        state.record_agent_failure(agent, reason)
+        try:
+            await ctx.emit("agent_failed", {"agent": agent, "reason": reason})
+        except Exception:  # noqa: BLE001 — a dead stream must not undo the recovery
+            # The emitter is the clinician's SSE queue, and it fails when they have closed the
+            # tab. Letting that escape here would turn a contained agent failure back into a
+            # failed run, which is the exact thing this function exists to prevent.
+            logger.warning("Could not stream the failure of agent %r to the Theatre.", agent)
+
+
 async def run_reasoning(state: CaseState, ctx: ReasoningContext) -> dict[str, Any]:
     """Run the full pipeline after intake is complete; returns synthesis output.
 
@@ -144,11 +199,16 @@ async def run_reasoning(state: CaseState, ctx: ReasoningContext) -> dict[str, An
         state.demo_mode = True
     await ctx.emit("reasoning_start", {"sequence": AGENT_SEQUENCE, "demo_mode": state.demo_mode})
 
-    await hypothesis_panel.run(state, ctx)
-    await cant_miss_sentinel.run(state, ctx)
-    await devils_advocate.run(state, ctx)
-    await investigation_strategist.run(state, ctx)
-    await guideline_rag.run(state, ctx)
+    # Advisory nodes: a crash costs the lane, not the case. See ``_advisory``.
+    await _advisory("hypothesis_panel", hypothesis_panel.run, state, ctx)
+    await _advisory("cant_miss_sentinel", cant_miss_sentinel.run, state, ctx)
+    await _advisory("devils_advocate", devils_advocate.run, state, ctx)
+    await _advisory("investigation_strategist", investigation_strategist.run, state, ctx)
+    await _advisory("guideline_rag", guideline_rag.run, state, ctx)
+
+    # Not advisory. The deterministic safety pass is what Rules #3 and #8 are about, and a run
+    # that could not complete it has not checked this patient's allergies against the drugs it
+    # is about to name. There is no degraded version of that.
     await drug_safety_check(state, ctx)
 
     # Verifier gate — mandatory, cannot be bypassed.

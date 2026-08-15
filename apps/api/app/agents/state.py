@@ -173,6 +173,26 @@ class CaseState:
     online: bool = True
     degraded: bool = False  # True when LLM unavailable and deterministic fallback used
     demo_mode: bool = False  # True when output is built from simulated "[DEMO MODE]" data
+    # Agents that raised rather than answering. Named rather than counted, because "the
+    # Devil's-Advocate never ran" and "the guideline retrieval never ran" are different things
+    # to hand a clinician. Written by ``graph._advisory``; read by the Verifier's deterministic
+    # floor, which escalates the case and says which lane is missing.
+    failed_agents: list[str] = field(default_factory=list)
+
+    def record_agent_failure(self, agent: str, reason: str) -> None:
+        """Note that ``agent`` raised, and degrade the case for it.
+
+        Three things at once because they must not come apart: the lane is named so the
+        Verifier can escalate and the Theatre can show it, the case is marked ``degraded`` so
+        the deterministic floor treats the run as it treats an LLM outage, and the failure is
+        put on the trace and the message log so it is in the immutable ``case_state`` snapshot
+        rather than only in the server's logs.
+        """
+        if agent not in self.failed_agents:
+            self.failed_agents.append(agent)
+        self.degraded = True
+        self.add_trace(agent, f"Agent failed and did not contribute: {reason}", {"error": reason})
+        self.add_message(agent, "error", f"This agent did not complete: {reason}")
 
     def add_trace(self, agent: str, summary: str, detail: dict[str, Any] | None = None) -> None:
         self.agent_trace.append(TraceEntry(agent=agent, summary=summary, detail=detail or {}))
@@ -197,6 +217,7 @@ class CaseState:
             "online": self.online,
             "degraded": self.degraded,
             "demo_mode": self.demo_mode,
+            "failed_agents": list(self.failed_agents),
             "intake_complete": self.intake_complete,
             "info_gain_score": self.info_gain_score,
             "intake_rounds": self.intake_rounds,

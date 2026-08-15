@@ -21,9 +21,12 @@ against, laundered through an interchange format. The record that is exported is
 that was put in: what documents said, what the clinician confirmed, and the markers computed
 deterministically from those.
 
-Provenance survives the trip. Every resource carries whether a clinician confirmed it
-(``clinician-confirmed``) and which uploaded document it came from, because a receiving system
-that cannot tell an OCR guess from a confirmed entry will treat both as fact.
+Provenance survives the trip. Every clinical resource carries whether a clinician confirmed it
+(``clinician-confirmed``) and, where there is one, which uploaded document it came from —
+because a receiving system that cannot tell an OCR guess from a confirmed entry will treat both
+as fact. Resources nobody confirmed say so rather than omitting the extension: a computed eGFR
+and a visit read out of a scanned note both carry ``clinician-confirmed: false``, which is a
+different statement from carrying nothing.
 
 Completeness is asserted, not assumed
 -------------------------------------
@@ -38,6 +41,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from html import escape
 from typing import Any
 
 from sqlalchemy import Select, select
@@ -47,6 +51,7 @@ from app.config import settings
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
+from app.models.encounter import Encounter
 from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
@@ -90,6 +95,20 @@ _ALLERGY_CRITICALITY = {"severe": "high", "moderate": "low", "mild": "low"}
 _INTERPRETATION = {"high": ("H", "High"), "low": ("L", "Low")}
 _PATIENT_GENDER = {"male", "female", "other", "unknown"}
 
+# Our encounter types -> FHIR's v3-ActCode encounter classes. ``other`` and anything absent
+# fall through to ``AMB`` (ambulatory), the safe reading: an unknown visit type must not be
+# exported as an emergency presentation or an admission, both of which change how the whole
+# encounter is read at the far end.
+_ENCOUNTER_CLASS_SYSTEM = "http://terminology.hl7.org/CodeSystem/v3-ActCode"
+_ENCOUNTER_CLASS = {
+    "outpatient": ("AMB", "ambulatory"),
+    "inpatient": ("IMP", "inpatient encounter"),
+    "emergency": ("EMER", "emergency"),
+    "teleconsultation": ("VR", "virtual"),
+    "follow_up": ("AMB", "ambulatory"),
+    "other": ("AMB", "ambulatory"),
+}
+
 
 def _iso(value: datetime | date | None) -> str | None:
     if value is None:
@@ -103,6 +122,21 @@ def _iso(value: datetime | date | None) -> str | None:
 def _number(value: Decimal | None) -> float | None:
     """A ``Numeric`` column as JSON. FHIR ``decimal`` is a JSON number, not a string."""
     return None if value is None else float(value)
+
+
+def _narrative(text: str | None) -> dict[str, Any] | None:
+    """Free text as a FHIR ``Narrative``, or nothing when there is none.
+
+    Escaped, because the div is XHTML inside a JSON string and the text came out of a
+    clinician's notes field — an ampersand or an angle bracket in it would produce a bundle
+    that is not parseable as FHIR at the far end.
+    """
+    if not text or not text.strip():
+        return None
+    return {
+        "status": "additional",
+        "div": f'<div xmlns="http://www.w3.org/1999/xhtml"><p>{escape(text.strip())}</p></div>',
+    }
 
 
 def _prune(resource: dict[str, Any]) -> dict[str, Any]:
@@ -169,6 +203,14 @@ class PatientExportService:
         incomplete += ["MedicationStatement"] if truncated else []
         entries += [self._medication(row, patient_ref) for row in medications]
 
+        encounters, truncated = await self._rows(
+            select(Encounter)
+            .where(Encounter.patient_id == patient.id, Encounter.is_deleted.is_(False))
+            .order_by(Encounter.encounter_date.desc(), Encounter.id)
+        )
+        incomplete += ["Encounter"] if truncated else []
+        entries += [self._encounter(row, patient_ref) for row in encounters]
+
         labs, truncated = await self._rows(
             select(LabResult)
             .where(LabResult.patient_id == patient.id, LabResult.is_deleted.is_(False))
@@ -176,6 +218,11 @@ class PatientExportService:
         )
         incomplete += ["Observation (laboratory)"] if truncated else []
         entries += [self._lab(row, patient_ref) for row in labs]
+        # Which lab results actually made it into this bundle, so a marker computed from one
+        # that was truncated away does not export a reference to a resource the file does not
+        # contain. A dangling reference is worse than an absent one: the importer either
+        # rejects the bundle or resolves it against whatever else happens to hold that id.
+        exported_lab_ids = {row.id for row in labs}
 
         markers, truncated = await self._rows(
             select(DerivedMarker)
@@ -183,7 +230,7 @@ class PatientExportService:
             .order_by(DerivedMarker.computed_at.desc(), DerivedMarker.id)
         )
         incomplete += ["Observation (derived)"] if truncated else []
-        entries += [self._marker(row, patient_ref) for row in markers]
+        entries += [self._marker(row, patient_ref, exported_lab_ids) for row in markers]
 
         if incomplete:
             entries.append(self._truncation_notice(incomplete))
@@ -343,6 +390,55 @@ class PatientExportService:
             }
         )
 
+    def _encounter(self, row: Encounter, patient_ref: str) -> dict[str, Any]:
+        """A documented visit.
+
+        The section that was missing. Everything else this bundle carries is *findings* —
+        drugs, results, diagnoses — and the visits they were recorded at were dropped, so a
+        receiving clinician got a chart with no consultations in it: no record that the patient
+        was seen on a date, why they came, or what was written down at the time. Two
+        prescriptions a year apart and the fact that the second was at an emergency
+        presentation are different clinical pictures, and only one of them was leaving here.
+
+        ``status`` is ``finished`` because this is a record of a visit that happened — the only
+        kind this system ingests. It extracts encounters from documents written after the fact;
+        nothing here schedules or opens one.
+        """
+        code, display = _ENCOUNTER_CLASS.get(row.encounter_type or "", ("AMB", "ambulatory"))
+        return self._entry(
+            {
+                "resourceType": "Encounter",
+                "id": str(row.id),
+                "extension": self._provenance(
+                    # No clinician-confirmation flag exists on this row: an encounter is
+                    # asserted by the document it was read out of, not separately confirmed.
+                    # Saying so plainly beats omitting the extension, which a reader that
+                    # understands it would take as "this resource carries no provenance" —
+                    # indistinguishable from an oversight.
+                    confirmed=False,
+                    source_document_id=row.source_document_id,
+                ),
+                "status": "finished",
+                "class": {"system": _ENCOUNTER_CLASS_SYSTEM, "code": code, "display": display},
+                "type": (
+                    [{"text": row.encounter_type.replace("_", " ")}] if row.encounter_type else None
+                ),
+                "subject": {"reference": patient_ref},
+                # A single date, so start and end are the same day. FHIR wants a period and this
+                # is what we know; inventing an end time we never recorded would be worse.
+                "period": _prune({"start": _iso(row.encounter_date)}) or None,
+                "reasonCode": (
+                    [{"text": row.presenting_complaint}] if row.presenting_complaint else None
+                ),
+                # What the clinician wrote at the visit. FHIR R4 gives ``Encounter`` no ``note``
+                # element, and the narrative is where R4 puts human-readable content that the
+                # structured elements do not hold — ``status: additional`` says exactly that.
+                # The alternative was to drop it, and free text written by a clinician at the
+                # bedside is often the only thing in a referral that explains the rest of it.
+                "text": _narrative(row.clinician_notes),
+            }
+        )
+
     def _medication(self, row: MedicationEvent, patient_ref: str) -> dict[str, Any]:
         # A stop event is a stopped medication whatever `is_current` says; otherwise the flag
         # the chart is actually driven by decides. "unknown" rather than a guess for anything
@@ -419,9 +515,15 @@ class PatientExportService:
         low: Decimal | None = None,
         high: Decimal | None = None,
         direction: str | None = None,
+        interpretation_code: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
-        """The shape both lab results and derived markers share."""
-        interpretation = _INTERPRETATION.get((direction or "").lower())
+        """The shape both lab results and derived markers share.
+
+        ``direction`` is the lab-result path (an abnormality direction mapped to H/L);
+        ``interpretation_code`` is the derived-marker path, which supplies the code itself
+        because a boolean carries no direction to map. Exactly one is ever passed.
+        """
+        interpretation = interpretation_code or _INTERPRETATION.get((direction or "").lower())
         return self._entry(
             {
                 "resourceType": "Observation",
@@ -500,13 +602,27 @@ class PatientExportService:
             direction=row.abnormality_direction,
         )
 
-    def _marker(self, row: DerivedMarker, patient_ref: str) -> dict[str, Any]:
+    def _marker(
+        self, row: DerivedMarker, patient_ref: str, exported_lab_ids: set[uuid.UUID]
+    ) -> dict[str, Any]:
         """A computed marker (eGFR, BMI, ...) as a derived Observation.
 
         The formula and its version travel with the value. An eGFR is only interpretable
         against the equation that produced it — this system has already had a defect where an
         adult equation was applied to a child — so a receiving system that cannot see which
         equation was used cannot safely re-use the number.
+
+        So does everything else the row knows about how to read it. This used to export the
+        number, the unit and the method and stop, while the lab results beside it carried their
+        reference range and an H/L interpretation. An eGFR of 22 arrived at the far end as a
+        bare quantity: a receiving system with no CKD-EPI range of its own had nothing saying
+        it was abnormal, and the resource that would have told a clinician to stop before
+        prescribing metformin looked, in the file, exactly like a normal one. ``is_abnormal``
+        is the row's own verdict and it was being dropped on the floor.
+
+        ``derivedFrom`` links the marker to the lab result it was computed from, when that
+        result is in this bundle — so the creatinine behind an eGFR is followable rather than
+        merely present somewhere in the same file.
         """
         resource = self._observation(
             resource_id=row.id,
@@ -514,10 +630,32 @@ class PatientExportService:
             code_text=row.marker_name,
             category="survey",
             effective=row.computed_at,
+            # Nothing on this row is clinician-confirmed and nothing was extracted from a
+            # document: it was computed here, from data that was. Said explicitly, because the
+            # bundle's contract is that a reader can tell a confirmed entry from an unconfirmed
+            # one on every resource, and silence is not an answer to that question.
+            extension=self._provenance(confirmed=False, source_document_id=None),
             value_numeric=row.value_numeric,
             unit=row.unit,
+            low=row.reference_range_low,
+            high=row.reference_range_high,
+            # Our marker rows carry a boolean, not a direction, so this is deliberately not the
+            # H/L a lab result gets: "A"/"N" (abnormal/normal) is what v3-ObservationInterpretation
+            # has for a verdict with no side to it. Claiming "High" from a boolean would be
+            # inventing the half of the finding we do not have.
+            interpretation_code=(
+                None
+                if row.is_abnormal is None
+                else ("A", "Abnormal")
+                if row.is_abnormal
+                else ("N", "Normal")
+            ),
         )
         resource["resource"]["method"] = {"text": f"{row.formula_name} ({row.formula_version})"}
+        if row.source_lab_result_id and row.source_lab_result_id in exported_lab_ids:
+            resource["resource"]["derivedFrom"] = [
+                {"reference": f"urn:uuid:{row.source_lab_result_id}"}
+            ]
         return resource
 
     def _truncation_notice(self, sections: list[str]) -> dict[str, Any]:

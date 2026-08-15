@@ -6,7 +6,9 @@ import { api } from '@/lib/api';
 export interface AgentLane {
   agent: string;
   label: string;
-  status: 'idle' | 'running' | 'done';
+  status: 'idle' | 'running' | 'done' | 'failed';
+  // Why the lane failed, when it did. Log-safe text from the server.
+  reason?: string;
 }
 
 export interface StreamState {
@@ -77,7 +79,15 @@ export function useReasoningStream() {
           // Mark reasoning as logically complete in the theatre UI, but do NOT
           // close the stream or fetch suggestions yet — the server hasn't
           // committed them to the DB at this point.
-          setState((s) => ({ ...s, lanes: s.lanes.map((l) => ({ ...l, status: 'done' })) }));
+          //
+          // A lane that failed keeps its status. Sweeping every lane to 'done' at the end of
+          // the run would repaint exactly the fact the run is escalated for — that an agent
+          // crashed and contributed nothing — as a green tick, which is the automation bias
+          // this screen exists to work against.
+          setState((s) => ({
+            ...s,
+            lanes: s.lanes.map((l) => (l.status === 'failed' ? l : { ...l, status: 'done' })),
+          }));
         }
         if (type === 'done') {
           // The 'done' event fires AFTER the server has persisted and committed
@@ -95,6 +105,7 @@ export function useReasoningStream() {
         'reasoning_start',
         'agent_start',
         'agent_complete',
+        'agent_failed',
         'specialist',
         'hypotheses',
         'cant_miss',
@@ -162,6 +173,16 @@ function reduce(s: StreamState, event: string, data: Record<string, unknown>): S
   }
   if (event === 'agent_complete' && typeof data.agent === 'string') {
     lanes = lanes.map((l) => (l.agent === data.agent ? { ...l, status: 'done' } : l));
+  }
+  // An agent that crashed. The run carries on without it, degraded and escalated, so the lane
+  // has to say it did not run rather than quietly stopping at 'running' — a lane stuck mid-way
+  // reads as "still working" on a screen where everything else has finished.
+  if (event === 'agent_failed' && typeof data.agent === 'string') {
+    lanes = lanes.map((l) =>
+      l.agent === data.agent
+        ? { ...l, status: 'failed', reason: typeof data.reason === 'string' ? data.reason : undefined }
+        : l,
+    );
   }
 
   return { ...s, lanes, log, events: { ...s.events, [event]: data } };

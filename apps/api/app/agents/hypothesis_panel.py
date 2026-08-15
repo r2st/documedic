@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from app.agents.context import ReasoningContext
@@ -11,6 +12,9 @@ from app.agents.state import CaseState, Evidence, Hypothesis
 from app.agents.tools import active_condition_names, summarize_snapshot
 from app.agents.untrusted import fenced, fenced_qa
 from app.agents.util import as_text, call_llm, norm_band, objects, text_blob
+from app.core.logsafe import describe_exception
+
+logger = logging.getLogger(__name__)
 
 AGENT = "hypothesis_panel"
 
@@ -99,10 +103,28 @@ async def run(state: CaseState, ctx: ReasoningContext) -> None:
 
     produced: list[Hypothesis] = []
     if ctx.llm_available():
+        # ``return_exceptions`` so the panel is four independent opinions rather than one
+        # four-way join: without it, ``gather`` propagates the first exception and the other
+        # three specialists' completed work is discarded with it — including the case where
+        # three answered well and the fourth returned something unparseable. A specialist that
+        # raises contributes nothing, which is what a specialist that answered nothing already
+        # does, and the panel is left to decide whether what remains is enough.
         results = await asyncio.gather(
-            *[_run_specialist(state, ctx, key, name, summary) for key, name in SPECIALISTS.items()]
+            *[_run_specialist(state, ctx, key, name, summary) for key, name in SPECIALISTS.items()],
+            return_exceptions=True,
         )
-        produced = [h for sub in results for h in sub]
+        for key, sub in zip(SPECIALISTS, results, strict=True):
+            if isinstance(sub, BaseException):
+                logger.warning(
+                    "Hypothesis panel specialist %r failed: %s", key, describe_exception(sub)
+                )
+                # Degraded, but not a named lane failure: the panel is one lane and it is about
+                # to decide, below, whether the specialists that did answer left it with a
+                # differential at all. Naming it here would report the whole panel missing when
+                # three quarters of it is present.
+                state.degraded = True
+                continue
+            produced.extend(sub)
     # A provider that holds a key is not a provider that answers. This used to fall back only
     # when no key was configured, so a live outage — the likeliest failure in production — left
     # the differential *empty*: four specialists returned nothing, the deterministic panel that

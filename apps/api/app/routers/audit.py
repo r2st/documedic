@@ -83,10 +83,17 @@ async def verify_chain(
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> AuditVerifyResponse:
-    """Recompute every entry's hash and check it against the one stored.
+    """Recompute every entry's hash and check it against the one stored, then check that each
+    entry still links to this chart's previous one.
 
     `chain_valid: false` means an entry was altered or removed underneath the application —
     tamper evidence, not a transient error, and worth escalating rather than retrying.
+
+    Both halves of that are checked. Recomputing an entry's hash catches an edit; the
+    per-entry link to the previous entry *for this patient* catches a deletion, which
+    recomputation cannot — a removed row leaves nothing behind to recompute. Entries written
+    before the per-patient link existed (migration 0025) are checked on their own hash only,
+    so a deletion from a trail that predates it is still invisible here.
 
     Runnable after the chart is withdrawn, for the same reason the trail itself stays
     readable: a tamper check that stops working once a record is deleted checks nothing.

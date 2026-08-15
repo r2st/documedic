@@ -189,6 +189,19 @@ def _deterministic_floor(state: CaseState) -> tuple[str, list[str]]:
     if state.degraded:
         reasons.append("AI reasoning ran in degraded mode; treat output with extra caution.")
         tier = more_conservative_tier(tier, "flag_for_review")
+    if state.failed_agents:
+        # Named, not counted. "Reasoning was degraded" is a caveat a clinician learns to read
+        # past; "the Devil's-Advocate did not run on this case" tells them which specific
+        # cross-check is missing from what they are looking at, which is the whole point of
+        # showing dissent at all (Rule #5). The escalation is redundant with the ``degraded``
+        # branch above by construction — ``record_agent_failure`` sets both — and is stated
+        # anyway so that this reason can never appear on a case that was not escalated.
+        tier = more_conservative_tier(tier, "flag_for_review")
+        reasons.append(
+            "These agents did not complete and contributed nothing to this case: "
+            + ", ".join(agent.replace("_", " ") for agent in state.failed_agents)
+            + "."
+        )
     return tier, reasons
 
 

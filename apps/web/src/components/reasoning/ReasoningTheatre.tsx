@@ -16,6 +16,7 @@ const DOT: Record<AgentLane['status'], string> = {
   idle: 'bg-slate-300 ring-2 ring-slate-100',
   running: 'bg-brand-500 ring-2 ring-brand-100 animate-pulse',
   done: 'bg-emerald-500 ring-2 ring-emerald-100',
+  failed: 'bg-amber-500 ring-2 ring-amber-100',
 };
 
 // A lane's progress is drawn as a coloured dot and, when finished, a tick. Both are colour and
@@ -24,6 +25,9 @@ const LANE_STATUS: Record<AgentLane['status'], string> = {
   idle: 'waiting',
   running: 'running',
   done: 'done',
+  // Spelled out rather than "failed": what matters to the clinician reading the case is not
+  // that something errored but that this lane contributed nothing to what they are looking at.
+  failed: 'did not complete — contributed nothing to this case',
 };
 
 /**
@@ -200,6 +204,14 @@ export function ReasoningTheatre({
                 {lane.label}
               </span>
               <span className="sr-only">{LANE_STATUS[lane.status]}</span>
+              {lane.status === 'failed' && (
+                <span
+                  className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+                  aria-hidden="true"
+                >
+                  did not complete
+                </span>
+              )}
               {lane.status === 'done' && (
                 <svg
                   aria-hidden="true"
