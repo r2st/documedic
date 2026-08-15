@@ -9,8 +9,8 @@ endpoint work would read as unremarkable in review.
 
 So the property is pinned rather than re-audited:
 
-* every ``text()`` in the application source takes a **literal** string, so no SQL is ever
-  assembled from a value; and
+* every SQLAlchemy ``text()`` in the application source takes a **literal** string, so no SQL is
+  ever assembled from a value; and
 * the set of literals actually executed is small enough to enumerate here, so a *new* piece of
   raw SQL fails this test and has to be argued for in a diff.
 
@@ -52,9 +52,24 @@ _ALLOWED_RAW_SQL = frozenset(
     }
 )
 
-# Names that construct SQL from text. `text()` is SQLAlchemy's; the others are here so that
-# reaching for the DBAPI directly is caught too.
-_SQL_TEXT_CALLS = frozenset({"text", "exec_driver_sql"})
+# The DBAPI escape hatch, matched on the name alone: it is a Session/Connection method, the name
+# is distinctive to SQLAlchemy, and nothing else in this service defines one.
+_DRIVER_SQL_CALLS = frozenset({"exec_driver_sql"})
+
+# ``text`` is not matched on the name alone, because "text" is an ordinary English word and this
+# scan reads the whole application source. ``app/services/pdf.py`` defines ``PdfBuilder.text()``,
+# which draws a line on a page, and every ``pdf.text(f"...")`` in the record export was being
+# reported here as SQL assembled from an f-string. Seven false positives in one module is how a
+# pin like this one stops being read: the next person greps for the offending call, sees a PDF
+# writer, and reaches for the allowlist or the assertion rather than the finding.
+#
+# So the call is resolved to SQLAlchemy's ``text`` through the importing module instead — the
+# bare name only when the file imported it from ``sqlalchemy`` (under whatever alias), and the
+# attribute form only on a name bound to the ``sqlalchemy`` module itself. That is narrower in
+# name and no narrower in property: every ``text()`` this service actually executes arrives
+# through one of those two paths, and a file that assembles SQL has to import the thing that
+# runs it.
+_SQLALCHEMY_MODULES = ("sqlalchemy",)
 
 # A statement, as opposed to the index and DDL fragments that are also written with `text()`.
 # ``\b`` rather than a prefix match, or the column expression "updated_at DESC" is read as an
@@ -71,24 +86,50 @@ def _python_files() -> list[pathlib.Path]:
     return files
 
 
+def _sqlalchemy_bindings(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """The names in one module that mean SQLAlchemy's ``text``, and the module itself.
+
+    Returns ``(text_names, module_names)`` — the first for ``from sqlalchemy import text`` and
+    any alias of it, the second for ``import sqlalchemy as sa`` so that ``sa.text(...)`` is
+    matched as well.
+    """
+    text_names: set[str] = set()
+    module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module in _SQLALCHEMY_MODULES or module.startswith("sqlalchemy."):
+                for alias in node.names:
+                    if alias.name == "text":
+                        text_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _SQLALCHEMY_MODULES or alias.name.startswith("sqlalchemy."):
+                    module_names.add(alias.asname or alias.name.split(".")[0])
+    return text_names, module_names
+
+
 def _sql_text_calls() -> list[tuple[pathlib.Path, ast.Call]]:
-    """Every ``text(...)``/``exec_driver_sql(...)`` call site in the application source."""
+    """Every SQLAlchemy ``text(...)``/``exec_driver_sql(...)`` call site in the application."""
     found: list[tuple[pathlib.Path, ast.Call]] = []
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        text_names, module_names = _sqlalchemy_bindings(tree)
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+            if not isinstance(node, ast.Call) or not node.args:
                 continue
             func_node = node.func
-            name = (
-                func_node.id
-                if isinstance(func_node, ast.Name)
-                else func_node.attr
-                if isinstance(func_node, ast.Attribute)
-                else None
-            )
-            if name in _SQL_TEXT_CALLS and node.args:
-                found.append((path, node))
+            if isinstance(func_node, ast.Name):
+                if func_node.id in text_names or func_node.id in _DRIVER_SQL_CALLS:
+                    found.append((path, node))
+            elif isinstance(func_node, ast.Attribute):
+                on_sqlalchemy = (
+                    func_node.attr == "text"
+                    and isinstance(func_node.value, ast.Name)
+                    and func_node.value.id in module_names
+                )
+                if on_sqlalchemy or func_node.attr in _DRIVER_SQL_CALLS:
+                    found.append((path, node))
     return found
 
 
@@ -105,6 +146,71 @@ def test_no_sql_is_built_from_a_string():
     assert not offenders, (
         "SQL must be a literal string with bound parameters, never assembled:\n"
         + "\n".join(offenders)
+    )
+
+
+def test_the_scan_resolves_text_through_the_import_rather_than_by_its_name(tmp_path):
+    """The scan's own property, pinned, because a scan that finds nothing also passes.
+
+    Two ways to get this wrong, and both are silent. Matching every call named ``text`` reports
+    a PDF writer as SQL — the false positive that made this necessary. Narrowing it too far
+    stops seeing SQLAlchemy's, and then the assertion above is vacuously true forever.
+    """
+    module = tmp_path / "sample.py"
+    module.write_text(
+        "from sqlalchemy import text as sql\n"
+        "import sqlalchemy as sa\n"
+        "class Page:\n"
+        "    def text(self, body):\n"
+        "        return body\n"
+        "def draw(page, db, name):\n"
+        "    page.text(f'Patient: {name}')\n"  # not SQL: a method that happens to be called text
+        "    db.execute(sql(f'SELECT {name}'))\n"  # SQL, assembled — must be caught
+        "    db.execute(sa.text(f'SELECT {name}'))\n"  # same, through the module
+        "    db.exec_driver_sql(f'SELECT {name}')\n"  # the DBAPI escape hatch
+        "    text = 'not a call'\n"
+        "    return text\n",
+        encoding="utf-8",
+    )
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    text_names, module_names = _sqlalchemy_bindings(tree)
+    assert text_names == {"sql"}, "the alias an import gave SQLAlchemy's text was not followed"
+    assert module_names == {"sa"}
+
+    caught = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func_node = node.func
+        if isinstance(func_node, ast.Name) and (
+            func_node.id in text_names or func_node.id in _DRIVER_SQL_CALLS
+        ):
+            caught.append(node.lineno)
+        elif isinstance(func_node, ast.Attribute) and (
+            (
+                func_node.attr == "text"
+                and isinstance(func_node.value, ast.Name)
+                and func_node.value.id in module_names
+            )
+            or func_node.attr in _DRIVER_SQL_CALLS
+        ):
+            caught.append(node.lineno)
+    # Lines 8, 9 and 10 are the three SQL calls; line 7 is the page-drawing one.
+    assert sorted(caught) == [8, 9, 10], f"resolved the wrong set of calls: {sorted(caught)}"
+
+
+def test_the_pdf_writer_is_not_read_as_a_sql_surface():
+    """The concrete false positive, named. ``PdfBuilder.text`` draws a line; it is not a query."""
+    scanned = {path.name for path, _ in _sql_text_calls()}
+    assert "pdf.py" not in scanned and "record_pdf.py" not in scanned
+
+
+def test_the_scan_still_sees_the_sql_this_service_does_execute():
+    """The other direction: the modules that genuinely run raw SQL are still in the scan."""
+    scanned = {path.name for path, _ in _sql_text_calls()}
+    assert {"health.py", "audit_service.py"} <= scanned, (
+        "the scan stopped resolving SQLAlchemy's text — every assertion in this module would "
+        f"now pass without reading any SQL at all. Saw: {sorted(scanned)}"
     )
 
 
