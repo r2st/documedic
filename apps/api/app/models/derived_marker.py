@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.types import GUID, JSONBType
@@ -17,6 +17,24 @@ class DerivedMarker(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     """A computed clinical value. Reproducible via formula_name + version + input_values."""
 
     __tablename__ = "derived_markers"
+    __table_args__ = (
+        # Every marker this table holds is a computed quantity that is strictly positive by
+        # construction — eGFR is the only one today, and it is the sole input to the metformin
+        # and renal-dose hard blocks. A zero or negative value is not a low result, it is
+        # arithmetic on an input no assay produces (``GraphService._compute_derived_markers``
+        # refuses it for that reason), and it would hard-block off a number the formula never
+        # supported. Enforced here so the refusal is a property of the chart rather than of one
+        # branch in one function.
+        CheckConstraint("value_numeric > 0", name="ck_derived_markers_value_positive"),
+        # The same inverted-interval invariant ``lab_results`` carries, for the same reason:
+        # ``is_abnormal`` is computed against these ends and is read by the record summary the
+        # agents reason from.
+        CheckConstraint(
+            "reference_range_low IS NULL OR reference_range_high IS NULL "
+            "OR reference_range_low <= reference_range_high",
+            name="ck_derived_markers_reference_range_order",
+        ),
+    )
 
     patient_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("patients.id"), nullable=False, index=True

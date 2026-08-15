@@ -130,7 +130,10 @@ async def test_every_section_is_capped_not_only_labs(db):
             DerivedMarker(
                 patient_id=patient.id,
                 marker_name=f"Derived{i}",
-                value_numeric=i,
+                # Offset off zero: derived markers are strictly positive by construction
+                # (ck_derived_markers_value_positive). The value is filler for a paging test,
+                # so the row just has to be one this table would really hold.
+                value_numeric=i + 1,
                 formula_name="egfr_ckd_epi",
                 formula_version="2021",
                 input_values={},

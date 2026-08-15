@@ -132,6 +132,17 @@ class LabResult(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             "('high', 'low', 'critical_high', 'critical_low')",
             name="ck_lab_results_abnormality_direction",
         ),
+        # A reference interval whose ends are the wrong way round is not a narrower interval —
+        # it is a misread, and it makes every abnormality judgement on the row wrong in the
+        # same direction. ``GraphService._merge_lab`` drops both ends when it sees one; this is
+        # that invariant as a property of the table, so a second writer added later cannot
+        # reintroduce it. Rows with one end or neither are unconstrained: a lone bound is a
+        # real, usable bound (see ``_merge_lab``).
+        CheckConstraint(
+            "reference_range_low IS NULL OR reference_range_high IS NULL "
+            "OR reference_range_low <= reference_range_high",
+            name="ck_lab_results_reference_range_order",
+        ),
         # Serves the patient_id lookup for the longitudinal-record and lab-safety reads. Labs
         # accumulate per document ingested, so this is the set that grows fastest for a
         # long-running patient.

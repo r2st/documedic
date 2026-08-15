@@ -683,6 +683,32 @@ class GraphService:
         value_numeric = _to_decimal(fields.get("value_numeric"))
         low = _to_decimal(fields.get("reference_range_low"))
         high = _to_decimal(fields.get("reference_range_high"))
+        # An interval whose low end is above its high end is not an interval. It arrives from a
+        # misread — a two-column layout read in the wrong order, or the vision model emitting the
+        # two JSON fields swapped — and both ends are then wrong in a way the screen below cannot
+        # see, because it tests the bounds independently:
+        #
+        #     if high is not None and value > high:   -> abnormal, "high"
+        #     elif low is not None and value < low:   -> abnormal, "low"
+        #     else:                                    -> normal
+        #
+        # With the ends reversed (low=90, high=10), every value in the *true* reference range
+        # trips the first branch: a potassium of 4.2 against "3.5 - 5.1" read backwards is
+        # charted as abnormally high. That is not a display defect. ``is_abnormal`` is what
+        # ``agents.tools.summarize_snapshot`` selects on to build the record summary every one of
+        # the eight agents reasons from, and what the FHIR export writes as the observation's
+        # interpretation, so one swapped pair puts a fabricated abnormal finding in front of the
+        # panel and in front of whoever receives the bundle.
+        #
+        # Both ends are dropped rather than swapped back. Swapping assumes the numbers are right
+        # and only their order is wrong, which is a guess about a document nobody has re-read;
+        # dropping leaves ``is_abnormal`` at None — "not evaluated" — which is this engine's
+        # standing answer for a comparison it could not attempt, and is what a lab with no
+        # printed range already gets. The *value* is kept either way, and the deterministic
+        # critical-value guard screens it against its own thresholds rather than the document's,
+        # so nothing dangerous stops being caught.
+        if low is not None and high is not None and low > high:
+            low = high = None
 
         is_abnormal: bool | None = None
         direction: str | None = None

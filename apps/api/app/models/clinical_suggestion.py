@@ -19,6 +19,9 @@ from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
 
 _OUTPUT_TYPES = ("differential", "cant_miss", "investigation", "management", "safety", "summary")
 _TIERS = ("informational", "suggestive", "flag_for_review")
+# Must stay in step with ``app.agents.state.ProbabilityBand`` and the ``ProbabilityBand`` union
+# in packages/shared-types — pinned by tests/test_shared_enums.py.
+_BANDS = ("high", "moderate", "low", "very_low", "insufficient_data")
 _DECISIONS = ("acknowledged", "accepted", "dismissed", "overridden")
 
 
@@ -34,6 +37,20 @@ class ClinicalSuggestion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         CheckConstraint(
             f"autonomy_tier IN ({', '.join(repr(t) for t in _TIERS)})",
             name="ck_clinical_suggestions_tier",
+        ),
+        # The third of the three closed-vocabulary columns on this table, and the one that was
+        # left unconstrained. It is also the only one written from a value the *model* supplied:
+        # ``output_type`` and ``autonomy_tier`` are chosen by our own code, while
+        # ``confidence_band`` is ``Hypothesis.probability_band``, normalised by
+        # ``agents.util.norm_band`` from whatever the specialist answered. The normaliser is the
+        # guard today; this makes it an invariant of the immutable record rather than a promise
+        # one function keeps, on the table nothing can UPDATE afterwards to correct.
+        #
+        # NULL is allowed and meaningful — investigations, management options and hard blocks
+        # carry no band (see ``agents.synthesis.build_suggestions``).
+        CheckConstraint(
+            f"confidence_band IS NULL OR confidence_band IN ({', '.join(repr(b) for b in _BANDS)})",
+            name="ck_clinical_suggestions_confidence_band",
         ),
         # Serves the session_id lookup for the per-session suggestion read. Like the other
         # unbounded list reads (documents, labs, medications) that read has no LIMIT, so the
