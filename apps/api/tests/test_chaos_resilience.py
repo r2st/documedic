@@ -395,14 +395,18 @@ async def _client_for(app) -> AsyncClient:
 
 
 async def test_the_readiness_probe_fails_when_the_database_is_gone(app, sessionmaker):
-    """A pod that cannot reach the chart must be taken out of rotation, not reported ready."""
+    """A pod that cannot reach the chart must be taken out of rotation, not reported ready.
+
+    503 rather than 500: a load balancer reads those differently, and "not ready yet" is what
+    this is — nothing is wrong with the request. See ``NotReadyError``.
+    """
     break_the_database(app, sessionmaker, fail_on={"execute"})
 
     async with await _client_for(app) as client:
         resp = await client.get("/health/ready")
 
-    assert resp.status_code == 500
-    assert resp.json()["code"] == "internal_error"
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "not_ready"
 
 
 async def test_the_liveness_probe_still_answers_without_a_database(app, sessionmaker):
@@ -457,13 +461,22 @@ async def test_the_driver_error_text_never_reaches_the_client(app, sessionmaker,
 async def test_the_failure_is_logged_against_the_request_id_the_client_was_given(
     app, sessionmaker, failing_client, caplog
 ):
-    """The reference in the clinician's message is only useful if it is in the log too."""
+    """The reference in the clinician's message is only useful if it is in the log too.
+
+    Read off the record rather than out of the formatted message. The id is no longer spelled
+    into each call's own format string — ``app.core.logging_config.RequestIdFilter``, installed
+    on the root handler by ``create_app``, puts it on every record that passes through. That is
+    what made correlation reach the sixty-odd log calls in the services and the agents that
+    nobody was ever going to annotate by hand, and it is the mechanism worth asserting on.
+    """
     break_the_database(app, sessionmaker, fail_on={"execute"})
 
     with caplog.at_level(logging.ERROR, logger="app.main"):
         resp = await failing_client.get("/api/v1/patients")
 
-    assert resp.headers["X-Request-Id"] in caplog.text
+    assert resp.headers["X-Request-Id"] in {
+        getattr(record, "request_id", None) for record in caplog.records
+    }
     # The traceback belongs in the log, which is exactly why it must not be in the response.
     assert "OperationalError" in caplog.text
 

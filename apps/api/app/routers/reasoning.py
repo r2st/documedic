@@ -271,14 +271,29 @@ async def mint_stream_token(
     The minted token inherits the sign-in behind the bearer token that asked for it, so
     signing that device out closes its open streams too rather than leaving them running to
     the end of the stream token's own TTL.
+
+    Audited as `reasoning_stream_token_minted` against the session's patient. This is the one
+    route that hands out a credential for a chart rather than reading one, and it was the only
+    mutating route in the API writing no audit entry at all — so a stream opened with a minted
+    token appeared in the trail from the run onwards, with nothing saying who had asked for the
+    key or when. The token itself is never recorded, only that one was issued.
     """
-    await ReasoningService(db).get_session(account.id, session_id)
-    return StreamTokenOut(
-        token=create_stream_token(
-            account.id, session_id, auth_session_id=request.state.auth_session_id
-        ),
-        expires_in=settings.stream_token_ttl_seconds,
+    session = await ReasoningService(db).get_session(account.id, session_id)
+    token = create_stream_token(
+        account.id, session_id, auth_session_id=request.state.auth_session_id
     )
+    await AuditService(db).record(
+        action="reasoning_stream_token_minted",
+        account_id=account.id,
+        # Against the patient, not the session alone: the trail is read per chart, and an entry
+        # naming only a session id is invisible from the view a clinician or auditor opens.
+        patient_id=session.patient_id,
+        entity_type="reasoning_session",
+        entity_id=session_id,
+        payload={"expires_in_seconds": settings.stream_token_ttl_seconds},
+    )
+    await db.commit()
+    return StreamTokenOut(token=token, expires_in=settings.stream_token_ttl_seconds)
 
 
 @router.get(

@@ -96,22 +96,27 @@ async def test_a_request_with_no_id_still_gets_one(client):
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_id_does_not_reach_the_error_body(client, monkeypatch):
+async def test_a_rejected_id_does_not_reach_the_error_body(app, client):
     """``internal_error_response`` puts the id in prose a clinician reads back out loud.
 
     That prose is also what a frontend error reporter ships onward, so it is the second place
     an unfiltered value travels to — and unlike the header, it is rendered rather than parsed.
     """
-    from app.routers import health
+    from fastapi import APIRouter
 
-    def boom(*_args, **_kwargs):
+    router = APIRouter()
+
+    @router.get("/_reflect/boom")
+    async def boom() -> dict:
         raise RuntimeError("upstream fell over")
 
-    # Patched at a call site rather than at the route function: FastAPI captured the handler
-    # when the router was built, so replacing the module attribute would not be reached.
-    monkeypatch.setattr(health, "text", boom)
+    # An ad-hoc route rather than a broken dependency on a real one: what is under test is the
+    # *unhandled* 500 body, and every real route that can fail this way now answers a typed
+    # domain error instead — ``/health/ready`` returns 503 ``not_ready``, which carries no
+    # ``request_id`` field because it is not the response this body belongs to.
+    app.include_router(router)
 
-    resp = await client.get("/health/ready", headers={"X-Request-Id": "<script>alert(1)</script>"})
+    resp = await client.get("/_reflect/boom", headers={"X-Request-Id": "<script>alert(1)</script>"})
 
     assert resp.status_code == 500
     body = resp.json()

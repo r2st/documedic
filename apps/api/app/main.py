@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.agents.llm import close_provider_clients
 from app.agents.util import shutdown_llm_executor
 from app.config import assert_production_config, settings
+from app.core.logging_config import configure_logging
 from app.db.session import dispose_engine, get_sessionmaker
 from app.exceptions import AetherError
 from app.middleware import (
@@ -158,6 +159,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    # First, before anything here can want to log. Nothing else in this process configures
+    # logging: uvicorn sets up its own three loggers and leaves the root one at WARNING with no
+    # handler, so without this every `logger.info` under `app.*` is discarded and everything
+    # louder falls through to `logging.lastResort` — a bare message with no timestamp, no level
+    # and no correlation id. See app.core.logging_config.
+    configure_logging()
     app = FastAPI(
         title="Aether Clinician API",
         version="0.4.0",
@@ -202,7 +209,7 @@ def create_app() -> FastAPI:
     )
 
     @app.exception_handler(AetherError)
-    async def aether_error_handler(request: Request, exc: AetherError) -> JSONResponse:
+    async def aether_error_handler(_request: Request, exc: AetherError) -> JSONResponse:
         """Serialize a domain error, keeping its internal cause in the log only.
 
         ``exc.detail`` exists so the clinician-facing ``message`` can stay actionable ("sign in
@@ -212,13 +219,11 @@ def create_app() -> FastAPI:
         attacker would like echoed back.
         """
         if exc.detail:
-            logger.info(
-                "%s (%s): %s [request_id=%s]",
-                type(exc).__name__,
-                exc.code,
-                exc.detail,
-                getattr(request.state, "request_id", None),
-            )
+            # INFO, which until app.core.logging_config existed meant "not emitted at all" —
+            # the root logger sat at WARNING with no handler, so the entire reason ``detail``
+            # is separated from ``message`` produced no output in the deployed process.
+            # The request id is no longer interpolated here: every record carries it now.
+            logger.info("%s (%s): %s", type(exc).__name__, exc.code, exc.detail)
         return JSONResponse(
             status_code=exc.status_code,
             content={"code": exc.code, "message": exc.message},
@@ -228,7 +233,7 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def router_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    async def router_error_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
         """Render Starlette's own HTTP errors in the same ``{code, message}`` shape.
 
         Without this, the two errors the router raises before reaching any handler — 404 for an
@@ -241,13 +246,7 @@ def create_app() -> FastAPI:
         405 without ``Allow`` is not a 405.
         """
         code, message = _ROUTER_ERROR_COPY.get(exc.status_code, _ROUTER_ERROR_FALLBACK)
-        logger.info(
-            "HTTP %s (%s): %s [request_id=%s]",
-            exc.status_code,
-            code,
-            exc.detail,
-            getattr(request.state, "request_id", None),
-        )
+        logger.info("HTTP %s (%s): %s", exc.status_code, code, exc.detail)
         return JSONResponse(
             status_code=exc.status_code,
             content={"code": code, "message": message},
@@ -306,7 +305,7 @@ def create_app() -> FastAPI:
         assigns it before doing anything that can fail.
         """
         request_id = getattr(request.state, "request_id", None)
-        logger.exception("Unhandled exception (request_id=%s)", request_id)
+        logger.exception("Unhandled exception")
         response = internal_error_response(request_id)
         if request_id:
             response.headers["X-Request-Id"] = request_id

@@ -73,7 +73,12 @@ async def test_domain_error_detail_reaches_the_log_with_the_request_id(client, c
     assert resp.status_code == 401
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "jwt rejected" in logged
-    assert resp.headers["X-Request-Id"] in logged
+    # The id is on the record, not spelled into this call's format string: it is stamped onto
+    # every record by ``logging_config.RequestIdFilter``, which is what put correlation on the
+    # log lines nobody was going to annotate by hand. See app.core.request_context.
+    assert resp.headers["X-Request-Id"] in {
+        getattr(record, "request_id", None) for record in caplog.records
+    }
     # ...and none of it reached the clinician.
     assert "jwt" not in resp.json()["message"].lower()
 

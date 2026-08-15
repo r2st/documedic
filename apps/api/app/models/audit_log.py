@@ -95,6 +95,14 @@ AUDIT_ACTIONS = (
     "drug_safety_flags_viewed",
     "clinical_suggestions_viewed",
     "patient_pathways_viewed",
+    # Not a disclosure itself — the issue of a *credential* that authorises one. The stream
+    # token is minted against one patient's reasoning session and then travels in a query
+    # string, where proxy access logs and browser history record it verbatim; that is why it
+    # is short-lived and session-bound. Every read of that session's output is recorded, so the
+    # act of handing out the key to it should be too: without this entry, a token minted and
+    # used from somewhere else leaves a trail that begins mid-stream with no record of who
+    # asked for it.
+    "reasoning_stream_token_minted",
 )
 
 

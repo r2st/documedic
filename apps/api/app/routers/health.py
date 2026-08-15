@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
@@ -19,8 +20,10 @@ from app.agents.llm import (
 from app.agents.util import llm_executor
 from app.config import settings
 from app.core.client_address import proxy_configuration_report
+from app.core.logsafe import describe_exception
 from app.db.session import get_db
 from app.dependencies import get_current_account
+from app.exceptions import NotReadyError
 from app.openapi import errors
 
 router = APIRouter(tags=["health"])
@@ -61,14 +64,42 @@ async def live() -> dict:
     return {"status": "alive"}
 
 
-@router.get("/health/ready", summary="Readiness probe", responses=errors(500))
+@router.get("/health/ready", summary="Readiness probe", responses=errors(503))
 async def ready(db: AsyncSession = Depends(get_db)) -> dict:
-    """Ready to serve traffic: the database answers a trivial query.
+    """Ready to serve traffic: the database answers a trivial query, within a bounded wait.
 
-    Fails loudly (500) rather than reporting a degraded state, because a request that cannot
-    reach the patient graph has nothing useful to fall back on.
+    Fails loudly rather than reporting a degraded state, because a request that cannot reach
+    the patient graph has nothing useful to fall back on.
+
+    **The timeout is the point of this probe, not a detail of it.** ``await db.execute`` waits
+    as long as the connection does, and the failure a readiness probe exists to catch is not a
+    database that refuses — that one answers immediately — but one that accepted the connection
+    and stopped responding. Unbounded, the probe simply never answered: the orchestrator saw a
+    hanging request rather than an unready instance, held it in rotation until its own probe
+    deadline, and each poll meanwhile sat on a pooled connection for the duration. Bounded, the
+    same outage answers 503 in ``settings.readiness_timeout_seconds`` and the instance leaves
+    rotation. See ``NotReadyError`` for why 503 rather than 500.
+
+    **The LLM is deliberately not checked here**, and that is a clinical-safety decision rather
+    than an omission. Every deterministic drug-safety, allergy and lab check in this system runs
+    without a provider (CLAUDE.md rule 8), so an instance with no reachable LLM is still an
+    instance a clinician needs — it degrades reasoning and nothing else. Wiring provider
+    reachability into readiness would take the whole deployment out of rotation during a
+    third-party outage and turn "AI reasoning paused" into "no access to the record at all".
+    Provider state is reported on ``/health/dependencies``, which reports rather than gates.
     """
-    await db.execute(text("SELECT 1"))
+    try:
+        async with asyncio.timeout(settings.readiness_timeout_seconds):
+            await db.execute(text("SELECT 1"))
+    except TimeoutError as exc:
+        raise NotReadyError(
+            detail=f"database did not answer within {settings.readiness_timeout_seconds}s"
+        ) from exc
+    except Exception as exc:
+        # describe_exception rather than str: a driver error quotes the connection string, and
+        # this route answers before any authentication. What survives is the exception class,
+        # which is what an operator triages on, and it goes to the log — not the body.
+        raise NotReadyError(detail=f"database check failed: {describe_exception(exc)}") from exc
     return {"status": "ready"}
 
 
@@ -123,8 +154,14 @@ async def dependencies(db: AsyncSession = Depends(get_db)) -> dict:
     # sign in. Each run holds its thread for up to `llm_health_probe_timeout_seconds` per
     # configured provider, sequentially. Contained here, that queues status probes behind each
     # other, which is the correct thing for it to cost.
+    #
+    # The context is copied across by hand because ``run_in_executor`` — unlike
+    # ``asyncio.to_thread`` and ``asyncio.create_task`` — does not carry it, so without this
+    # every line the probe logs about an unreachable provider is filed under no request at all.
+    # Same reason and same idiom as ``agents.util.call_llm``.
+    context = contextvars.copy_context()
     providers = await asyncio.get_running_loop().run_in_executor(
-        llm_executor(), probe_all_providers
+        llm_executor(), lambda: context.run(probe_all_providers)
     )
     reachable = [name for name, state in providers.items() if state["reachable"]]
     return {

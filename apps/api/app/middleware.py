@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import settings
+from app.core.request_context import bind_request_id, reset_request_id
 from app.exceptions import RequestTooLargeError
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request_id = resolve_request_id(request.headers.get("X-Request-Id"))
         request.state.request_id = request_id
+        # Also into the context, which is what carries it anywhere a ``Request`` object does
+        # not reach: the services, the agent nodes, the extraction pipeline, the SSE worker
+        # task, and the threads ``asyncio.to_thread`` and ``call_llm`` hand work to. Without
+        # this the id existed only on ``request.state``, so the only log lines carrying it were
+        # the three in ``app.main`` that interpolate it by hand — never the line describing the
+        # failure itself. See app.core.request_context.
+        token = bind_request_id(request_id)
         start = time.perf_counter()
         try:
             response = await call_next(request)
@@ -134,8 +142,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             # matters). `except Exception` also leaves CancelledError alone, so a clinician
             # navigating away mid-request stays a cancellation rather than becoming a logged
             # server error.
-            logger.exception("Unhandled exception (request_id=%s)", request_id)
+            logger.exception("Unhandled exception")
             response = internal_error_response(request_id)
+        finally:
+            # Unbound before this coroutine returns, so the id cannot outlive its request in a
+            # context that gets reused. Safe for the streaming routes: ``BaseHTTPMiddleware``
+            # runs the application in a *child* task, which took its own copy of the context
+            # at the moment it was started — after the bind above — so the SSE generator keeps
+            # the id for as long as it is producing events, whatever happens here.
+            reset_request_id(token)
         elapsed_ms = (time.perf_counter() - start) * 1000
         response.headers["X-Request-Id"] = request_id
         response.headers["X-Response-Time-ms"] = f"{elapsed_ms:.1f}"

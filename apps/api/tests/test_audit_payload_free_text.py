@@ -595,6 +595,10 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
         "cant_miss_flag",
     },
     "clinical_suggestions_viewed": {"subset", "suggestion_count"},
+    # A number of seconds, taken from configuration. The token itself is deliberately absent:
+    # it is a live credential for one patient's reasoning stream, and this table is
+    # unencrypted, immutable and never pruned.
+    "reasoning_stream_token_minted": {"expires_in_seconds"},
     "clinician_decision_recorded": {"decision", "decision_record_id", "reason_recorded"},
     # --- Phase 4 instrumentation.
     "validation_run_executed": {"vignettes", "metrics"},

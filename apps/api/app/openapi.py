@@ -69,6 +69,13 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "back before this is returned, so nothing was half-written and a retry is safe. Carries "
         "`request_id` for correlation with the server log."
     ),
+    503: (
+        "This instance is not currently able to serve requests (`code: not_ready`) — a backing "
+        "service it cannot work without did not answer in time. Distinct from 500: nothing is "
+        "broken about the request, so retrying it against a healthy instance succeeds. The "
+        "cause is logged against the request id and deliberately kept out of the body, which "
+        "is answered before any authentication."
+    ),
 }
 
 # 422 has two shapes on this API and only one of them is ours -- see the module docstring.

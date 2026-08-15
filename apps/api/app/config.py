@@ -21,6 +21,24 @@ class Settings(BaseSettings):
     app_debug: bool = True
     demo_mode: bool = True
 
+    # --- Logging ---
+    # Applied to the root logger by app.core.logging_config, which is the only thing in this
+    # process that configures logging at all. Left at WARNING — the Python default this
+    # replaces — the whole INFO diagnostic channel is discarded, including the one place
+    # AetherError.detail is ever written. INFO is the floor for a system that has to be able to
+    # explain a refusal after the fact.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # `text` is a human reading journalctl; `json` is one object per line for an aggregator that
+    # needs to index request_id. Both carry the same fields.
+    log_format: Literal["text", "json"] = "text"
+
+    # How long GET /health/ready waits for the database before answering "not ready". A probe
+    # is a question about the present, so it has to answer in bounded time: an unbounded await
+    # on a database that accepted the connection and then stopped responding leaves the probe
+    # hanging on a pooled connection for as long as the orchestrator will wait, which is the
+    # one state a readiness probe exists to make visible.
+    readiness_timeout_seconds: float = 5.0
+
     # --- Database ---
     database_url: str = "postgresql+asyncpg://aether:aether@localhost:5432/aether_clinician"
     database_pool_size: int = 20

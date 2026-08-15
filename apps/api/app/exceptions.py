@@ -381,6 +381,25 @@ class RequestTooLargeError(AetherError):
     code = "request_too_large"
 
 
+class NotReadyError(AetherError):
+    """This server is not currently able to serve requests. Try again in a moment.
+
+    The readiness probe's answer when a backing service it cannot work without does not
+    respond in time. 503 rather than the generic 500 the unhandled path would otherwise
+    produce, because the two mean opposite things to whatever is reading the probe: a 500 is
+    "this instance is broken", a 503 is "this instance is not ready *yet*", and a load balancer
+    holds the instance out of rotation on the second without treating it as a failed deploy.
+
+    The cause goes in ``detail``, never in the message. A readiness probe is answered before
+    any authentication runs, so its body is public — which driver raised what against which
+    host is exactly the deployment shape ``/health/dependencies`` was made authenticated to
+    stop publishing.
+    """
+
+    status_code = 503
+    code = "not_ready"
+
+
 class CorrectionNotApplicableError(ValidationError):
     """A correction could not be applied to the extracted item it names, so nothing was
     approved. Reload the extraction and make the change again.
