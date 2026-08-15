@@ -49,14 +49,41 @@ class PatientService:
         await self.db.refresh(patient)
         return patient
 
-    async def get(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
-        result = await self.db.execute(
-            select(Patient).where(
-                Patient.id == patient_id,
-                Patient.account_id == account_id,
-                Patient.is_deleted.is_(False),
-            )
+    async def get(
+        self, account_id: uuid.UUID, patient_id: uuid.UUID, *, for_update: bool = False
+    ) -> Patient:
+        """The patient, if this account owns it and the chart is still in use.
+
+        ``for_update`` takes a row lock on the chart, and it means "serialise everything that
+        merges into this record". Only :meth:`DocumentService.approve` asks for it. The merge
+        decides what to insert by reading what the chart already holds, and the lock on the
+        *document* row that ``approve`` already takes only serialises two approvals of the **same**
+        document. Two different documents merging into one chart at the same time do not contend
+        at all, and they are not independent work: a prescription that starts a drug and a
+        prescription that stops it are the ordinary pair, and ``GraphService._retire_current``
+        can only retire rows that are already committed. So the stop read a chart without the
+        start on it, retired nothing, and the drug stayed ``is_current`` on a patient who had been
+        taken off it — with a ``stop`` event on the same chart saying otherwise, which is exactly
+        the disagreement between the FHIR export and the safety engine that
+        ``is_current = event_type != "stop"`` was written to end.
+
+        Serialising two approvals on one chart costs nothing real: they are human-paced and
+        seconds apart at worst, and both still land — the loser waits and then reads the winner's
+        rows, which is the sequential path the deduplication is already written for. Ordinary
+        reads are untouched; PostgreSQL does not block a plain ``SELECT`` behind ``FOR UPDATE``.
+
+        PostgreSQL only, in the same sense as ``DocumentService.get`` and ``AuditService._lock``:
+        SQLAlchemy's SQLite dialect drops ``FOR UPDATE`` silently, so on a SQLite deployment two
+        genuinely simultaneous approvals can still interleave.
+        """
+        statement = select(Patient).where(
+            Patient.id == patient_id,
+            Patient.account_id == account_id,
+            Patient.is_deleted.is_(False),
         )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self.db.execute(statement)
         patient = result.scalar_one_or_none()
         if patient is None:
             raise PatientNotFoundError()
@@ -95,7 +122,9 @@ class PatientService:
             raise PatientNotFoundError()
         return patient
 
-    async def get_for_processing(self, account_id: uuid.UUID, patient_id: uuid.UUID) -> Patient:
+    async def get_for_processing(
+        self, account_id: uuid.UUID, patient_id: uuid.UUID, *, for_update: bool = False
+    ) -> Patient:
         """Fetch a patient for an operation that *processes new personal data*.
 
         :meth:`get` plus the lawful-basis check. Consent was required to create the chart and
@@ -110,8 +139,11 @@ class PatientService:
         keeps calling :meth:`get`: withdrawal is not erasure, and see
         :class:`~app.exceptions.ConsentWithdrawnError` for why the safety checks in particular
         must not be behind this gate.
+
+        ``for_update`` passes straight through to :meth:`get`, which documents what the lock is
+        for. Only extraction approval asks for it.
         """
-        patient = await self.get(account_id, patient_id)
+        patient = await self.get(account_id, patient_id, for_update=for_update)
         if not patient.consent_given:
             raise ConsentWithdrawnError(detail=f"patient {patient_id} has consent_given=False")
         return patient

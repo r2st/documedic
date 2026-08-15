@@ -580,10 +580,13 @@ async def test_two_clinicians_approving_different_documents_at_once_both_land(
     concurrent_app,  # noqa: F811 — pytest fixture
     clinicians,  # noqa: F811 — pytest fixture
 ):
-    """The lock is per document, so it must not serialise unrelated work into losing a merge.
+    """Serialising two approvals of one chart must not cost either of them its merge.
 
-    A lock taken on the wrong row — the patient, say — would make these two approvals contend,
-    and the failure mode of that is silent: one merge's rows simply never appear.
+    ``approve`` locks the chart as well as the document, so these two *do* contend — deliberately,
+    because a merge reads the chart to decide what to insert and two documents merging into one
+    record at once read each other's work as absent (see ``PatientService.get``). What contending
+    must not mean is a lost merge: the loser waits, then reads the winner's rows and merges its
+    own on top. Both documents' labs have to be on the chart at the end, exactly once each.
     """
     one, two = clinicians
     patient = await create_patient(one)

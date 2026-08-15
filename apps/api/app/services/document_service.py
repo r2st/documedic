@@ -105,7 +105,7 @@ class DocumentService:
         return await PatientService(self.db).get(account_id, patient_id)
 
     async def _get_patient_for_processing(
-        self, account_id: uuid.UUID, patient_id: uuid.UUID
+        self, account_id: uuid.UUID, patient_id: uuid.UUID, *, for_update: bool = False
     ) -> Patient:
         """:meth:`_get_patient` plus the DPDP lawful-basis check.
 
@@ -113,10 +113,15 @@ class DocumentService:
         and downloading what is already there stay on :meth:`_get_patient` — see
         :class:`~app.exceptions.ConsentWithdrawnError` on why withdrawal stops new processing
         rather than closing the chart.
+
+        ``for_update`` locks the chart for the duration of the merge; only ``approve`` asks for
+        it. See :meth:`PatientService.get`.
         """
         from app.services.patient_service import PatientService
 
-        return await PatientService(self.db).get_for_processing(account_id, patient_id)
+        return await PatientService(self.db).get_for_processing(
+            account_id, patient_id, for_update=for_update
+        )
 
     async def upload(
         self,
@@ -432,7 +437,14 @@ class DocumentService:
         document = await self.get(account_id, patient_id, doc_id, for_update=True)
         # Approval is what merges the extracted entities into the chart, so it is new
         # processing even though the file arrived earlier.
-        patient = await self._get_patient_for_processing(account_id, patient_id)
+        #
+        # Locked too, and on the *chart* rather than the document. The document lock above only
+        # serialises two approvals of the same document; two different prescriptions merging into
+        # one record at the same moment never contended, and they are not independent — see
+        # `PatientService.get` for the discontinuation this lost. The order (document, then
+        # patient) is fixed here and this is the only caller of either lock, so there is no cycle
+        # for two approvals to deadlock on.
+        patient = await self._get_patient_for_processing(account_id, patient_id, for_update=True)
         meta = dict(document.extraction_metadata or {})
         raw_entities = meta.get("entities", [])
 
