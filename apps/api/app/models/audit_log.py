@@ -106,6 +106,15 @@ AUDIT_ACTIONS = (
     "encounter_list_viewed",
     # The widest disclosure this API performs: the whole chart, in one file, leaving the system.
     "patient_record_exported",
+    # A handover summary of a chart. A disclosure in the sense this list means — it returns the
+    # active problems, current medications, recent labs and recent visits — and the only one
+    # that also puts that content through a third-party provider, which is a fact about the
+    # read a DPDP reviewer needs on the trail rather than inferable from the route name.
+    "clinical_summary_generated",
+    # A patient's whole prescribing history, assembled per drug: every start, stop and dose
+    # change, with the visit each was recorded at. Narrower than the record export and wider
+    # than the paged chart read.
+    "prescription_timeline_viewed",
     "document_downloaded",
     "document_list_viewed",
     "extraction_viewed",

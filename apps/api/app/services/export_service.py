@@ -49,6 +49,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.exceptions import ValidationError
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.derived_marker import DerivedMarker
@@ -58,6 +59,30 @@ from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
 
 FHIR_VERSION = "4.0.1"
+
+# The resource types a caller may ask for one at a time (``GET ../export/{resource_type}``).
+#
+# ``MedicationRequest`` is here and is deliberately *not* in the whole-record bundle: it is a
+# second reading of the same medication rows — the prescribing act rather than the therapy — and
+# a bundle carrying both would state every medication twice with no way for an importer to tell
+# they are one. See ``PatientExportService._medication_request``.
+#
+# ``Observation`` covers both laboratory results and computed markers, which is what R4 says
+# they are; there is no separate type for a derived value.
+SUPPORTED_RESOURCE_TYPES: tuple[str, ...] = (
+    "Patient",
+    "Encounter",
+    "AllergyIntolerance",
+    "Condition",
+    "MedicationStatement",
+    "MedicationRequest",
+    "Observation",
+)
+
+# Case-insensitive lookup. FHIR type names are case-sensitive and a caller writing
+# ``medicationrequest`` has unambiguously asked for one thing, so the URL is forgiving while the
+# resources it emits are not.
+_RESOURCE_TYPES: dict[str, str] = {name.lower(): name for name in SUPPORTED_RESOURCE_TYPES}
 
 # Where our own provenance flags are hung on an exported resource. A receiving system that does
 # not know this URL ignores the extension, which is what FHIR extensions are for; one that does
@@ -300,6 +325,106 @@ class PatientExportService:
             },
             "type": "collection",
             "timestamp": _iso(datetime.now(UTC)),
+            "entry": entries,
+        }
+
+    async def build_resource_bundle(self, patient: Patient, resource_type: str) -> dict[str, Any]:
+        """One resource type from this chart, as a FHIR ``searchset`` Bundle.
+
+        Why a per-type read exists beside the whole-record one
+        -----------------------------------------------------
+        The collection bundle is the referral artefact: everything, in one file, meant to be
+        saved and handed on. It is also all-or-nothing, and interoperability is mostly not
+        all-or-nothing. A receiving system syncing observations nightly, a registry that holds
+        conditions and nothing else, an ordering module importing prescriptions — each of them
+        had to pull the entire chart and discard nine tenths of it, on the one route in this API
+        that is deliberately unpaged and rate-limited precisely because it is expensive.
+
+        ``searchset`` rather than ``collection`` is the honest type for it: this is the result of
+        asking for resources of one kind about one patient, not a curated set gathered for
+        transfer. ``total`` is the number of entries returned.
+
+        **References are pruned to what is in the file.** The collection bundle can point a
+        Condition at the Encounter it was recorded at because both are present; here they are
+        not, so ``_visit`` is passed an empty set of visits and the reference is simply absent —
+        the same rule the truncation path already follows, for the same reason. A dangling
+        reference is worse than an absent one. The exception is ``Encounter`` itself, which
+        references nothing downward.
+
+        Unknown types raise ``ValidationError`` rather than returning an empty bundle: an empty
+        searchset says "this patient has no such resources", and answering a typo with it is the
+        fail-silent shape this codebase keeps removing.
+        """
+        canonical = _RESOURCE_TYPES.get(resource_type.strip().lower())
+        if canonical is None:
+            raise ValidationError(
+                f"“{resource_type}” is not a resource type this record exports. Supported "
+                f"types: {', '.join(SUPPORTED_RESOURCE_TYPES)}.",
+                detail=f"unsupported FHIR resource type {resource_type!r}",
+            )
+
+        sections = await self.load(patient)
+        patient_ref = f"urn:uuid:{patient.id}"
+        # Deliberately empty: nothing outside this single-type bundle can be referenced from
+        # inside it. See the docstring.
+        no_visits: set[uuid.UUID] = set()
+
+        entries: list[dict[str, Any]]
+        truncated: str | None = None
+        if canonical == "Patient":
+            entries = [self._patient(patient)]
+        elif canonical == "Encounter":
+            entries = [self._encounter(row, patient_ref) for row in sections.encounters]
+            truncated = "Encounter" if "Encounter" in sections.incomplete else None
+        elif canonical == "AllergyIntolerance":
+            entries = [self._allergy(row, patient_ref, no_visits) for row in sections.allergies]
+            truncated = (
+                "AllergyIntolerance" if "AllergyIntolerance" in sections.incomplete else None
+            )
+        elif canonical == "Condition":
+            entries = [self._condition(row, patient_ref, no_visits) for row in sections.conditions]
+            truncated = "Condition" if "Condition" in sections.incomplete else None
+        elif canonical == "MedicationStatement":
+            entries = [
+                self._medication(row, patient_ref, no_visits) for row in sections.medications
+            ]
+            truncated = (
+                "MedicationStatement" if "MedicationStatement" in sections.incomplete else None
+            )
+        elif canonical == "MedicationRequest":
+            entries = [
+                self._medication_request(row, patient_ref, no_visits)
+                for row in sections.medications
+            ]
+            truncated = (
+                "MedicationRequest" if "MedicationStatement" in sections.incomplete else None
+            )
+        else:  # Observation — labs and computed markers are both Observations in R4.
+            entries = [self._lab(row, patient_ref, no_visits) for row in sections.labs]
+            entries += [self._marker(row, patient_ref, set()) for row in sections.markers]
+            hit = [
+                label
+                for label in ("Observation (laboratory)", "Observation (derived)")
+                if label in sections.incomplete
+            ]
+            truncated = ", ".join(hit) if hit else None
+
+        # ``total`` is counted before the notice is appended: an OperationOutcome is a statement
+        # about the bundle, not one of the resources that were asked for, and counting it would
+        # make a truncated section report one more row than it returned.
+        total = len(entries)
+        if truncated:
+            entries.append(self._truncation_notice([truncated]))
+        return {
+            "resourceType": "Bundle",
+            "id": str(uuid.uuid4()),
+            "meta": {
+                "lastUpdated": _iso(datetime.now(UTC)),
+                "profile": [f"http://hl7.org/fhir/StructureDefinition/Bundle|{FHIR_VERSION}"],
+            },
+            "type": "searchset",
+            "timestamp": _iso(datetime.now(UTC)),
+            "total": total,
             "entry": entries,
         }
 
@@ -757,6 +882,90 @@ class PatientExportService:
                 {"reference": f"urn:uuid:{row.source_lab_result_id}"}
             ]
         return resource
+
+    def _medication_request(
+        self, row: MedicationEvent, patient_ref: str, visits: set[uuid.UUID]
+    ) -> dict[str, Any]:
+        """The same medication row as the *prescribing act* rather than as the therapy.
+
+        Why both exist, and why only one of them is in the bundle
+        --------------------------------------------------------
+        ``MedicationStatement`` and ``MedicationRequest`` answer different questions.
+        A statement is "this patient is taking X"; a request is "X was prescribed for this
+        patient". Our rows are transcriptions of prescriptions the patient brought in, so both
+        readings are defensible — and a receiving system that wants a medication history wants
+        the first, while one importing into an ordering module wants the second.
+
+        The whole-record bundle emits ``MedicationStatement`` only, unchanged, for two reasons:
+        it is what every existing consumer of this export already parses, and a bundle carrying
+        both would state each medication twice, which an importer has no way to deduplicate and
+        would read as two prescriptions. So this representation is reachable only by asking for
+        it — ``GET ../export/MedicationRequest`` — and the two are alternative *views* of one set
+        of rows rather than two sets of facts.
+
+        ``reportedBoolean: true`` is the load-bearing element and not a formality. This system
+        did not authorise any of these prescriptions; it read them off a document. FHIR's
+        ``reported`` flag is exactly the statement "this is a secondary record of a request made
+        elsewhere", and omitting it would export a transcription as an authorisation issued by
+        us. The prescriber, where the record has a name, is carried as a display-only
+        ``requester`` for the same reason: there is no Practitioner resource behind it and
+        inventing one would assert an identity we cannot resolve.
+        """
+        # MedicationRequest's status vocabulary is not MedicationStatement's — there is no
+        # "completed" for a stopped order and no "stopped" outside this list — so the mapping is
+        # written out rather than shared. Same precedence: a stop event wins over the flag.
+        if row.event_type == "stop":
+            status = "stopped"
+        elif row.is_current:
+            status = "active"
+        else:
+            status = "completed"
+        return self._entry(
+            {
+                "resourceType": "MedicationRequest",
+                "id": str(row.id),
+                "extension": self._provenance(
+                    confirmed=row.clinician_confirmed,
+                    source_document_id=row.source_document_id,
+                ),
+                "status": status,
+                # "order" rather than "plan": what the source document recorded was an actual
+                # prescription, not an intention to write one. That it was somebody else's order
+                # is what ``reportedBoolean`` says.
+                "intent": "order",
+                "reportedBoolean": True,
+                "medicationCodeableConcept": {
+                    "text": row.generic_name or row.brand_name_raw or "unspecified medication",
+                    **(
+                        {"coding": [{"display": row.brand_name_raw}]}
+                        if row.brand_name_raw and row.generic_name
+                        else {}
+                    ),
+                },
+                "subject": {"reference": patient_ref},
+                # Called ``encounter`` here, unlike MedicationStatement's ``context``.
+                "encounter": self._visit(row.encounter_id, visits),
+                "authoredOn": _iso(row.event_date),
+                "requester": {"display": row.prescriber_name} if row.prescriber_name else None,
+                "dosageInstruction": (
+                    [
+                        _prune(
+                            {
+                                "text": " ".join(
+                                    part
+                                    for part in (row.dose, row.dose_unit, row.frequency)
+                                    if part
+                                )
+                                or None,
+                                "route": {"text": row.route} if row.route else None,
+                            }
+                        )
+                    ]
+                    if any((row.dose, row.dose_unit, row.frequency, row.route))
+                    else None
+                ),
+            }
+        )
 
     def _truncation_notice(self, sections: list[str]) -> dict[str, Any]:
         """An ``OperationOutcome`` naming the sections that hit the ceiling.

@@ -144,3 +144,50 @@ Return JSON:
 }"""
     + _SAFETY_FRAMING
 )
+
+
+# Not one of the eight. The reasoning engine's agents produce clinical *opinions* — a
+# differential, an investigation, a management option — and every one of them is gated by the
+# Verifier before a clinician sees it (Critical Safety Rule #1). This prompt asks for something
+# categorically different: a readable restatement of what is already charted, for a clinician
+# picking up a patient they have not met.
+#
+# So the prompt's whole job is to keep it that way. It is a summarising task, and a model asked
+# to summarise a chart will volunteer a diagnosis and a plan unless told not to — which would
+# route an unverified clinical opinion to the screen through a door the Verifier does not watch.
+# Three defences, none of which relies on the model complying:
+#
+#   1. the instructions below refuse diagnosis, recommendation and prognosis explicitly;
+#   2. every string that comes back is put through app.core.clinical_language, the deterministic
+#      Rule #4 control, at the service; and
+#   3. the deterministic facts the summary was built from travel beside it in the response, so
+#      the clinician reads the chart and the prose together rather than the prose alone.
+CLINICAL_SUMMARY = (
+    """You are writing a handover summary of an existing patient record for a clinician who is
+picking this patient up for the first time. You are NOT diagnosing, NOT recommending treatment,
+and NOT predicting outcomes.
+
+Summarise ONLY what the supplied record contains. Every clause must be traceable to a line in
+the record you were given. If the record is thin, say so plainly — a short honest summary is
+correct and a padded one is a fabrication.
+
+Hard exclusions for this task, on top of the rules below:
+- Do NOT propose, rank or hint at a diagnosis the record does not already carry as a charted
+  condition.
+- Do NOT suggest, start, stop or adjust any medication, test or referral.
+- Do NOT state a prognosis, a trajectory, or what is "likely" to happen.
+- Do NOT introduce any drug, condition, lab or date that is not in the supplied record.
+- Describe an abnormal value as what it is ("HbA1c 9.1%, above the stated range") without
+  interpreting what it means for management.
+
+Return JSON:
+{
+  "overview": str,            // 2-4 sentences: who this patient is, per the record
+  "active_problems": [str],   // charted conditions, each with its status/onset where recorded
+  "current_medications": [str], // what the chart lists as current, with dose and frequency
+  "recent_investigations": [str], // recent labs, with value, unit and whether flagged abnormal
+  "recent_encounters": [str], // recent visits, with date, type and presenting complaint
+  "record_gaps": [str]        // what a clinician reading this chart cannot tell from it
+}"""
+    + _SAFETY_FRAMING
+)

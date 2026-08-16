@@ -383,9 +383,13 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
     A new one fails this test, and the fix is a sweep for it rather than an entry in the list.
     """
     swept = {"patient_id", "doc_id", "encounter_id", "session_id", "suggestion_id", "run_id"}
-    # Not a resource id: the pathway routes take a condition *name*, which is a lookup into the
-    # shared guideline corpus and is not scoped to an account at all.
-    not_a_resource = {"condition_name"}
+    # Not resource ids, and neither is scoped to an account:
+    #   condition_name — the pathway routes take a condition *name*, a lookup into the shared
+    #     guideline corpus;
+    #   resource_type — the per-type export takes a FHIR type name ("Condition",
+    #     "MedicationRequest"), a fixed vocabulary shared by every deployment. The chart it reads
+    #     is chosen by the {patient_id} beside it, which the sweep above does cover.
+    not_a_resource = {"condition_name", "resource_type"}
 
     found = {
         part[1:-1]

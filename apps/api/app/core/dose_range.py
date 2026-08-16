@@ -332,6 +332,23 @@ def range_for(generic_name: str | None) -> DoseRange | None:
     return THERAPEUTIC_RANGES.get((generic_name or "").strip().lower())
 
 
+def is_weight_dosed(generic_name: str | None) -> bool:
+    """True when this drug's curated ceiling is a function of body weight.
+
+    "Weight-dependent" is not a property anyone typed in beside each drug — it is exactly the
+    set that carries ``paediatric_mg_per_kg_per_day``, because that band is the only place in
+    this table where the patient's weight is an input to the arithmetic. Deriving it rather
+    than curating a second list is what keeps the two from drifting: a drug that gains a
+    weight-based band gains the staleness check with it, and one that loses the band loses it.
+
+    Read by ``app.core.safety.check_weight_staleness``, which asks a different question from
+    ``assess_dose``: not "is this dose right" but "is the weight that judgement rests on still
+    this patient's weight".
+    """
+    dose_range = range_for(generic_name)
+    return dose_range is not None and dose_range.paediatric_mg_per_kg_per_day is not None
+
+
 # --- reading what the chart wrote -------------------------------------------------------------
 
 # ``medication_events.dose`` is free text off a prescription or an OCR pass, and it arrives as

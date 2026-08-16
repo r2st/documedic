@@ -197,6 +197,25 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "summary",
+        "description": (
+            "A readable handover summary of a chart that is already in the record. A "
+            "restatement of charted facts, never a clinical opinion: it carries no "
+            "differential, no recommendation and no prognosis, writes nothing to the chart, "
+            "and produces nothing for the Verifier to gate. The charted facts come back "
+            "beside the prose, and every model-written string passes the deterministic "
+            "prescriber-framing control first."
+        ),
+    },
+    {
+        "name": "dashboard",
+        "description": (
+            "Aggregates over the calling account's own panel: chart counts, encounter volume, "
+            "most-prescribed medications, and the safety-flag frequency distribution. No "
+            "patient is identified in any of these responses."
+        ),
+    },
+    {
         "name": "validation",
         "description": (
             "Validation harness, performance metrics, the CDSCO SaMD dossier, and clinician "

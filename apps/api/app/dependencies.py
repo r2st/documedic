@@ -170,6 +170,11 @@ _BUCKETS: dict[str, tuple[str, float]] = {
     "password_reset": ("rate_limit_password_resets_per_hour", _SECONDS_PER_HOUR),
     "validation_run": ("rate_limit_validation_runs_per_hour", _SECONDS_PER_HOUR),
     "record_export": ("rate_limit_exports_per_hour", _SECONDS_PER_HOUR),
+    # One provider call over one chart. Cheaper than a reasoning run by an order of magnitude,
+    # which is exactly why it needs its own ceiling rather than sharing one: a summary is the
+    # kind of read a dashboard or a ward-round tool would be tempted to fire per patient per
+    # page load, and the aggregate of that is a bigger bill than the panel it looks nothing like.
+    "clinical_summary": ("rate_limit_summaries_per_minute", _SECONDS_PER_MINUTE),
     # Shared by the per-patient chain walk and the dossier's full-table one, for the same
     # reason `reasoning_run` is shared by POST ../run and GET ../stream: they are the same
     # work, and a caller must not be able to double its spend by alternating them.

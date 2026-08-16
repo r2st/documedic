@@ -51,7 +51,12 @@ export type SafetyCheckType =
   // See app.core.dose_range.
   | 'dose_out_of_range'
   | 'dose_unit_mismatch'
-  | 'unevaluated_dose';
+  | 'unevaluated_dose'
+  // The weight those ceilings were computed from, judged as a measurement with an age rather
+  // than as a property of the patient. A weight taken two years ago is a weight a growing child
+  // has grown out of, and every mg/kg ceiling divided by it cleared silently.
+  // See app.core.safety.check_weight_staleness.
+  | 'stale_weight';
 
 export type ReasoningStatus =
   | 'created'

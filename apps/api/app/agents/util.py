@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.agents.context import ReasoningContext
-from app.agents.llm import LLMUnavailable
+from app.agents.llm import LLMClient, LLMUnavailable
 from app.agents.untrusted import UNTRUSTED_DATA_FRAMING
 from app.config import settings
 
@@ -134,6 +134,29 @@ async def call_llm(
             settings.reasoning_llm_budget_seconds,
         )
         return None
+    return await complete_json_off_loop(client, system, user)
+
+
+async def complete_json_off_loop(
+    client: LLMClient, system: str, user: str
+) -> dict[str, Any] | None:
+    """One provider call, on the LLM pool, framed against untrusted record data.
+
+    The mechanics :func:`call_llm` used to hold inline, extracted so that a caller outside the
+    reasoning graph can make a single grounded completion without inventing a
+    ``ReasoningContext`` it has no run to build one from. ``app.services.summary_service`` is
+    the first such caller.
+
+    Everything that makes a call safe stays here rather than at the call sites:
+    :data:`~app.agents.untrusted.UNTRUSTED_DATA_FRAMING` is appended to the system prompt at
+    this one point — the user message is assembled from record text that reached us through OCR
+    of a document someone handed over, so the boundary clause is a property of *making a call at
+    all* — and the call runs on ``llm_executor()`` rather than the loop's default pool, which is
+    what keeps a hung provider from taking bcrypt and blob I/O down with it.
+
+    Returns None rather than raising when no provider answers, which is the answer every
+    existing caller's fallback path is written against.
+    """
     framed = f"{system}\n{UNTRUSTED_DATA_FRAMING}"
     # What ``asyncio.to_thread`` does, against our own pool instead of the default one: the
     # current context is copied so contextvars set per request (the request id the logs are

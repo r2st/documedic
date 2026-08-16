@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.dependencies import get_current_account, rate_limit
 from app.models.user import Account
 from app.openapi import PATIENT_ERRORS, errors
+from app.schemas.medication_timeline import PrescriptionTimelineResponse, TimelineDrugOut
 from app.schemas.record import (
     CriticalLabFlagItem,
     CriticalLabFlagsResponse,
@@ -23,12 +24,19 @@ from app.services.audit_service import AuditService
 from app.services.export_service import PatientExportService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
+from app.services.prescription_timeline_service import PrescriptionTimelineService, serialise
 from app.services.record_pdf import build_record_pdf
 from app.services.record_service import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, RecordService
 
 router = APIRouter(prefix="/patients/{patient_id}/record", tags=["records"])
 labs_router = APIRouter(prefix="/patients/{patient_id}/labs", tags=["records"])
 export_router = APIRouter(prefix="/patients/{patient_id}/export", tags=["records"])
+medications_router = APIRouter(prefix="/patients/{patient_id}/medications", tags=["records"])
+
+# Comfortably longer than the longest supported FHIR type name. The 422 for an unsupported type
+# quotes the requested value back, so an unbounded path segment would be reflected into the
+# response at whatever size the URL carried it — the same bound `pathways` puts on its own.
+MAX_RESOURCE_TYPE_CHARS = 64
 
 
 @router.get(
@@ -206,6 +214,134 @@ async def export_record_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="aether-record-{patient_id}.pdf"'},
+    )
+
+
+@export_router.get(
+    "/{resource_type}",
+    summary="One FHIR R4 resource type from this patient's record",
+    responses=PATIENT_ERRORS | errors(429),
+    response_class=JSONResponse,
+    # The same bucket as the whole-record export, deliberately: the ceiling is on how often a
+    # chart may be pulled out of the system, and a caller who can ask for six resource types in
+    # six requests must not thereby get six times the bulk-retrieval rate.
+    dependencies=[Depends(rate_limit("record_export"))],
+)
+async def export_resource_type(
+    patient_id: uuid.UUID,
+    resource_type: str = Path(
+        ...,
+        # Comfortably longer than the longest supported type name; the 422 quotes the requested
+        # value back, so an unbounded segment would be reflected at whatever size the URL had.
+        max_length=MAX_RESOURCE_TYPE_CHARS,
+        description="A FHIR R4 resource type. Case-insensitive.",
+    ),
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """One resource type from the chart, as a FHIR R4 `searchset` Bundle
+    (`application/fhir+json`).
+
+    For a system that wants part of a record rather than all of it — a registry that holds
+    conditions, a nightly observation sync, an ordering module importing prescriptions. The
+    alternative was pulling the whole chart and discarding most of it, on the one route in this
+    API that is deliberately unpaged.
+
+    Supported: `Patient`, `Encounter`, `AllergyIntolerance`, `Condition`, `MedicationStatement`,
+    `MedicationRequest`, `Observation` (which covers both laboratory results and computed
+    markers, as R4 intends). Anything else is a 422 — an empty bundle would say this patient has
+    no such resources, which is a different and wrong answer to a typo.
+
+    **`MedicationStatement` and `MedicationRequest` are two readings of the same rows**, not two
+    sets of facts: the therapy the patient is on, and the prescribing act that was transcribed.
+    Ask for whichever your importer needs. The whole-record bundle carries the statement form
+    only, so nothing double-counts. Every `MedicationRequest` here is marked
+    `reportedBoolean: true` — this system transcribes prescriptions, it does not issue them.
+
+    **Cross-resource references are absent by design.** A `Condition` in the whole-record bundle
+    can point at the `Encounter` it was recorded at because both are in that file; here they are
+    not, and a reference to a resource the file does not contain is worse than no reference.
+
+    Audited as `patient_record_exported`, against the same ceiling as the full export.
+    """
+    patient = await PatientService(db).get(account.id, patient_id)
+    bundle = await PatientExportService(db).build_resource_bundle(patient, resource_type)
+    await AuditService(db).record(
+        action="patient_record_exported",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        payload={
+            "format": "fhir-r4",
+            # Which slice left the system, so the trail distinguishes a whole-chart disclosure
+            # from a single-type one rather than recording both as "exported".
+            "resource_type": resource_type,
+            "resources": bundle["total"],
+        },
+    )
+    await db.commit()
+    return JSONResponse(
+        content=bundle,
+        media_type="application/fhir+json",
+    )
+
+
+@medications_router.get(
+    "/timeline",
+    response_model=PrescriptionTimelineResponse,
+    summary="This patient's prescribing history, grouped by drug",
+    responses=PATIENT_ERRORS,
+)
+async def prescription_timeline(
+    patient_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> PrescriptionTimelineResponse:
+    """Every medication event on this chart, assembled per drug instead of per row.
+
+    `GET ../record` returns the medication log the way it is stored — every drug's events
+    interleaved by date — so answering "when did this start, what has the dose been, and who
+    changed it" meant reconstructing each drug's story by eye. This returns it already
+    reconstructed: one group per drug, oldest event first within the group, each entry carrying
+    the dose before it (`previous_dose_text`) when the dose changed, and the visit it was
+    recorded at where the record links one.
+
+    Groups are ordered current therapy first, then most recently touched. `started_on`,
+    `stopped_on` and `is_current` are computed across the whole group — a `stop` event ends the
+    therapy whatever an earlier row's flag says, which is the precedence the chart itself uses.
+
+    **Two drugs are only merged when the record proves they are the same drug**: by
+    `drug_vocabulary_id` where the row resolved, by normalised name where it did not, and never
+    across the two. An unresolved row is flagged `unresolved: true` — no interaction,
+    contraindication or allergy rule ever ran for it — rather than being folded into a
+    same-looking resolved group.
+
+    This describes prescribing, not taking. Nothing here is an adherence judgement: the record
+    holds what was prescribed, and the distance between that and what a patient swallowed is
+    exactly where a confident inference would be wrong.
+
+    Deterministic and offline. Audited as `prescription_timeline_viewed`.
+    """
+    await PatientService(db).get(account.id, patient_id)
+    groups = await PrescriptionTimelineService(db).timeline(patient_id)
+    await AuditService(db).record(
+        action="prescription_timeline_viewed",
+        account_id=account.id,
+        patient_id=patient_id,
+        entity_type="patient",
+        entity_id=patient_id,
+        payload={
+            "drugs": len(groups),
+            "events": sum(len(group.entries) for group in groups),
+        },
+    )
+    await db.commit()
+    return PrescriptionTimelineResponse(
+        patient_id=patient_id,
+        medications=[TimelineDrugOut.model_validate(row) for row in serialise(groups)],
+        total_drugs=len(groups),
+        total_events=sum(len(group.entries) for group in groups),
     )
 
 

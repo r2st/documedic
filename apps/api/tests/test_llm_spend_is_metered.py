@@ -94,6 +94,19 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     # chart may be pulled out of the system, and that question has the same answer whichever
     # format it leaves in.
     ("GET", "/api/v1/patients/{patient_id}/export/pdf"): LOCAL_BUT_UNBOUNDED,
+    # One resource type out of the same unpaged read, and classified the same way for the same
+    # reason: it reads every row of that section under the export ceiling, and it shares the
+    # bundle's bucket precisely so that asking for six types in six requests cannot buy six
+    # times the bulk-retrieval rate.
+    ("GET", "/api/v1/patients/{patient_id}/export/{resource_type}"): LOCAL_BUT_UNBOUNDED,
+    # The prescribing history, regrouped in memory. Three indexed queries over one chart's
+    # medication rows — bounded by the chart, like the paged record read, and a clinician must
+    # always be able to see what a patient has been on.
+    ("GET", "/api/v1/patients/{patient_id}/medications/timeline"): DETERMINISTIC,
+    # The handover summary: one provider call over one chart. Cheap next to a run, which is
+    # exactly why it carries its own bucket rather than sharing the run's — it is the kind of
+    # read a ward-round list fires once per patient per page load.
+    ("GET", "/api/v1/patients/{patient_id}/summary"): LLM,
     # Paging the trail is an indexed read of one page. Verifying it recomputes a SHA-256 per
     # entry over the patient's whole history — different work, different classification.
     ("GET", "/api/v1/patients/{patient_id}/audit"): DETERMINISTIC,
@@ -143,6 +156,14 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/validation/runs/{run_id}"): DETERMINISTIC,
     ("GET", "/api/v1/metrics/performance"): DETERMINISTIC,
     ("GET", "/api/v1/pilot/status"): DETERMINISTIC,
+    # --- dashboard. Aggregate queries over one account's own rows, bounded by the panel rather
+    # than by the request. Unmetered on purpose: a dashboard polls, and a 429 here shows a
+    # clinician an empty tile with no explanation.
+    ("GET", "/api/v1/dashboard"): DETERMINISTIC,
+    ("GET", "/api/v1/dashboard/patients"): DETERMINISTIC,
+    ("GET", "/api/v1/dashboard/encounters"): DETERMINISTIC,
+    ("GET", "/api/v1/dashboard/medications"): DETERMINISTIC,
+    ("GET", "/api/v1/dashboard/safety-flags"): DETERMINISTIC,
     # Reports the audit chain's length and validity, which means verify_full_chain — a SHA-256
     # over every row in audit_logs. The same work as the per-patient walk, one scale worse, and
     # it shares that walk's budget.

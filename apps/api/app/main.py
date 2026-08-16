@@ -29,6 +29,7 @@ from app.openapi import TAGS_METADATA
 from app.routers import (
     audit,
     auth,
+    dashboard,
     documents,
     encounters,
     guidelines,
@@ -38,6 +39,7 @@ from app.routers import (
     reasoning,
     records,
     safety,
+    summary,
     validation,
 )
 
@@ -321,15 +323,18 @@ def create_app() -> FastAPI:
         encounters,
         records,
         safety,
+        summary,
         audit,
         reasoning,
         guidelines,
         pathways,
+        dashboard,
         validation,
     ):
         app.include_router(module.router, prefix=API_PREFIX)
     app.include_router(records.labs_router, prefix=API_PREFIX)
     app.include_router(records.export_router, prefix=API_PREFIX)
+    app.include_router(records.medications_router, prefix=API_PREFIX)
 
     return app
 

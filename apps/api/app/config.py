@@ -213,6 +213,32 @@ class Settings(BaseSettings):
     # carries a narrowly scoped, very short-lived token instead of the real access token.
     stream_token_ttl_seconds: int = 60
 
+    # --- Clinical summary ---
+    # Token ceiling for the handover-summary completion. Smaller than the agent default: this is
+    # one paragraph and five short lists over a chart that is already bounded by the per-section
+    # slices in app.services.summary_service, not an eight-agent deliberation, and an unbounded
+    # ceiling here would let a chatty provider turn a per-patient read into the most expensive
+    # LLM route in the API.
+    summary_max_tokens: int = 1500
+
+    # --- Clinical measurement staleness ---
+    # How old a recorded body weight may be before the deterministic engine says so on a chart
+    # carrying weight-dosed medication. Two windows, because a growing child's weight goes out
+    # of date at a completely different rate from a stable adult's: the paediatric one applies
+    # below app.core.dose_range.PAEDIATRIC_MAX_AGE_YEARS and to a chart with no usable date of
+    # birth, since "might be a child" takes the shorter answer.
+    #
+    # Configuration rather than a constant because the right interval is a clinic's judgement —
+    # a paediatric practice weighing at every visit wants a tighter window than a chronic-disease
+    # clinic — but they reach app.core.safety as a WeightStalenessPolicy value, never read from
+    # here inside that module, which is what keeps the offline engine a pure function of its
+    # arguments (Critical Safety Rule #8).
+    #
+    # Set either to 0 or below to switch that arm off. That is a deliberate widening and it is
+    # visible in the config, which is the same shape the rate-limit buckets take.
+    weight_stale_adult_days: int = 183
+    weight_stale_paediatric_days: int = 92
+
     # --- Record export ---
     # Per-section ceiling on a FHIR export. Unlike a chart read this is meant to be the whole
     # record, so the ceiling is far above any real patient and exists only to bound the worst
@@ -343,6 +369,10 @@ class Settings(BaseSettings):
     # Guideline search: embeds the query and hits Qdrant. No generation, so the cheapest of
     # these — the ceiling is here to keep the vector store responsive.
     rate_limit_searches_per_minute: int = 60
+    # Clinical summary: one provider call over one chart, so far cheaper than a run — but it is
+    # the kind of read a ward-round list would fire once per patient per page load, and the
+    # aggregate of that is what this bounds.
+    rate_limit_summaries_per_minute: int = 20
     # Account creation, keyed by client IP over an hour. Without this the per-account ceilings
     # above are bypassable by signing up repeatedly; DEMO_MODE removes the credential gate but
     # not this one.

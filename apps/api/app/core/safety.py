@@ -54,7 +54,13 @@ from datetime import date
 from functools import lru_cache
 from typing import Literal
 
-from app.core.dose_range import AssessmentKind, DoseAssessment, assess_dose
+from app.core.dose_range import (
+    PAEDIATRIC_MAX_AGE_YEARS,
+    AssessmentKind,
+    DoseAssessment,
+    assess_dose,
+    is_weight_dosed,
+)
 from app.core.dose_text import DoseFinding
 from app.core.hepatic import HepaticSeverity, assess_hepatic_severity
 
@@ -90,6 +96,9 @@ CheckType = Literal[
     "dose_out_of_range",
     "dose_unit_mismatch",
     "unevaluated_dose",
+    # The weight the dose check divided by, judged as a measurement with an age rather than as a
+    # property of the patient. See ``check_weight_staleness``.
+    "stale_weight",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are
@@ -401,6 +410,43 @@ class ChartedDose:
 
 
 @dataclass(frozen=True)
+class WeightStalenessPolicy:
+    """How old a recorded weight may be before the doses computed from it stop being trusted.
+
+    Two numbers rather than one because a child is not a small adult on this axis either: a
+    nine-year-old's weight changes by a fifth over a year, so a weight taken last winter is a
+    different patient's weight, while a stable adult's is very often still current. The
+    paediatric window is therefore the shorter of the two, and the age it applies from is
+    ``dose_range.PAEDIATRIC_MAX_AGE_YEARS`` — the same boundary the dose ceilings switch at, so
+    one chart cannot be a child for the ceiling and an adult for the weight behind it.
+
+    Defaults are six and three months. They are configuration
+    (``settings.weight_stale_adult_days`` / ``weight_stale_paediatric_days``) because the right
+    interval is a clinic's judgement — a paediatric practice weighing every visit wants a
+    tighter window than a chronic-disease clinic — but they arrive here as a value rather than
+    being read from settings inside this module, which is what keeps ``app.core.safety`` a pure
+    function of its arguments (Critical Safety Rule #8).
+    """
+
+    adult_days: int = 183
+    paediatric_days: int = 92
+
+    def days_for(self, age_years: int | None) -> int:
+        """The window that applies to a patient of this age.
+
+        An unknown age takes the *paediatric* window, not the adult one. Age is None for a chart
+        with no usable date of birth, and the question this answers is how long a weight can be
+        trusted for a patient who might be a child — which is the shorter answer.
+
+        A non-positive answer switches the check off for that band; see
+        ``check_weight_staleness``, which is where that convention is applied.
+        """
+        if age_years is None or age_years < PAEDIATRIC_MAX_AGE_YEARS:
+            return self.paediatric_days
+        return self.adult_days
+
+
+@dataclass(frozen=True)
 class InteractionRule:
     drug_a_reference_id: str
     drug_b_reference_id: str
@@ -492,6 +538,13 @@ class SafetyContext:
     # so a missing weight is a missing check and not a missing risk. See
     # ``app.core.dose_range._paediatric``.
     weight_kg: float | None = None
+    # How many whole days ago that weight was measured, computed by the service against today
+    # for the reason ``age_years`` is. None means the chart holds a weight with no date beside
+    # it — which is not "recent", and ``check_weight_staleness`` says so rather than assuming
+    # either way.
+    weight_recorded_days_ago: int | None = None
+    # The windows ``check_weight_staleness`` measures that against.
+    weight_staleness: WeightStalenessPolicy = field(default_factory=WeightStalenessPolicy)
     # Current medications paired with the dose and frequency the chart wrote for them. A third
     # list beside ``current_meds`` and ``charted_current_meds``; see ``ChartedDose`` for why the
     # membership differs from both.
@@ -2978,6 +3031,125 @@ def check_dose_ranges(ctx: SafetyContext) -> list[SafetyFlag]:
                 )
             )
     return flags
+
+
+def _weight_dosed_drugs(ctx: SafetyContext, proposed: DrugRef | None) -> list[str]:
+    """The names of the drugs in play whose dosing is a function of body weight.
+
+    The proposed drug is included when there is one, because the question this feeds is asked
+    hardest at the moment of prescribing: a weight-dosed drug being *added* to a chart is the
+    one whose dose is about to be computed from whatever weight the record holds.
+    """
+    drugs = [*ctx.current_meds, *([proposed] if proposed is not None else [])]
+    return sorted(
+        {
+            ingredient.drug.generic_name
+            for drug in drugs
+            for ingredient in _ingredients(drug)
+            if is_weight_dosed(ingredient.drug.generic_name)
+        }
+    )
+
+
+def check_weight_staleness(
+    ctx: SafetyContext, *, proposed: DrugRef | None = None
+) -> list[SafetyFlag]:
+    """Is the weight this chart's dose arithmetic rests on still this patient's weight?
+
+    R81 stored ``patients.weight_kg`` and ``weight_recorded_at`` together, and said in the
+    model's own comment why the date was there: "a paediatric dose calculated from a weight
+    taken two years ago is calculated from a weight this child has grown out of". Nothing then
+    consumed the date. ``assess_dose`` divided by the number whatever its age, and a nine-year-
+    old weighed at four cleared every mg/kg ceiling in the table by a wide margin — a
+    fail-passive shape, and the most dangerous direction for a dose check to fail in, because
+    the flag that does not appear reads exactly like the flag that was not needed.
+
+    So this is the date's reader. It says nothing about a chart with no weight-dosed drug on it:
+    a stale weight matters because a dose was computed from it, and flagging every chart whose
+    weight is six months old regardless of what is prescribed is how a note stops being read.
+
+    **A missing weight is deliberately not this check's business.** For a child on a weight-dosed
+    drug, ``check_dose_ranges`` already reports it as ``unevaluated_dose`` — an explicit "could
+    not be checked" rather than a pass. For an adult, no ceiling in ``THERAPEUTIC_RANGES`` takes
+    weight as an input at all, so there is nothing that a missing weight silently weakened. Two
+    checks reporting one gap in two voices would be the duplication ``check_dose_ranges``'
+    chart-level placement exists to avoid.
+
+    Two severities, and the split is about what actually happened rather than about how alarming
+    it sounds. Under ``PAEDIATRIC_MAX_AGE_YEARS`` — or at an unknown age, which is read as
+    possibly a child for the same reason ``WeightStalenessPolicy.days_for`` is — the weight was
+    an *input* to a ceiling this engine applied, so a stale one means a check ran on a number
+    that is no longer true: critical. For an adult it was not an input to anything here, and the
+    finding is that a weight-dosed therapy is being managed against an old measurement:
+    a warning.
+
+    Never a hard block, for the reason the whole dose family is not one: an out-of-date weight
+    is a measurement to repeat, not a documented conflict between a real drug and a real chart,
+    and spending Rule #3's instrument on it is how the blocks that are never wrong stop being
+    read.
+    """
+    drugs = _weight_dosed_drugs(ctx, proposed)
+    if not drugs or ctx.weight_kg is None:
+        return []
+
+    window = ctx.weight_staleness.days_for(ctx.age_years)
+    if window <= 0:
+        # The arm is switched off for this age band. A window of zero days would otherwise make
+        # every weight stale the moment it was recorded, which is the opposite of what an
+        # operator setting it to nothing means — the same convention the rate-limit buckets take
+        # for a non-positive ceiling.
+        return []
+    days = ctx.weight_recorded_days_ago
+    undated = days is None
+    if not undated and (days or 0) < window:
+        return []
+
+    paediatric = ctx.age_years is None or ctx.age_years < PAEDIATRIC_MAX_AGE_YEARS
+    listed = ", ".join(f"“{name}”" for name in drugs)
+    measured = (
+        "carries no date, so how old it is cannot be established"
+        if undated
+        else f"was recorded {_stale_phrase(days or 0)}"
+    )
+    consequence = (
+        "That weight is what the paediatric dose ceilings on this screen were computed from, "
+        "so those checks were run against a number that may no longer be this patient's. "
+        "Re-weighing before acting on them is what makes them mean what they appear to mean."
+        if paediatric
+        else "No ceiling applied on this screen took the weight as an input, so nothing above "
+        "was computed from it — but the therapy is dosed by weight, so confirming the current "
+        "weight is part of judging the dose."
+    )
+    return [
+        SafetyFlag(
+            check_type="stale_weight",
+            severity="critical" if paediatric else "warning",
+            is_hard_block=False,
+            summary=(
+                f"The recorded weight of {_trim_weight(ctx.weight_kg)} kg {measured}, and this "
+                f"chart carries weight-dosed medication ({listed}). {consequence}"
+            ),
+            details={
+                "weight_kg": ctx.weight_kg,
+                "weight_recorded_days_ago": days,
+                "stale_after_days": window,
+                "age_years": ctx.age_years,
+                "weight_dosed_drugs": drugs,
+                # Whether the weight fed a ceiling that ran, or is merely clinically relevant to
+                # drugs on this chart. The two call for the same action and mean different
+                # things about what the rest of the screen is worth.
+                "applied_to_dose_check": paediatric,
+                # False, unlike ``check_stale_medications``: for a child the dose ceilings *were*
+                # computed from this number, and saying they were evaluated would overstate them.
+                "evaluated": not paediatric,
+            },
+        )
+    ]
+
+
+def _trim_weight(value: float) -> str:
+    """ "62" rather than "62.0"; "8.5" kept — a paediatric weight is dosed to the tenth."""
+    return f"{value:.1f}".rstrip("0").rstrip(".")
 
 
 def check_proposed_dose(

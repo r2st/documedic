@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.clinical import age_from_dob, serum_creatinine_mg_dl
 from app.core.dates import is_plausible_clinical_date
 from app.core.dose_text import DoseFinding, find_dose_mentions, implausible_dose_reason
@@ -31,6 +32,7 @@ from app.core.safety import (
     PatientCondition,
     SafetyContext,
     SafetyFlag,
+    WeightStalenessPolicy,
     check_dose_integrity,
     check_dose_ranges,
     check_duplicate_orders,
@@ -40,6 +42,7 @@ from app.core.safety import (
     check_unevaluated_allergies,
     check_unevaluated_conditions,
     check_unevaluated_medications,
+    check_weight_staleness,
     evaluate_drug_safety,
     has_hard_block,
     ingredient_reference_ids,
@@ -265,7 +268,7 @@ class SafetyService:
                 med_rows, vocab_by_id
             )
             allergies, unidentified_allergies = await self._allergies(allergy_rows, vocab_by_id)
-            age_years, weight_kg = await self._age_and_weight(patient_id)
+            age_years, weight_kg, weight_days = await self._age_and_weight(patient_id)
             self._facts[patient_id] = SafetyContext(
                 current_meds=current_meds,
                 unresolved_current_meds=unresolved,
@@ -278,16 +281,27 @@ class SafetyService:
                 hepatic=await self._hepatic_panel(patient_id),
                 age_years=age_years,
                 weight_kg=weight_kg,
+                weight_recorded_days_ago=weight_days,
+                # Built from settings here rather than read inside the engine: the numbers are a
+                # clinic's judgement, and app.core.safety stays a pure function of what it is
+                # handed (Critical Safety Rule #8).
+                weight_staleness=WeightStalenessPolicy(
+                    adult_days=settings.weight_stale_adult_days,
+                    paediatric_days=settings.weight_stale_paediatric_days,
+                ),
             )
         return self._facts[patient_id]
 
-    async def _age_and_weight(self, patient_id: uuid.UUID) -> tuple[int | None, float | None]:
-        """The patient's age in whole years today and their recorded weight, or None for either.
+    async def _age_and_weight(
+        self, patient_id: uuid.UUID
+    ) -> tuple[int | None, float | None, int | None]:
+        """The patient's age in whole years today, their recorded weight, and how old it is.
 
-        One query for two columns of one row. They are read together because the two are read
-        together — ``dose_range`` needs both to judge a child's dose, and a second round-trip for
-        a second column of the same row is a round-trip in front of a clinician waiting on a
-        safety screen.
+        One query for three columns of one row. They are read together because the three are
+        read together — ``dose_range`` needs age and weight to judge a child's dose,
+        ``check_weight_staleness`` needs the date beside the weight to say whether that judgement
+        still stands — and a second round-trip for a second column of the same row is a
+        round-trip in front of a clinician waiting on a safety screen.
 
         Age is None for a missing date of birth and for one that is not a date this patient
         could have been born on — an OCR'd "2126" or a DOB in the future.
@@ -298,19 +312,42 @@ class SafetyService:
         Weight is None when nothing has recorded one, and ``ck_patients_weight_kg_plausible``
         is what keeps a zero or a negative out of the column — a weight of 0 kg divides into a
         mg/kg figure of infinity.
+
+        The third value is the weight's age in whole days, and the clock is read here rather
+        than in ``app.core.safety`` for the same reason ``age_years`` and
+        ``days_since_documented`` are: every function in that module is a pure function of its
+        arguments. None means the row carries a weight with no date beside it — every write path
+        stamps one (``PatientService``), but migration 0032 left the column NULL on rows that
+        predate it, and a weight whose age is unknown must not be read as a recent one.
+
+        A date in the *future* is clamped to zero rather than reported as a negative age. It is
+        not a real measurement date, and the alternative — a negative day count — would compare
+        below every window and silently read as fresh.
         """
         row = await self.db.execute(
-            select(Patient.date_of_birth, Patient.weight_kg).where(Patient.id == patient_id)
+            select(Patient.date_of_birth, Patient.weight_kg, Patient.weight_recorded_at).where(
+                Patient.id == patient_id
+            )
         )
         record = row.first()
         if record is None:
-            return None, None
-        dob, weight = record
+            return None, None, None
+        dob, weight, weighed_at = record
         weight_kg = float(weight) if weight is not None else None
+        weight_days: int | None = None
+        if weight_kg is not None and weighed_at is not None:
+            # Rows written before migration 0032 can carry a naive datetime on SQLite, where
+            # DateTime(timezone=True) does not round-trip an offset. Comparing one of those with
+            # an aware "now" raises, and a TypeError on the deterministic safety path would cost
+            # the whole check rather than this one field.
+            reference = (
+                weighed_at if weighed_at.tzinfo is not None else weighed_at.replace(tzinfo=UTC)
+            )
+            weight_days = max((datetime.now(UTC) - reference).days, 0)
         if dob is None or not is_plausible_clinical_date(dob):
-            return None, weight_kg
+            return None, weight_kg, weight_days
         age = age_from_dob(dob, datetime.now(UTC).date())
-        return (age if age >= 0 else None), weight_kg
+        return (age if age >= 0 else None), weight_kg, weight_days
 
     async def _current_medication_rows(self, patient_id: uuid.UUID) -> list[MedicationEvent]:
         result = await self.db.execute(
@@ -815,6 +852,10 @@ class SafetyService:
             + check_stale_medications(ctx)
             + check_duplicate_orders(ctx)
             + check_dose_ranges(ctx)
+            # Carries the proposed drug, unlike the chart-level form below: a weight-dosed drug
+            # being *added* is the one whose dose is about to be computed from whatever weight
+            # the record holds, so it belongs in the set this check considers.
+            + check_weight_staleness(ctx, proposed=proposed)
             + check_hepatic_severity(ctx)
         )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
@@ -845,6 +886,9 @@ class SafetyService:
             # chart-level notes: once for the whole medication list, not once per drug
             # evaluated against it.
             + check_dose_ranges(facts)
+            # Whether the weight those ceilings were computed from is still this patient's — a
+            # statement about the chart, so it sits here with the rest of them.
+            + check_weight_staleness(facts)
             + check_hepatic_severity(facts)
         )
 

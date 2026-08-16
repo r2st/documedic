@@ -105,6 +105,9 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   implausible_dose: 'Dose not possible for this drug',
   renal_dose: 'Renal dosing',
   stale_medication: 'Medication list age',
+  // Deliberately not "Weight" — the finding is about the measurement's age, not the number, and
+  // a label naming the value would read as a comment on how much the patient weighs.
+  stale_weight: 'Recorded weight is out of date',
   unevaluated_allergy: 'Not checked — allergy',
   unevaluated_condition: 'Not checked — condition',
   unevaluated_medication: 'Not checked — medication',

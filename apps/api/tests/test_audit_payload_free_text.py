@@ -540,7 +540,28 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
         "bytes",
         "truncated_sections",
         "characters_dropped",
+        # Which slice of the chart left the system, for the per-type export. A FHIR type name
+        # from a closed vocabulary shared by every deployment ("Condition", "Observation") — it
+        # says nothing about this patient, and without it the trail cannot tell a whole-chart
+        # disclosure from a single-section one.
+        "resource_type",
     },
+    # --- clinical summary. Counts and provenance only. ``source`` is the one a DPDP reviewer
+    # needs: it says whether this read sent the chart to a third-party provider or was answered
+    # from the record alone. The summary text itself is emphatically absent — it is prose about
+    # the patient, written by a model, and audit_logs.payload outlives the record it describes.
+    "clinical_summary_generated": {
+        "source",
+        "degraded",
+        "conditions",
+        "medications",
+        "labs",
+        "encounters",
+        "prescriber_framing_applied",
+    },
+    # --- prescription timeline. Two counts. Drug names are the clinical content here and stay
+    # on the medication rows, where a reader of the chart finds them.
+    "prescription_timeline_viewed": {"drugs", "events"},
     # --- encounters. ``status`` is one of four lifecycle words from a closed vocabulary
     # (ck_encounters_status); ``fields`` is the *names* of the columns an edit touched, never
     # what they now say. The two id keys are the amendment link, which is the fact the trail has
