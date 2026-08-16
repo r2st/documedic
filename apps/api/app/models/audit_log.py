@@ -98,6 +98,21 @@ AUDIT_ACTIONS = (
     "handoff_updated",
     "handoff_sent",
     "handoff_acknowledged",
+    # The clinic diary. ``appointment_booked`` and ``appointment_closed`` are the pair a later
+    # reader needs: the second says whether the patient came, and a follow-up nobody attended is
+    # the event that matters. ``appointment_rescheduled`` carries both ends of the move, because
+    # the row afterwards holds only the new time and "this was moved from Tuesday" is what is
+    # asked about a missed appointment. The two panel-wide reads are disclosures in the sense
+    # this list means — the diary says which patients are booked and why, and the reminder queue
+    # names them again — so both are recorded against the account rather than any one chart, in
+    # the same way the critical-lab queue is.
+    "appointment_booked",
+    "appointment_rescheduled",
+    "appointment_cancelled",
+    "appointment_closed",
+    "appointment_list_viewed",
+    "appointment_diary_viewed",
+    "appointment_reminders_viewed",
     "document_uploaded",
     "extraction_completed",
     "extraction_failed",

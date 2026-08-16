@@ -43,6 +43,34 @@ class EncounterStatus(StrEnum):
     amended = "amended"
 
 
+class AppointmentStatus(StrEnum):
+    """Lifecycle of a booked slot. See app/models/appointment.py.
+
+    Only ``scheduled`` occupies time in the diary: cancelling is what frees a slot, and it is
+    the only thing that does. ``no_show`` is kept distinct from ``cancelled`` because a patient
+    who does not attend a follow-up they were booked for is a clinical event, and one that a
+    diary recording only attendance cannot tell from a visit nobody closed.
+    """
+
+    scheduled = "scheduled"
+    completed = "completed"
+    cancelled = "cancelled"
+    no_show = "no_show"
+
+
+class AppointmentModality(StrEnum):
+    """How a booked visit will be conducted.
+
+    Not administrative. ``audio`` says in advance that the prescriber will not have seen the
+    patient, which is the distinction ``app.core.telehealth`` turns into prescribing
+    restrictions on the encounter that follows.
+    """
+
+    in_person = "in_person"
+    video = "video"
+    audio = "audio"
+
+
 class SafetySeverity(StrEnum):
     info = "info"
     warning = "warning"

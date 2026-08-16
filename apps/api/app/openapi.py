@@ -230,6 +230,18 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "appointments",
+        "description": (
+            "The clinic diary: bookings against a chart, the account's forthcoming list, "
+            "recorded provider hours, and the reminder derivation. A clash with another "
+            "booking of the same provider is refused; a slot outside recorded hours is "
+            "accepted and flagged, and a provider with no hours on file is reported as "
+            "unrecorded rather than as available. **No reminder is ever sent** — this "
+            "deployment has no messaging transport, so the reminder route derives which ones "
+            "fall due and marks nothing. Deterministic and offline-capable throughout."
+        ),
+    },
+    {
         "name": "dashboard",
         "description": (
             "Aggregates over the calling account's own panel: chart counts, encounter volume, "

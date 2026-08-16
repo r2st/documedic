@@ -603,3 +603,53 @@ class HandoffNotSentError(ConflictError):
     """
 
     code = "handoff_not_sent"
+
+
+class AppointmentNotFoundError(NotFoundError):
+    """That appointment is not on this chart. Open the patient's appointments to see what is."""
+
+    code = "appointment_not_found"
+
+
+class InvalidAppointmentSlotError(ValidationError):
+    """That is not a usable appointment time. Check the start and end times and try again.
+
+    Raised for the arithmetic failures :func:`app.core.scheduling.slot_problems` finds — an end
+    before the start, a zero-length slot, a duration outside the configured bounds, a date
+    further ahead than bookings are taken. The ``detail`` names the specific codes.
+
+    A slot that merely starts in the *past* is not this error. Writing up a walk-in after the
+    fact is ordinary clinic work, and refusing it would push people into backdating the clock
+    on the visit instead — which loses the one thing the record is for.
+    """
+
+    code = "invalid_appointment_slot"
+
+
+class AppointmentConflictError(ConflictError):
+    """That provider already has a booking overlapping this time. Choose another slot, or
+    cancel the existing booking first.
+
+    Overlap is checked per *provider*, not per account: two clinicians in one practice seeing
+    two patients at eleven o'clock is a normal Tuesday, and refusing it would make the diary
+    unusable.
+
+    409 rather than a warning, and this is the one scheduling refusal that is hard. A
+    double-booked slot is not a data-quality problem the clinic sorts out later — it is two
+    patients in a waiting room with one clinician, and the second of them found out by
+    arriving. The clinician who genuinely means to overbook cancels or reschedules, which
+    leaves a record of the decision; a soft warning leaves none.
+    """
+
+    code = "appointment_conflict"
+
+
+class AppointmentNotOpenError(ConflictError):
+    """This appointment has already been closed or cancelled, so it cannot be changed.
+
+    A cancelled booking is not rescheduled — the slot has been released and may already be
+    somebody else's — and a completed or missed one is a record of what happened, which is not
+    editable for the same reason a signed encounter is not. Book a new appointment instead.
+    """
+
+    code = "appointment_not_open"

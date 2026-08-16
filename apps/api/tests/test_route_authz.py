@@ -48,6 +48,8 @@ PLACEHOLDER = {
     "suggestion_id": lambda _ctx: str(uuid.uuid4()),
     "run_id": lambda _ctx: str(uuid.uuid4()),
     "condition_name": lambda _ctx: "dengue",
+    "appointment_id": lambda _ctx: str(uuid.uuid4()),
+    "window_id": lambda _ctx: str(uuid.uuid4()),
 }
 
 

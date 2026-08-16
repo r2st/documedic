@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models. Importing this package registers every table on Base.metadata."""
 
 from app.models.allergy import Allergy
+from app.models.appointment import Appointment, ProviderAvailability
 from app.models.audit_log import AuditLog
 from app.models.base import Base
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
@@ -49,6 +50,8 @@ __all__ = [
     "ClinicianDecisionRecord",
     "GuidelineChunk",
     "PatientHandoff",
+    "Appointment",
+    "ProviderAvailability",
     "ValidationRun",
     "SafetyReport",
 ]

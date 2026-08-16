@@ -27,6 +27,7 @@ from app.middleware import (
 )
 from app.openapi import TAGS_METADATA
 from app.routers import (
+    appointments,
     audit,
     auth,
     dashboard,
@@ -330,6 +331,7 @@ def create_app() -> FastAPI:
         guidelines,
         pathways,
         handoffs,
+        appointments,
         dashboard,
         validation,
     ):
@@ -338,6 +340,7 @@ def create_app() -> FastAPI:
     app.include_router(records.export_router, prefix=API_PREFIX)
     app.include_router(records.medications_router, prefix=API_PREFIX)
     app.include_router(records.critical_labs_router, prefix=API_PREFIX)
+    app.include_router(appointments.diary_router, prefix=API_PREFIX)
 
     return app
 

@@ -35,6 +35,7 @@ error taxonomy rather than about access.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.routing import APIRoute
@@ -46,6 +47,12 @@ from tests.conftest import create_patient
 # Same synthetic prescription the document tests use: the header satisfies magic-byte sniffing
 # and the body is read by the deterministic text fallback, so no LLM is involved.
 SCAN = b"%PDF-1.4\nMEDICATIONS:\nGlycomet 500mg BD\nCONDITIONS:\nType 2 Diabetes Mellitus\n"
+
+# A bookable slot. Computed rather than a far-future literal: the booking route refuses a date
+# beyond ``appointment_max_days_ahead``, and a 422 there would mean the sweep never reached the
+# authorization check it exists to test.
+_SLOT_START = (datetime.now(UTC) + timedelta(days=30)).replace(microsecond=0)
+_SLOT_END = _SLOT_START + timedelta(minutes=30)
 
 # Bodies good enough to get past request validation on the routes that take one. A 422 would be
 # a safe answer too, but it would mean the request never reached the authorization check, and
@@ -66,6 +73,16 @@ BODIES: dict[str, dict] = {
     },
     "POST /api/v1/patients/{patient_id}/labs/critical-flags/{lab_result_id}/acknowledge": {
         "acknowledged_by": "Dr Attacker",
+    },
+    "POST /api/v1/patients/{patient_id}/appointments/{appointment_id}/reschedule": {
+        "starts_at": _SLOT_START.isoformat(),
+        "ends_at": _SLOT_END.isoformat(),
+    },
+    "POST /api/v1/patients/{patient_id}/appointments/{appointment_id}/cancel": {
+        "reason": "sweeping for cross-account writes",
+    },
+    "POST /api/v1/patients/{patient_id}/appointments/{appointment_id}/outcome": {
+        "attended": False,
     },
 }
 
@@ -418,6 +435,87 @@ async def test_another_accounts_critical_lab_cannot_be_acknowledged_from_your_ow
     assert not leaked, "another account's critical lab was reachable: " + "; ".join(leaked)
 
 
+# --- Appointments ------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_appointment_route_reaches_another_accounts_booking_through_your_own_chart(
+    app, auth_client, second_auth_client
+):
+    """A booking carries a named patient, a time, and why they are coming.
+
+    The write half is the sharper one, and it is a denial of service rather than a disclosure:
+    ``cancel`` on a stolen id takes another practice's patient off their clinician's list, and
+    nothing about the diary afterwards says the appointment ever existed except the audit
+    trail. ``outcome`` is worse in a quieter way — it would record, permanently, that somebody
+    else's patient did not turn up.
+    """
+    victim = await create_patient(auth_client)
+    booked = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/appointments",
+        json={
+            "provider_name": "Dr Victim",
+            "starts_at": _SLOT_START.isoformat(),
+            "ends_at": _SLOT_END.isoformat(),
+        },
+    )
+    assert booked.status_code == 201, booked.text
+    stolen_appointment_id = booked.json()["id"]
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{appointment_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{patient_id}", attacker["id"]).replace(
+            "{appointment_id}", stolen_appointment_id
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the appointment sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's appointment was reachable: " + "; ".join(leaked)
+
+
+@pytest.mark.asyncio
+async def test_no_availability_route_reaches_another_accounts_window(
+    app, auth_client, second_auth_client
+):
+    """``{window_id}`` has no patient id beside it at all, so the account check on the window
+    is the only thing between the two practices. Deleting somebody else's recorded hours is a
+    quiet way to turn every one of their bookings into "outside availability"."""
+    window = await auth_client.post(
+        "/api/v1/appointments/availability",
+        json={
+            "provider_name": "Dr Victim",
+            "weekday": 1,
+            "start_minute": 540,
+            "end_minute": 780,
+        },
+    )
+    assert window.status_code == 201, window.text
+    stolen_window_id = window.json()["id"]
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{window_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{window_id}", stolen_window_id)
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the availability sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's availability window was reachable: " + "; ".join(leaked)
+
+    still_there = await auth_client.get("/api/v1/appointments/availability")
+    assert [row["id"] for row in still_there.json()] == [stolen_window_id]
+
+
 # --- Sign-in sessions --------------------------------------------------------------------------
 
 
@@ -492,6 +590,8 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
         "run_id",
         "handoff_id",
         "lab_result_id",
+        "appointment_id",
+        "window_id",
     }
     # Not resource ids, and neither is scoped to an account:
     #   condition_name — the pathway routes take a condition *name*, a lookup into the shared

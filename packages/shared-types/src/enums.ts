@@ -8,6 +8,17 @@ export type ExtractionConfidence = 'high' | 'medium' | 'low';
 
 export type SafetySeverity = 'info' | 'warning' | 'critical' | 'hard_block';
 
+// Lifecycle of a booked slot. Only 'scheduled' occupies time in the diary — cancelling is what
+// frees a slot and the only thing that does. 'no_show' is deliberately distinct from
+// 'cancelled': a patient who does not attend a follow-up they were booked for is a clinical
+// event, not an administrative one.
+export type AppointmentStatus = 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+
+// How a booked visit will be conducted. Not administrative: on an audio-only call the
+// prescriber will not have seen the patient, which restricts what may be newly prescribed at
+// the encounter that follows (see app.core.telehealth).
+export type AppointmentModality = 'in_person' | 'video' | 'audio';
+
 // Lifecycle of a clinical encounter. 'amended' is not a fourth kind of edit: it is what a
 // *signed* encounter becomes once a signed amendment supersedes it. Neither row's content
 // changes — the correction is a new encounter carrying amendsEncounterId and a reason.

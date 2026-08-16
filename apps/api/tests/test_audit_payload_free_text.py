@@ -669,6 +669,35 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "handoff_sent": {"from_clinician", "to_clinician", "checklist", "sbar_chars"},
     "handoff_acknowledged": {"acknowledged_by", "note_chars", "seconds_since_sent"},
     "handoff_list_viewed": {"handoff_count"},
+    # The diary. ``provider_name`` is the *clinician's* name and is the point of the entry —
+    # whose list this went into. Why the patient is coming is clinician prose about a patient
+    # and stays on the row ``entity_id`` points at; only whether one was written is recorded.
+    # ``availability_note`` is one of two fixed codes or null.
+    "appointment_booked": {
+        "provider_name",
+        "starts_at",
+        "duration_minutes",
+        "modality",
+        "reason_recorded",
+        "availability_note",
+        "source_protocol_key",
+    },
+    # Both ends of the move: the row afterwards holds only the new time, and "this was moved
+    # from Tuesday" is what a reader asks about a missed appointment.
+    "appointment_rescheduled": {
+        "provider_name",
+        "previous_starts_at",
+        "starts_at",
+        "duration_minutes",
+        "availability_note",
+    },
+    "appointment_cancelled": {"provider_name", "starts_at", "reason_chars"},
+    "appointment_closed": {"provider_name", "starts_at", "status"},
+    "appointment_list_viewed": {"appointment_count"},
+    # ``provider_filtered`` is the provider name the caller narrowed to, or null — a clinician's
+    # name the caller supplied, not anything about a patient.
+    "appointment_diary_viewed": {"days", "appointment_count", "provider_filtered"},
+    "appointment_reminders_viewed": {"horizon_minutes", "reminder_count"},
     # Keyed by checklist item, so the declared key set is the checklist vocabulary itself.
     "handoff_checklist_viewed": {
         "unacknowledged_critical_labs",

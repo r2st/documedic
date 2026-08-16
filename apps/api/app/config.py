@@ -572,6 +572,51 @@ class Settings(BaseSettings):
     # it, and until it is reclaimed it sits in the chart reading "being read" forever.
     extraction_stall_minutes: int = 15
 
+    # --- Scheduling ---
+    # The clinic's offset from UTC, in minutes. 330 = IST, which is the whole of this product's
+    # target market; a deployment elsewhere sets it once. Used only to read a provider's
+    # recorded working hours, which are stated in local time because that is how a clinic
+    # states them — "Tuesdays, nine to one" does not move when the offset does.
+    #
+    # Everything else about an appointment is stored and compared in UTC. This is deliberately
+    # not a per-provider or per-appointment field: a single-site practice has one set of
+    # opening hours, and a per-row offset would have to be right on every row for the diary to
+    # be readable at all.
+    clinic_utc_offset_minutes: int = 330
+    # Bounds on one booking. The floor stops a zero-ish slot that overlaps nothing and shows on
+    # no list; the ceiling stops a typo in the end time swallowing a whole day of the diary.
+    appointment_min_duration_minutes: int = 5
+    appointment_max_duration_minutes: int = 480
+    # How far ahead a booking may be made. Two years: annual reviews and antenatal series are
+    # real, and beyond that a date is a guess that will be re-made before it arrives.
+    appointment_max_days_ahead: int = 730
+    # Lead times at which a reminder falls due, in minutes before the appointment. A day
+    # ahead (travel, taking leave from work) and two hours ahead (setting off).
+    #
+    # A string rather than a list because environment variables are strings and pydantic's
+    # list parsing of a bare comma-separated value is JSON-shaped; ``reminder_lead_minutes``
+    # below is the parsed form. Same treatment as ``cors_origins``.
+    appointment_reminder_leads: str = "1440,120"
+
+    @property
+    def reminder_lead_minutes(self) -> tuple[int, ...]:
+        """Parsed, deduplicated, longest lead first; malformed entries dropped.
+
+        Dropped rather than raised on, because this setting is read on a routine diary read and
+        a typo in it must not take the scheduling routes down. A lead that cannot be parsed is
+        a reminder that does not fire, which is visible in the queue; a startup crash on a
+        comma is not recoverable by the clinic.
+        """
+        leads: set[int] = set()
+        for part in self.appointment_reminder_leads.split(","):
+            try:
+                minutes = int(part.strip())
+            except ValueError:
+                continue
+            if minutes > 0:
+                leads.add(minutes)
+        return tuple(sorted(leads, reverse=True))
+
     # --- CORS ---
     cors_origins: str = "http://localhost:3000"
 
