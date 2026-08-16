@@ -47,6 +47,10 @@ from app.core.safety import (
     has_hard_block,
     ingredient_reference_ids,
 )
+from app.core.telehealth import (
+    TeleconsultationModality,
+    check_teleconsultation_prescribing,
+)
 from app.exceptions import NotFoundError, ValidationError
 from app.models.allergy import Allergy
 from app.models.condition import Condition
@@ -204,7 +208,7 @@ class SafetyService:
 
         return await PatientService(self.db).get(account_id, patient_id)
 
-    async def _build_context(
+    async def build_context(
         self, patient_id: uuid.UUID, *, proposed_reference_ids: Iterable[str] = ()
     ) -> SafetyContext:
         """Assemble everything ``evaluate_drug_safety`` needs for one patient.
@@ -245,7 +249,7 @@ class SafetyService:
         """The patient half of a safety context: meds, allergies, conditions, eGFR.
 
         A ``SafetyContext`` with the two rule lists left empty, memoised per patient for this
-        service instance's lifetime; :meth:`_build_context` ``replace``s the rules onto a copy.
+        service instance's lifetime; :meth:`build_context` ``replace``s the rules onto a copy.
 
         Split out because these five reads do not depend on the drug being evaluated, while
         ``screen_text`` is called once per management option a run produced. Every option was
@@ -796,6 +800,7 @@ class SafetyService:
         dose: str | None = None,
         dose_unit: str | None = None,
         frequency: str | None = None,
+        modality: TeleconsultationModality | None = None,
     ) -> tuple[DrugVocabulary, SafetyContext, list[SafetyFlag], list[uuid.UUID]]:
         await self._patient(account_id, patient_id)
 
@@ -829,7 +834,7 @@ class SafetyService:
         # this exact product". check_interactions self-skips that pair, so nothing else in
         # evaluate_drug_safety is affected.
         proposed = _drug_ref(vocab)
-        ctx = await self._build_context(
+        ctx = await self.build_context(
             patient_id, proposed_reference_ids=ingredient_reference_ids(proposed)
         )
         # Appended, not folded into ``evaluate_drug_safety``: each is a statement about the chart
@@ -857,6 +862,11 @@ class SafetyService:
             # the record holds, so it belongs in the set this check considers.
             + check_weight_staleness(ctx, proposed=proposed)
             + check_hepatic_severity(ctx)
+            # What the *format* of this consultation cannot supply for this prescription.
+            # Returns nothing at all when the caller did not say (which is every existing
+            # caller), when the consultation is in person, and when the patient is already on
+            # the drug — so adding it changes no existing behaviour. See app.core.telehealth.
+            + check_teleconsultation_prescribing(proposed, ctx, modality)
         )
         check_ids = await self._persist(account_id, patient_id, vocab, flags)
         return vocab, ctx, flags, check_ids
@@ -1049,7 +1059,7 @@ class SafetyService:
             return integrity
         # Every molecule of every named product, not just the products' own ids: a guideline
         # sentence naming a combination brand still has to load its ingredients' rules.
-        ctx = await self._build_context(
+        ctx = await self.build_context(
             patient_id,
             proposed_reference_ids={
                 ref for row in named.values() for ref in ingredient_reference_ids(_drug_ref(row))
@@ -1134,7 +1144,7 @@ class SafetyService:
         same value ``evaluate_drug_safety`` was being handed after the round-trip.
         """
         await self._patient(account_id, patient_id)
-        ctx = await self._build_context(patient_id)
+        ctx = await self.build_context(patient_id)
         out: list[tuple[DrugRef, list[SafetyFlag]]] = []
         # Deduplicated by reference id: the same product charted twice is one drug to evaluate,
         # and the "everyone but me" context below drops it by id, so evaluating it twice would

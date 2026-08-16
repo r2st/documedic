@@ -5,6 +5,7 @@ from app.models.audit_log import AuditLog
 from app.models.base import Base
 from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecisionRecord
 from app.models.condition import Condition
+from app.models.critical_lab_acknowledgement import CriticalLabAcknowledgement
 from app.models.derived_marker import DerivedMarker
 from app.models.document import Document
 from app.models.drug_safety_check import DrugSafetyCheck
@@ -12,6 +13,7 @@ from app.models.drug_safety_override import DrugSafetyOverride
 from app.models.drug_vocabulary import Contraindication, DrugInteraction, DrugVocabulary
 from app.models.encounter import Encounter
 from app.models.guideline import GuidelineChunk
+from app.models.handoff import PatientHandoff
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
@@ -30,6 +32,7 @@ __all__ = [
     "Encounter",
     "MedicationEvent",
     "LabResult",
+    "CriticalLabAcknowledgement",
     "Condition",
     "Allergy",
     "DerivedMarker",
@@ -45,6 +48,7 @@ __all__ = [
     "ClinicalSuggestion",
     "ClinicianDecisionRecord",
     "GuidelineChunk",
+    "PatientHandoff",
     "ValidationRun",
     "SafetyReport",
 ]

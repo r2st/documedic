@@ -6,8 +6,9 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.text_sanitize import clean_free_text, clean_identifier
 from app.schemas.common import PaginationMeta
 
 
@@ -165,3 +166,104 @@ class CriticalLabFlagsResponse(BaseModel):
     # or no unit at all on a value that two of this marker's units could both produce. An empty
     # ``flags`` alone reads as "nothing critical"; these are the rows for which nobody looked.
     unreadable: list[UnreadableLabItem] = []
+
+
+# The floor on an acknowledging clinician's name. Short enough for "Dr Rao", long enough that a
+# single keystroke does not clear a panic value off the queue with a signature nobody can read.
+MIN_ACKNOWLEDGED_BY_CHARS = 2
+MAX_ACKNOWLEDGED_BY_CHARS = 200
+MAX_ACTION_NOTE_CHARS = 2000
+
+
+class CriticalLabAcknowledgementRequest(BaseModel):
+    """A named clinician recording that they have seen one critical value.
+
+    ``acknowledged_by`` is required and is not derived from the authenticated account. This
+    product's deployment model is one practice login held signed in across a shift and several
+    machines, so the account identifies the practice rather than the person — and an
+    acknowledgement whose entire value is that a *named* clinician takes responsibility for
+    having seen a panic potassium cannot be signed by "the practice". Compare the same
+    reasoning behind step-up re-authentication.
+
+    ``action_note`` is optional on purpose. The required part is that somebody named saw the
+    value; making the note mandatory puts a text box between a clinician and clearing a queue
+    at 2am, and the predictable outcome is a queue cleared with "." rather than a queue
+    cleared with a note.
+    """
+
+    acknowledged_by: str = Field(
+        ...,
+        min_length=MIN_ACKNOWLEDGED_BY_CHARS,
+        max_length=MAX_ACKNOWLEDGED_BY_CHARS,
+        description="Name of the clinician acknowledging this result",
+    )
+    action_note: str | None = Field(
+        default=None,
+        max_length=MAX_ACTION_NOTE_CHARS,
+        description="What was done about it, in the clinician's own words",
+    )
+
+    @field_validator("acknowledged_by")
+    @classmethod
+    def _name_is_substantive(cls, value: str) -> str:
+        # The floor is applied to the *stripped*, control-character-free text and the stripped
+        # form is what gets stored, so " " cannot satisfy a min_length that counts raw
+        # characters — the same hole that was closed on hard-block override reasoning.
+        stripped = clean_identifier(value).strip()
+        if len(stripped) < MIN_ACKNOWLEDGED_BY_CHARS:
+            raise ValueError(
+                f"acknowledged_by must be at least {MIN_ACKNOWLEDGED_BY_CHARS} characters"
+            )
+        return stripped
+
+    @field_validator("action_note")
+    @classmethod
+    def _clean_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return clean_free_text(value).strip() or None
+
+
+class CriticalLabAcknowledgementResponse(BaseModel):
+    id: uuid.UUID
+    patient_id: uuid.UUID
+    lab_result_id: uuid.UUID
+    marker_name: str
+    value: float
+    unit: str | None
+    severity: str
+    acknowledged_by: str
+    action_note: str | None
+    created_at: datetime
+
+
+class CriticalQueueEntry(BaseModel):
+    """One outstanding critical value on the panel-wide queue."""
+
+    patient_id: uuid.UUID
+    lab_result_id: uuid.UUID
+    marker_name: str
+    value: float
+    unit: str | None
+    severity: str
+    summary: str
+    sample_date: datetime | None = Field(
+        default=None, description="When the sample was taken, if the report carried a date"
+    )
+    # How long this has been sitting unacknowledged. The queue's clinical meaning is almost
+    # entirely in this number: a panic potassium detected four minutes ago and one detected
+    # three days ago call for different responses, and neither the value nor the severity says
+    # which of the two a row is.
+    detected_days_ago: int | None = None
+
+
+class CriticalLabQueueResponse(BaseModel):
+    entries: list[CriticalQueueEntry]
+    # "Nothing outstanding" and "nothing critical anywhere" are different states, and an empty
+    # list alone does not distinguish them.
+    acknowledged_count: int = 0
+    truncated: bool = Field(
+        default=False,
+        description="True if the scan hit its ceiling; entries beyond it are not shown",
+    )
+    offline_capable: bool = True

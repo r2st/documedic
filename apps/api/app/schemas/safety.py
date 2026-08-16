@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -74,6 +75,21 @@ class SafetyCheckRequest(BaseModel):
         default=None,
         max_length=MAX_FREQUENCY_CHARS,
         description='How often: "BD", "1-0-1", "q8h", "twice daily", "once weekly", "SOS".',
+    )
+    # The format of the consultation this prescription is being written at. Optional, and its
+    # absence raises nothing: every existing caller omits it, and inventing a restriction from
+    # silence would put format-dependent flags on every in-clinic prescription in the system.
+    #
+    # Supplied as "video" or "audio", the checks in ``app.core.telehealth`` also run — what this
+    # consultation format cannot supply for this particular drug. They fire only on *starting* a
+    # drug: continuing established therapy remotely is the ordinary use of a teleconsultation.
+    modality: Literal["video", "audio", "in_person"] | None = Field(
+        default=None,
+        description=(
+            "How this consultation is being conducted. Supply the encounter's "
+            "`telehealth_modality` for a teleconsultation; omit it, or send 'in_person', "
+            "for a visit in clinic."
+        ),
     )
 
     # Both are single-line identifiers, so they get the identifier cleaning: control characters

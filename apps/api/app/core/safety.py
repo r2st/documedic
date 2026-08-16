@@ -99,6 +99,16 @@ CheckType = Literal[
     # The weight the dose check divided by, judged as a measurement with an age rather than as a
     # property of the patient. See ``check_weight_staleness``.
     "stale_weight",
+    # Three statements about the *format* of the consultation rather than about the drug or the
+    # patient — the same drug prescribed in clinic raises none of them. Produced by
+    # ``app.core.telehealth``, which is not imported here: this module has no notion of an
+    # encounter and acquiring one would make every check in it depend on a context most callers
+    # have no reason to supply. The names live in this Literal because they are persisted as
+    # ``drug_safety_checks.check_type`` alongside the rest, and one vocabulary for that column
+    # is what lets the flag list be read as one list.
+    "telehealth_in_person_required",
+    "telehealth_baseline_monitoring_required",
+    "telehealth_audio_only_initiation",
 ]
 
 # Symmetric clinically-recognised cross-reactivity between drug-CLASS families. Keys/values are

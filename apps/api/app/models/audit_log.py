@@ -58,6 +58,12 @@ AUDIT_ACTIONS = (
     "auth_reset_tokens_purged",
     "critical_lab_value_detected",
     "critical_lab_value_not_evaluated",
+    # A named clinician attesting that they have seen one panic value, and the read of the
+    # panel-wide queue that shows them. The acknowledgement is the entry that matters: the
+    # detection above says the system noticed, and until this exists nothing in the record says
+    # a person did. On a post-incident review the interval between the two is the question.
+    "critical_lab_value_acknowledged",
+    "critical_lab_queue_viewed",
     "patient_created",
     "patient_updated",
     "patient_deleted",
@@ -81,6 +87,17 @@ AUDIT_ACTIONS = (
     "encounter_signed",
     "encounter_amendment_opened",
     "encounter_amended",
+    # The SBAR handover lifecycle. ``handoff_sent`` and ``handoff_acknowledged`` are the pair
+    # that matters: together they say who handed this patient to whom, at what time, against
+    # which outstanding risks, and how long the patient spent handed-over-but-unreceived. That
+    # interval is the number a post-incident review asks for and nothing else in the record
+    # holds it. ``handoff_created``/``handoff_updated`` cover the draft, which has been handed
+    # to nobody and changes nothing clinically — recorded because the prose is patient content
+    # and a write to it is a write to the chart.
+    "handoff_created",
+    "handoff_updated",
+    "handoff_sent",
+    "handoff_acknowledged",
     "document_uploaded",
     "extraction_completed",
     "extraction_failed",
@@ -90,6 +107,13 @@ AUDIT_ACTIONS = (
     "graph_merged",
     "drug_safety_check",
     "drug_safety_hard_block_overridden",
+    # One reconciliation of a whole medication list at a transition of care. The individual
+    # drugs each write their own ``drug_safety_check`` — this is the row that says those N
+    # checks were one act, at one transition, against one list, which is not recoverable from N
+    # entries that look exactly like N drugs checked one at a time on the safety screen. The
+    # transition itself (admission/discharge/transfer) is the part a later reviewer cannot
+    # reconstruct from anything else in the record.
+    "medications_reconciled",
     "reasoning_session_started",
     "reasoning_intake_answered",
     # The opening bookend of one *run* of the panel, distinct from the session being opened:
@@ -119,6 +143,11 @@ AUDIT_ACTIONS = (
     # clinical content, so both are disclosures in the sense this list means.
     "encounter_viewed",
     "encounter_list_viewed",
+    # Both handover reads are disclosures. The list returns SBAR prose about the patient; the
+    # checklist returns how many allergies, live medications and unacknowledged panic values a
+    # named patient's chart holds, which is clinical content even though it is only counts.
+    "handoff_list_viewed",
+    "handoff_checklist_viewed",
     # The widest disclosure this API performs: the whole chart, in one file, leaving the system.
     "patient_record_exported",
     # A handover summary of a chart. A disclosure in the sense this list means — it returns the

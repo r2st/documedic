@@ -24,7 +24,9 @@ class DrugSafetyCheck(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "'hepatotoxic_burden', 'unevaluated_condition', 'bleeding_burden', "
             "'geriatric_caution', 'stale_medication', 'unverified_drug_name', "
             "'implausible_dose', 'paediatric_caution', 'dose_out_of_range', "
-            "'dose_unit_mismatch', 'unevaluated_dose', 'stale_weight')",
+            "'dose_unit_mismatch', 'unevaluated_dose', 'stale_weight', "
+            "'telehealth_in_person_required', 'telehealth_baseline_monitoring_required', "
+            "'telehealth_audio_only_initiation')",
             name="ck_dsc_check_type",
         ),
         CheckConstraint(
@@ -41,7 +43,15 @@ class DrugSafetyCheck(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     drug_vocabulary_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("drug_vocabulary.id"), nullable=False
     )
-    check_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # Wide enough for the longest member of ``app.core.safety.CheckType`` with room to spare.
+    # It was 30, which the three telehealth types outgrew — ``telehealth_baseline_monitoring_
+    # required`` is 39 characters — and the failure mode was invisible in this suite: SQLite does
+    # not enforce a VARCHAR length, so a type too long for the column stored fine in every test
+    # and would have raised ``value too long for type character varying(30)`` on PostgreSQL, at
+    # the moment a clinician ran the check that produces it. ``tests/test_telehealth_
+    # prescribing.py`` pins the column against the Literal so the next type to be added is
+    # measured rather than assumed.
+    check_type: Mapped[str] = mapped_column(String(50), nullable=False)
     severity: Mapped[str] = mapped_column(String(30), nullable=False)
     is_hard_block: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"

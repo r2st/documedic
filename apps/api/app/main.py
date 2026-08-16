@@ -33,6 +33,7 @@ from app.routers import (
     documents,
     encounters,
     guidelines,
+    handoffs,
     health,
     pathways,
     patients,
@@ -328,6 +329,7 @@ def create_app() -> FastAPI:
         reasoning,
         guidelines,
         pathways,
+        handoffs,
         dashboard,
         validation,
     ):
@@ -335,6 +337,7 @@ def create_app() -> FastAPI:
     app.include_router(records.labs_router, prefix=API_PREFIX)
     app.include_router(records.export_router, prefix=API_PREFIX)
     app.include_router(records.medications_router, prefix=API_PREFIX)
+    app.include_router(records.critical_labs_router, prefix=API_PREFIX)
 
     return app
 

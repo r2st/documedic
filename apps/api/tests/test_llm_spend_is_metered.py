@@ -135,6 +135,29 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     # --- drug safety and labs. Critical Safety Rule #8 — these answer whenever asked.
     ("POST", "/api/v1/patients/{patient_id}/drug-safety/check"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/drug-safety/flags"): DETERMINISTIC,
+    # Deterministic like the single-drug check, and bounded by the same thing that bounds it:
+    # the request carries at most MAX_PROPOSED_MEDICATIONS lines, and the intra-list passes are
+    # quadratic in a number the schema caps at 50.
+    ("POST", "/api/v1/patients/{patient_id}/drug-safety/reconcile"): DETERMINISTIC,
+    # The critical-value queue and its acknowledgement. Deterministic and offline by design —
+    # this is the surface that has to keep working when the LLM does not. The queue is bounded
+    # by MAX_QUEUE_ENTRIES rather than by a page the caller chooses.
+    ("GET", "/api/v1/labs/critical-queue"): DETERMINISTIC,
+    # --- SBAR handover. Chart reads and chart writes, no model in the path. The checklist runs
+    # the deterministic safety engine and five counts, which is bounded by one chart — the same
+    # classification the drug-safety screen gets, and for the same Rule #8 reason: handover
+    # happens at shift change, which is exactly when a throttle or a degraded provider must not
+    # take a clinical workflow with it.
+    ("GET", "/api/v1/patients/{patient_id}/handoffs"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/handoffs"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/handoffs/checklist"): DETERMINISTIC,
+    ("PATCH", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/send"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/acknowledge"): DETERMINISTIC,
+    (
+        "POST",
+        "/api/v1/patients/{patient_id}/labs/critical-flags/{lab_result_id}/acknowledge",
+    ): DETERMINISTIC,
     ("POST", "/api/v1/patients/{patient_id}/drug-safety/override"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/drug-safety/overrides"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/labs/critical-flags"): DETERMINISTIC,

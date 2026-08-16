@@ -219,7 +219,7 @@ async def test_a_2019_prescription_is_still_evaluated_and_is_now_said_to_be_old(
     await _chart(db, patient, "Warfarin", charted_on=date(2019, 6, 1))
 
     service = SafetyService(db)
-    ctx = await service._build_context(patient.id)
+    ctx = await service.build_context(patient.id)
     assert [m.generic_name for m in ctx.current_meds] == ["Warfarin"]
 
     details = (await _notes(db, patient))["stale_medication"]

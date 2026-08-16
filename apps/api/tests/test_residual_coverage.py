@@ -111,7 +111,7 @@ def test_a_recognised_section_with_no_parser_skips_its_lines_instead_of_crashing
 async def test_active_flags_skips_a_medication_whose_vocabulary_entry_was_retired(db, auth_client):
     """A deactivated DrugVocabulary row must drop out of the flag sweep, not raise.
 
-    ``_build_context`` links medications by primary key (no ``is_active`` filter), while the
+    ``build_context`` links medications by primary key (no ``is_active`` filter), while the
     resolver only returns active rows. Retiring a vocabulary entry therefore leaves live
     medication events pointing at a reference id the resolver will not return — that mismatch
     has to be skipped rather than crash the safety endpoint.

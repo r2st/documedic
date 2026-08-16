@@ -127,7 +127,7 @@ async def _flags_select_count(db, engine, account, patient) -> int:
     resolves the proposed drug first, and ``DrugResolver._all()`` selects the entire active
     vocabulary — which lands every row in the session identity map, so the old per-row
     ``db.get()`` was already served from memory on that path. ``active_flags`` reaches
-    ``_build_context`` without that warm-up, so it is the path where the per-row fetch actually
+    ``build_context`` without that warm-up, so it is the path where the per-row fetch actually
     cost a round-trip per drug. The batched-query assertion below covers the mechanism itself.
     """
     with counting_queries(engine) as counter:
@@ -526,12 +526,12 @@ async def test_reference_rules_loaded_do_not_grow_with_the_corpus(db):
     await _add_current_med(db, patient, "Metformin")
     await _add_current_med(db, patient, "Warfarin")
 
-    before = await SafetyService(db)._build_context(patient.id)
+    before = await SafetyService(db).build_context(patient.id)
 
     await _add_interaction_rows(db, 200)
     await _add_contraindication_rows(db, 200)
 
-    after = await SafetyService(db)._build_context(patient.id)
+    after = await SafetyService(db).build_context(patient.id)
 
     assert len(after.interaction_rules) == len(before.interaction_rules), (
         f"400 unrelated reference rows changed the loaded interaction count from "
@@ -550,7 +550,7 @@ async def test_only_rules_touching_the_drugs_in_play_are_loaded(db):
     warfarin = await _add_current_med(db, patient, "Warfarin")
     aspirin = await _vocab(db, "Aspirin")
 
-    ctx = await SafetyService(db)._build_context(
+    ctx = await SafetyService(db).build_context(
         patient.id, proposed_reference_ids=[aspirin.reference_id]
     )
 
@@ -576,7 +576,7 @@ async def test_the_proposed_drugs_own_rules_are_still_loaded(db):
     await _add_current_med(db, patient, "Warfarin")
     aspirin = await _vocab(db, "Aspirin")
 
-    ctx = await SafetyService(db)._build_context(
+    ctx = await SafetyService(db).build_context(
         patient.id, proposed_reference_ids=[aspirin.reference_id]
     )
 
@@ -598,7 +598,7 @@ async def test_a_single_medication_costs_no_interaction_query(db, engine):
     service = SafetyService(db)
     db.expunge_all()
     with counting_queries(engine) as counter:
-        await service._build_context(patient.id)
+        await service.build_context(patient.id)
 
     touched = [s for s in counter["statements"] if "drug_interactions" in s]
     assert touched == [], f"queried drug_interactions for a single-drug patient: {touched}"
@@ -719,7 +719,7 @@ async def test_a_patient_on_no_medications_touches_neither_reference_table(db, e
     service = SafetyService(db)
     db.expunge_all()
     with counting_queries(engine) as counter:
-        ctx = await service._build_context(patient.id)
+        ctx = await service.build_context(patient.id)
 
     assert ctx.interaction_rules == []
     assert ctx.contraindication_rules == []
@@ -734,7 +734,7 @@ async def test_a_patient_on_no_medications_touches_neither_reference_table(db, e
 async def test_rules_are_loaded_for_every_proposed_drug_not_just_one(db):
     """The scope must widen to all the drugs a text names, not to the first of them.
 
-    ``SafetyService.screen_text`` hands ``_build_context`` every drug a guideline management
+    ``SafetyService.screen_text`` hands ``build_context`` every drug a guideline management
     option names, because a guideline sentence routinely names several ("an ACE inhibitor or ARB
     (e.g. enalapril/telmisartan)"). A rule for a drug outside the loaded scope cannot fire, so a
     parameter that quietly kept only one of them would silently drop the others' hard blocks
@@ -744,7 +744,7 @@ async def test_rules_are_loaded_for_every_proposed_drug_not_just_one(db):
     metformin = await _vocab(db, "Metformin")
     enalapril = await _vocab(db, "Enalapril")
 
-    ctx = await SafetyService(db)._build_context(
+    ctx = await SafetyService(db).build_context(
         patient.id, proposed_reference_ids=[metformin.reference_id, enalapril.reference_id]
     )
 
@@ -771,7 +771,7 @@ async def test_screening_more_management_options_does_not_re_read_the_chart(db, 
     """The patient half of the safety context is the same for every option screened.
 
     ``drug_safety_check`` screens each management option the run produced, and each screen went
-    through a fresh ``_build_context`` — re-reading the current medications, the active
+    through a fresh ``build_context`` — re-reading the current medications, the active
     allergies, their vocabulary rows, the conditions and the latest eGFR every time, for a
     patient whose chart cannot have changed between two options of the same run. Only the two
     reference-rule loads legitimately depend on which drugs the option names.
@@ -817,9 +817,9 @@ async def test_a_fresh_safety_service_sees_a_changed_chart(db, engine):
     _account, patient = await _account_and_patient(db)
     await _add_current_med(db, patient, "Warfarin")
 
-    before = await SafetyService(db)._build_context(patient.id)
+    before = await SafetyService(db).build_context(patient.id)
     await _add_current_med(db, patient, "Aspirin")
-    after = await SafetyService(db)._build_context(patient.id)
+    after = await SafetyService(db).build_context(patient.id)
 
     assert {m.generic_name for m in before.current_meds} == {"Warfarin"}
     assert {m.generic_name for m in after.current_meds} == {"Warfarin", "Aspirin"}

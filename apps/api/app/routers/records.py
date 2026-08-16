@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse, Response
@@ -16,12 +17,16 @@ from app.dependencies import (
     require_recent_authentication,
 )
 from app.models.user import Account
-from app.openapi import PATIENT_ERRORS, errors
+from app.openapi import AUTH_ERRORS, PATIENT_ERRORS, errors
 from app.schemas.common import PaginationMeta
 from app.schemas.medication_timeline import PrescriptionTimelineResponse, TimelineDrugOut
 from app.schemas.record import (
+    CriticalLabAcknowledgementRequest,
+    CriticalLabAcknowledgementResponse,
     CriticalLabFlagItem,
     CriticalLabFlagsResponse,
+    CriticalLabQueueResponse,
+    CriticalQueueEntry,
     LongitudinalRecord,
     UnreadableLabItem,
 )
@@ -42,6 +47,10 @@ router = APIRouter(prefix="/patients/{patient_id}/record", tags=["records"])
 labs_router = APIRouter(prefix="/patients/{patient_id}/labs", tags=["records"])
 export_router = APIRouter(prefix="/patients/{patient_id}/export", tags=["records"])
 medications_router = APIRouter(prefix="/patients/{patient_id}/medications", tags=["records"])
+# Panel-wide rather than chart-scoped, which is the whole point of it: every other surfacing of
+# a critical value requires already knowing which patient to look at. Hence its own router — the
+# path carries no patient id because the question does not name a patient.
+critical_labs_router = APIRouter(prefix="/labs", tags=["records"])
 
 # Comfortably longer than the longest supported FHIR type name. The 422 for an unsupported type
 # quotes the requested value back, so an unbounded path segment would be reflected into the
@@ -436,3 +445,145 @@ async def critical_lab_flags(
             for lab, note in screen.unreadable
         ],
     )
+
+
+@critical_labs_router.get(
+    "/critical-queue",
+    response_model=CriticalLabQueueResponse,
+    summary="Unacknowledged critical/panic lab values across the whole panel",
+    # No patient in the path, so no 404: the queue is the calling account's own panel and an
+    # account with nothing outstanding gets an empty list rather than a not-found.
+    responses=AUTH_ERRORS,
+)
+async def critical_lab_queue(
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> CriticalLabQueueResponse:
+    """Who on this panel has a dangerous result right now, without opening every chart.
+
+    The critical-value screen has always worked; what it lacked was a reader. It runs on
+    document approval, writes `critical_lab_value_detected` to the trail, and answers
+    `GET /patients/{id}/labs/critical-flags` on demand — and all three need somebody to already
+    be looking at that patient. A potassium of 6.8 extracted from a report uploaded overnight
+    produced an audit entry nobody reads and a flag on a chart nobody has open.
+
+    Evaluated live against the current thresholds rather than read back from stored detections,
+    so it cannot be stale and needed no backfill to be trustworthy on the day it shipped.
+    Deterministic and offline-capable (Critical Safety Rule #8) — this is exactly the surface
+    that must keep working when the LLM does not.
+
+    An entry leaves this queue only when a named clinician acknowledges it at
+    `POST /patients/{id}/labs/critical-flags/{lab_result_id}/acknowledge`. There is no expiry
+    and no auto-dismiss: a queue that empties itself can be empty because nobody looked.
+
+    Reading it discloses lab values across the panel, so the access is audited as
+    `critical_lab_queue_viewed`.
+    """
+    queue = await LabSafetyService(db).outstanding_critical_values(account_id=account.id)
+    today = datetime.now(UTC).date()
+    entries = [
+        CriticalQueueEntry(
+            patient_id=lab.patient_id,
+            lab_result_id=lab.id,
+            marker_name=flag.marker_name,
+            value=flag.value,
+            unit=flag.unit,
+            severity=flag.severity,
+            summary=flag.summary,
+            sample_date=lab.sample_date,
+            # Aged against the sample date where the report carried one, and against when the
+            # row entered the record otherwise — the same two-source fallback
+            # ``_charted_current_meds`` uses for a medication's age, and for the same reason:
+            # most of what this product ingests is handwritten, so a date OCR could not read is
+            # ordinary rather than broken, and reporting the age as unknown would read as fresh
+            # on precisely the values where that is the wrong direction to fail in.
+            #
+            # ``is not None`` rather than ``or``: a sample taken today gives 0, and 0 is fresh,
+            # not falsy. An ``or`` here would silently re-age today's panic potassium against
+            # the row's creation date.
+            detected_days_ago=(
+                sample_age
+                if (sample_age := _days_ago(today, _as_date(lab.sample_date))) is not None
+                else _days_ago(today, _as_date(lab.created_at))
+            ),
+        )
+        for lab, flag in queue.entries
+    ]
+    await AuditService(db).record(
+        action="critical_lab_queue_viewed",
+        account_id=account.id,
+        # No patient_id: the read is not about one chart. The entries name the patients they
+        # concern and each patient's own trail carries the detection.
+        patient_id=None,
+        entity_type="account",
+        entity_id=account.id,
+        payload={
+            "outstanding": len(entries),
+            "acknowledged": queue.acknowledged_count,
+            "truncated": queue.truncated,
+        },
+    )
+    await db.commit()
+    return CriticalLabQueueResponse(
+        entries=entries,
+        acknowledged_count=queue.acknowledged_count,
+        truncated=queue.truncated,
+    )
+
+
+def _as_date(when: datetime | None) -> date | None:
+    """A timestamp column as a calendar date. ``sample_date`` and ``created_at`` are datetimes."""
+    return when.date() if when is not None else None
+
+
+def _days_ago(today: date, when: date | None) -> int | None:
+    """Whole days between ``when`` and today, or None. A future date clamps to 0.
+
+    Clamped rather than returned negative for the reason ``SafetyService._age_and_weight``
+    clamps: a negative age compares below every threshold, so a sample dated next year would
+    sort to the top of the queue as the freshest thing on it.
+    """
+    if when is None:
+        return None
+    return max((today - when).days, 0)
+
+
+@labs_router.post(
+    "/critical-flags/{lab_result_id}/acknowledge",
+    response_model=CriticalLabAcknowledgementResponse,
+    status_code=201,
+    summary="Record that a named clinician has seen a critical lab value",
+    responses=PATIENT_ERRORS,
+)
+async def acknowledge_critical_lab(
+    patient_id: uuid.UUID,
+    lab_result_id: uuid.UUID,
+    body: CriticalLabAcknowledgementRequest,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> CriticalLabAcknowledgementResponse:
+    """Takes one result off the panel-wide critical-value queue. Append-only.
+
+    `acknowledged_by` is a name and is required, and it is deliberately not taken from the
+    authenticated account: the deployment model here is one practice login held signed in
+    across a shift and several machines, so the account says which practice rather than which
+    person — and the entire value of this record is that a *named* clinician takes
+    responsibility for having seen the result.
+
+    422 if the referenced result is not currently critical. An acknowledgement is a clinical
+    attestation, so one recorded against a normal value is an assertion in an append-only table
+    that was never true; it also catches the client bug that matters most, which is
+    acknowledging the wrong id and thereby clearing a different dangerous value off the queue.
+
+    Acknowledging twice is allowed and writes a second row. Nothing here is editable or
+    removable — a correction is another acknowledgement, and the trail shows both.
+    """
+    row = await LabSafetyService(db).acknowledge(
+        account_id=account.id,
+        patient_id=patient_id,
+        lab_result_id=lab_result_id,
+        acknowledged_by=body.acknowledged_by,
+        action_note=body.action_note,
+    )
+    await db.commit()
+    return CriticalLabAcknowledgementResponse.model_validate(row, from_attributes=True)

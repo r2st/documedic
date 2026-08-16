@@ -244,6 +244,12 @@ async def test_every_visit_type_our_chart_can_hold_exports_a_v3_act_code(
                 patient_id=patient.id,
                 encounter_date=date(2026, 4, 18),
                 encounter_type=encounter_type,
+                # A teleconsultation has to say how it was conducted — the column is constrained
+                # to be present on that type and absent on every other, because a remote visit
+                # that does not say cannot be checked against the telemedicine prescribing rules
+                # (``app.core.telehealth``). Which of the two it is does not affect the exported
+                # act code, which is what this test is about.
+                telehealth_modality="video" if encounter_type == "teleconsultation" else None,
             )
         )
         await db.commit()

@@ -56,6 +56,17 @@ BODIES: dict[str, dict] = {
         "decision": "accepted",
         "reason": "sweeping for cross-account writes",
     },
+    "POST /api/v1/patients/{patient_id}/handoffs/{handoff_id}/send": {
+        "from_clinician": "Dr Attacker",
+        "to_clinician": "Dr Recipient",
+        "confirmed_checklist_keys": [],
+    },
+    "POST /api/v1/patients/{patient_id}/handoffs/{handoff_id}/acknowledge": {
+        "acknowledged_by": "Dr Attacker",
+    },
+    "POST /api/v1/patients/{patient_id}/labs/critical-flags/{lab_result_id}/acknowledge": {
+        "acknowledged_by": "Dr Attacker",
+    },
 }
 
 
@@ -317,6 +328,96 @@ async def test_the_owner_can_record_that_same_decision(auth_client):
     assert resp.status_code == 201, resp.text
 
 
+# --- Handovers ---------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_handoff_route_reaches_another_accounts_handover_through_your_own_chart(
+    app, auth_client, second_auth_client
+):
+    """The encounter attack, on the resource that carries a whole shift's clinical summary.
+
+    A handover holds four paragraphs of SBAR about a named patient, and two of its routes are
+    writes that *attest*: ``send`` freezes the note under the sending clinician's name, and
+    ``acknowledge`` records that somebody received it. A stolen id on either would put a
+    permanent, immutable assertion on another account's chart — and ``send`` is unrecoverable in
+    the same way a signature is, because the freeze trigger refuses every later correction.
+    """
+    victim = await create_patient(auth_client)
+    drafted = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/handoffs",
+        json={
+            "situation": "68F, day 2 post-op, new AF at 130.",
+            "background": "Hypertension, T2DM. Elective hemicolectomy on the 20th.",
+            "assessment": "Rate-related, haemodynamically stable, no chest pain.",
+            "recommendation": "Repeat ECG at 06:00; escalate if the rate stays above 120.",
+        },
+    )
+    assert drafted.status_code == 201, drafted.text
+    stolen_handoff_id = drafted.json()["id"]
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{handoff_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{patient_id}", attacker["id"]).replace(
+            "{handoff_id}", stolen_handoff_id
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the handoff sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's handover was reachable: " + "; ".join(leaked)
+
+
+# --- Critical lab acknowledgements ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_another_accounts_critical_lab_cannot_be_acknowledged_from_your_own_chart(
+    app, auth_client, second_auth_client, db
+):
+    """Acknowledging a panic value is what takes it *off* the queue somebody is meant to work.
+
+    So this id is worth stealing in the direction opposite to a read: the damage is not
+    disclosure, it is that a potassium of 6.8 on a chart in another practice stops being listed
+    as outstanding, over a name the acknowledging account typed. The row is append-only, so
+    nothing can undo it — only a second acknowledgement recording that the first was wrong.
+    """
+    from app.models.lab_result import LabResult
+
+    victim = await create_patient(auth_client)
+    panic = LabResult(
+        patient_id=uuid.UUID(victim["id"]),
+        marker_name="Potassium",
+        value_numeric=6.8,
+        unit="mmol/L",
+    )
+    db.add(panic)
+    await db.commit()
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{lab_result_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{patient_id}", attacker["id"]).replace(
+            "{lab_result_id}", str(panic.id)
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the critical-lab sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's critical lab was reachable: " + "; ".join(leaked)
+
+
 # --- Sign-in sessions --------------------------------------------------------------------------
 
 
@@ -382,7 +483,16 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
     So the parameters are enumerated from the routes and checked against what is claimed here.
     A new one fails this test, and the fix is a sweep for it rather than an entry in the list.
     """
-    swept = {"patient_id", "doc_id", "encounter_id", "session_id", "suggestion_id", "run_id"}
+    swept = {
+        "patient_id",
+        "doc_id",
+        "encounter_id",
+        "session_id",
+        "suggestion_id",
+        "run_id",
+        "handoff_id",
+        "lab_result_id",
+    }
     # Not resource ids, and neither is scoped to an account:
     #   condition_name — the pathway routes take a condition *name*, a lookup into the shared
     #     guideline corpus;

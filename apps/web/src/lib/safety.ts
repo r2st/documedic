@@ -105,6 +105,14 @@ const CHECK_TYPE_LABELS: Record<string, string> = {
   implausible_dose: 'Dose not possible for this drug',
   renal_dose: 'Renal dosing',
   stale_medication: 'Medication list age',
+  // Three labels rather than one "Telemedicine", because they are three different absences and
+  // the clinician's next move differs for each: an injection needs somebody physically present,
+  // a baseline needs a test result before the first dose, and an audio call needs — at most —
+  // to become a video one. All three are about the *consultation*, so each label says so; a
+  // label naming the drug would read as a finding about the drug, which none of these is.
+  telehealth_in_person_required: 'Remote visit — needs someone present',
+  telehealth_baseline_monitoring_required: 'Remote visit — baseline test needed first',
+  telehealth_audio_only_initiation: 'Audio-only visit — patient not seen',
   // Deliberately not "Weight" — the finding is about the measurement's age, not the number, and
   // a label naming the value would read as a comment on how much the patient weighs.
   stale_weight: 'Recorded weight is out of date',

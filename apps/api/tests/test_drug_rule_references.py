@@ -1,7 +1,7 @@
 """A curated safety rule keyed on a drug the vocabulary does not carry.
 
 Such a rule loads without complaint, is counted as applied, and can never fire.
-``SafetyService._build_context`` scopes both rule tables to the drugs actually in play — the
+``SafetyService.build_context`` scopes both rule tables to the drugs actually in play — the
 reference ids come off the patient's *resolved* medications and the query is an exact ``IN`` —
 so a rule whose ``drug_reference_id`` matches no vocabulary row is never fetched, never
 evaluated, and reaches the clinician as a clean check rather than as an error.

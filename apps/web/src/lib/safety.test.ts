@@ -155,6 +155,22 @@ describe('checkTypeLabel', () => {
     expect(checkTypeLabel('unevaluated_medication')).toBe('Not checked — medication');
   });
 
+  it('tells the three telemedicine findings apart, and says each is about the visit', () => {
+    // They arrive together on one prescription — starting warfarin on a telephone call raises
+    // two of them at once — so a shared "Telemedicine" label would render as the same finding
+    // twice. Each names the absence rather than the drug: none of the three is a statement
+    // about the medicine, which is prescribed unremarkably in clinic.
+    expect(checkTypeLabel('telehealth_in_person_required')).toBe(
+      'Remote visit — needs someone present',
+    );
+    expect(checkTypeLabel('telehealth_baseline_monitoring_required')).toBe(
+      'Remote visit — baseline test needed first',
+    );
+    expect(checkTypeLabel('telehealth_audio_only_initiation')).toBe(
+      'Audio-only visit — patient not seen',
+    );
+  });
+
   it('renders a check type this build has never seen rather than dropping it', () => {
     // The frontend and the API deploy separately. A safety finding omitted because the client
     // is a week older than the server is the failure this whole engine keeps being corrected

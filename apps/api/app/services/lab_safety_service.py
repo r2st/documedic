@@ -21,9 +21,35 @@ from app.core.lab_safety import (
     evaluate_critical_value,
     unreadable_lab,
 )
+from app.exceptions import NotFoundError, ValidationError
+from app.models.critical_lab_acknowledgement import CriticalLabAcknowledgement
 from app.models.lab_result import LabResult
 from app.models.patient import Patient
 from app.services.audit_service import AuditService
+
+# Ceiling on one queue read. The row count is patients × distinct markers, so a practice with
+# 400 charts and a dozen markers each is already past any page a clinician reads — the cap is
+# there so the query cannot become unbounded as a panel grows, not because 2000 is a meaningful
+# clinical number. A truncated queue reports itself; see ``CriticalQueue.truncated``.
+MAX_QUEUE_ENTRIES = 2000
+
+
+@dataclass(frozen=True)
+class CriticalQueue:
+    """The panel-wide outstanding-critical-value queue.
+
+    ``acknowledged_count`` is carried alongside the entries rather than dropped, because "no
+    outstanding critical values" and "no critical values at all" are different states and a
+    clinician reading an empty queue should be able to tell which one they are looking at.
+
+    ``truncated`` is the same statement about the other end. A safety queue that quietly stops
+    at its limit is indistinguishable from one that had that many entries, and the entries it
+    dropped are exactly as dangerous as the ones it kept.
+    """
+
+    entries: list[tuple[LabResult, CriticalLabFlag]]
+    acknowledged_count: int = 0
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -193,3 +219,197 @@ class LabSafetyService:
                 },
             )
         return LabScreen(flags=flagged, unreadable=unreadable)
+
+    # --- The panel-wide queue -------------------------------------------------------------
+
+    async def outstanding_critical_values(
+        self, *, account_id: uuid.UUID, limit: int = MAX_QUEUE_ENTRIES
+    ) -> CriticalQueue:
+        """Every unacknowledged critical/panic value across this account's whole panel.
+
+        The reader the detection never had. ``screen_labs`` answers "does *this* chart hold a
+        panic value", which requires already having opened the chart; every other surfacing of
+        a critical value has the same shape. A potassium of 6.8 extracted from a report uploaded
+        overnight wrote its audit entry and then waited for someone to guess which patient to
+        look at.
+
+        **Evaluated live rather than from stored detections.** The alternative — persisting a
+        row whenever ``screen_labs`` finds something and reading those back — is cheaper and
+        wrong in a way that matters for a safety queue: it can only contain what was detected
+        after the feature shipped, so it needs a backfill to be trustworthy on day one and is
+        silently incomplete if the backfill misses anything. It would also drift, since a
+        threshold correction in ``app.core.lab_safety`` changes what is critical and a stored
+        detection would keep the old answer. This reads the labs and applies the current rules,
+        which cannot be stale by construction.
+
+        The cost is one window query over the account's latest-per-(patient, marker) rows, the
+        same shape ``screen_labs`` uses for one patient with the partition widened. Bounded by
+        ``limit``, and a truncated queue says so: a safety queue that quietly stops at n is
+        indistinguishable from one with n entries in it.
+
+        Never audits. Reading it discloses lab values across the panel, and the router records
+        that once for the request — but this method is also the thing a caller polls, and an
+        audit entry per poll would bury the trail it is supposed to be part of.
+        """
+        marker_key = func.lower(func.trim(LabResult.marker_name))
+        ranked = (
+            select(
+                LabResult,
+                marker_key.label("marker_key"),
+                func.row_number()
+                .over(
+                    # Partitioned by patient *and* marker, where ``screen_labs`` partitions by
+                    # marker alone. Everything else about the ordering is identical, and has to
+                    # be: a queue that picked a different "latest result" than the chart screen
+                    # does would show a clinician an entry that is not on the chart they open.
+                    partition_by=(LabResult.patient_id, marker_key),
+                    order_by=(
+                        LabResult.sample_date.desc().nullslast(),
+                        LabResult.created_at.desc(),
+                        LabResult.id,
+                    ),
+                )
+                .label("marker_rank"),
+            )
+            .join(Patient, Patient.id == LabResult.patient_id)
+            .where(
+                Patient.account_id == account_id,
+                # A withdrawn chart drops off the queue. Consent withdrawal means this record is
+                # not to be worked from, and a queue entry is an instruction to go and work from
+                # it. Same judgement the rest of the read surface takes.
+                Patient.is_deleted.is_(False),
+                LabResult.is_deleted.is_(False),
+                LabResult.value_numeric.is_not(None),
+            )
+            .subquery()
+        )
+        latest = aliased(LabResult, ranked)
+        rows = (
+            (
+                await self.db.execute(
+                    select(latest)
+                    .where(ranked.c.marker_rank == 1)
+                    # +1 so a full page is distinguishable from an exactly-full one, which is what
+                    # lets ``truncated`` be honest rather than a guess.
+                    .limit(limit + 1)
+                    .order_by(ranked.c.marker_key)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        truncated = len(rows) > limit
+        flagged: list[tuple[LabResult, CriticalLabFlag]] = []
+        for lab in rows[:limit]:
+            if lab.value_numeric is None:
+                continue
+            flag = evaluate_critical_value(lab.marker_name, float(lab.value_numeric), lab.unit)
+            if flag is not None:
+                flagged.append((lab, flag))
+
+        acknowledged = await self._acknowledged_lab_ids(
+            account_id, [lab.id for lab, _flag in flagged]
+        )
+        return CriticalQueue(
+            entries=[(lab, flag) for lab, flag in flagged if lab.id not in acknowledged],
+            acknowledged_count=sum(1 for lab, _f in flagged if lab.id in acknowledged),
+            truncated=truncated,
+        )
+
+    async def _acknowledged_lab_ids(
+        self, account_id: uuid.UUID, lab_ids: list[uuid.UUID]
+    ) -> set[uuid.UUID]:
+        """Which of these results already carry an acknowledgement, in one query.
+
+        Scoped to ``account_id`` as well as to the ids. The ids came from this account's own
+        patients a moment ago, so the extra predicate changes no result — it is here because
+        the alternative is a query whose correctness depends on where its arguments came from,
+        and this one is read by a queue whose whole job is to not hide a dangerous value.
+        """
+        if not lab_ids:
+            return set()
+        rows = await self.db.execute(
+            select(CriticalLabAcknowledgement.lab_result_id).where(
+                CriticalLabAcknowledgement.account_id == account_id,
+                CriticalLabAcknowledgement.lab_result_id.in_(lab_ids),
+            )
+        )
+        return set(rows.scalars().all())
+
+    async def acknowledge(
+        self,
+        *,
+        account_id: uuid.UUID,
+        patient_id: uuid.UUID,
+        lab_result_id: uuid.UUID,
+        acknowledged_by: str,
+        action_note: str | None,
+    ) -> CriticalLabAcknowledgement:
+        """Record that a named clinician has seen one critical value. Append-only.
+
+        Refuses a result that is not currently critical (422). That is not pedantry: an
+        acknowledgement is a clinical attestation, and one recorded against a normal potassium
+        is a row in an append-only table asserting something that was never true. It also
+        catches the client bug that would matter most — acknowledging by the wrong id, which
+        would silently clear a *different* dangerous value off the queue.
+
+        Acknowledging twice is permitted and inserts a second row. The queue keys on presence,
+        so the second changes nothing about what a clinician sees; what it does is leave both
+        attestations on the record, which is the correct outcome for a table nothing may edit.
+        """
+        await self._patient(account_id, patient_id)
+        lab = await self.db.get(LabResult, lab_result_id)
+        if (
+            lab is None
+            or lab.is_deleted
+            or lab.patient_id != patient_id
+            or lab.value_numeric is None
+        ):
+            raise NotFoundError(f"Lab result {lab_result_id} not found on this patient")
+
+        flag = evaluate_critical_value(lab.marker_name, float(lab.value_numeric), lab.unit)
+        if flag is None:
+            raise ValidationError(
+                "That result is not currently flagged as a critical or panic value, so there is "
+                "nothing to acknowledge. Check the lab_result_id against the critical-value "
+                "queue.",
+                detail=f"lab_result_id={lab_result_id} is not critical",
+            )
+
+        row = CriticalLabAcknowledgement(
+            account_id=account_id,
+            patient_id=patient_id,
+            lab_result_id=lab.id,
+            marker_name=lab.marker_name,
+            value=flag.value,
+            unit=flag.unit,
+            severity=flag.severity,
+            acknowledged_by=acknowledged_by,
+            action_note=action_note,
+        )
+        self.db.add(row)
+        await self.db.flush()
+        await self.audit.record(
+            action="critical_lab_value_acknowledged",
+            account_id=account_id,
+            patient_id=patient_id,
+            entity_type="critical_lab_acknowledgement",
+            entity_id=row.id,
+            payload={
+                # The value and its severity, which are the facts about the event; the marker
+                # name, which is a lab test rather than anything about this person; the length
+                # of the note rather than the note, which is a clinician's prose about a patient
+                # and does not belong in an unencrypted append-only trail
+                # (tests/test_audit_payload_free_text.py). ``acknowledged_by`` is the clinician's
+                # own name, not the patient's, and is the whole point of the entry.
+                "lab_result_id": str(lab.id),
+                "marker_name": lab.marker_name,
+                "value": flag.value,
+                "unit": flag.unit,
+                "severity": flag.severity,
+                "acknowledged_by": acknowledged_by,
+                "action_note_chars": len(action_note or ""),
+            },
+        )
+        return row

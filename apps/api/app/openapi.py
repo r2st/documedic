@@ -218,6 +218,18 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "handoffs",
+        "description": (
+            "SBAR handover of a chart from one clinician to the next, and its receipt. The "
+            "checklist is computed from the chart rather than typed — outstanding critical "
+            "values, standing hard blocks, allergies, live medications, documents still "
+            "unchecked — and the send is refused if the confirmation no longer matches what "
+            "the chart holds. Once sent, the note and its checklist snapshot are immutable; a "
+            "correction is a new handover. Deterministic and offline-capable: shift change is "
+            "exactly when a degraded LLM provider must not take a clinical workflow down."
+        ),
+    },
+    {
         "name": "dashboard",
         "description": (
             "Aggregates over the calling account's own panel: chart counts, encounter volume, "

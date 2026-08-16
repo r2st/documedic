@@ -155,8 +155,8 @@ async def test_query_count_does_not_scale_with_medication_count(db, engine):
 
     Two separate regressions are pinned here:
 
-    1. active_flags used to call _build_context once per current medication.
-    2. _build_context then issued one `db.get(DrugVocabulary, ...)` per medication and per
+    1. active_flags used to call build_context once per current medication.
+    2. build_context then issued one `db.get(DrugVocabulary, ...)` per medication and per
        allergy. That is now a single batched `WHERE id IN (...)` query.
 
     With both fixed the query count is *flat* in the number of medications, so this asserts
@@ -215,6 +215,6 @@ async def test_conditions_and_allergies_are_shared_across_every_drug_variant(db)
     await _add_current_med(db, patient, "Aspirin")
     await db.flush()
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert [c.condition_name for c in ctx.conditions] == ["Chronic kidney disease"]
     assert len(ctx.current_meds) == 2

@@ -10,7 +10,7 @@ hydrates the rows a chart's medications and allergies link to *by id*, did not.
 That single disagreement was enough, because the two halves of the chart-wide view sat on
 opposite sides of it:
 
-* ``_build_context`` used the unfiltered lookup, so a medication linked to a deactivated row
+* ``build_context`` used the unfiltered lookup, so a medication linked to a deactivated row
   still became a ``DrugRef`` in ``current_meds`` — counted as evaluated, absent from
   ``check_unevaluated_medications``;
 * ``active_flags`` then re-resolved each of those reference ids through the *filtered* batch
@@ -187,7 +187,7 @@ async def test_the_medication_is_no_longer_counted_among_the_evaluated_ones(db):
     await _on_and_allergic_to(db, patient, await _vocab(db, ASPIRIN))
     await _withdraw(db, ASPIRIN)
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert [m.reference_id for m in ctx.current_meds] == []
     assert ctx.unresolved_current_meds == [ASPIRIN]
     assert ctx.unresolved_allergies == [ASPIRIN]
@@ -218,7 +218,7 @@ async def test_an_allergen_on_a_withdrawn_row_is_not_left_silently_toothless(db)
     await db.flush()
     await _withdraw(db, ASPIRIN)
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert ctx.unresolved_allergies == [ASPIRIN]
     assert [a.drug_reference_id for a in ctx.allergies] == [None]
 

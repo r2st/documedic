@@ -54,6 +54,33 @@ from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKe
 # tests/test_shared_enums.py holds all three together.
 ENCOUNTER_STATUSES: tuple[str, ...] = ("draft", "in_progress", "signed", "amended")
 
+# The encounter types this table accepts, in one place for the same reason the statuses are.
+ENCOUNTER_TYPES: tuple[str, ...] = (
+    "outpatient",
+    "inpatient",
+    "emergency",
+    "teleconsultation",
+    "follow_up",
+    "other",
+)
+
+# How a remote consultation was conducted. The distinction is not administrative: on a video
+# call the prescriber has seen the patient and on a telephone call they have not, and that is
+# what decides whether a new medicine may be started (see ``app.core.telehealth``).
+TELEHEALTH_MODALITIES: tuple[str, ...] = ("video", "audio")
+
+_TYPE_VALUES = ", ".join(repr(t) for t in ENCOUNTER_TYPES)
+_MODALITY_VALUES = ", ".join(repr(m) for m in TELEHEALTH_MODALITIES)
+
+# A modality belongs to a teleconsultation and to nothing else, in both directions. A remote
+# visit that does not say how it was conducted cannot be checked against the telemedicine
+# prescribing rules at all — which is worse than the old state, because the encounter now claims
+# to have been checked — and a modality on an in-clinic visit is a contradiction rather than
+# extra information.
+TELEHEALTH_MODALITY_MATCHES_TYPE = (
+    "(encounter_type = 'teleconsultation') = (telehealth_modality IS NOT NULL)"
+)
+
 # The two statuses that mean "a clinician has attested to this". Content is frozen from the
 # moment a row reaches either of them; ``amended`` is still signed, it merely has a successor.
 SIGNED_STATUSES: tuple[str, ...] = ("signed", "amended")
@@ -69,6 +96,12 @@ FROZEN_ON_SIGN: tuple[str, ...] = (
     "encounter_type",
     "presenting_complaint",
     "clinician_notes",
+    # Both new columns are frozen by the signature. The modality is a clinical fact the
+    # clinician attested to — it decides which prescribing rules applied to the visit — and the
+    # billing code is a financial assertion, which is if anything the one nobody should be able
+    # to alter quietly after the note was signed.
+    "telehealth_modality",
+    "billing_code",
     "signed_at",
     "signed_by_account_id",
     "amends_encounter_id",
@@ -101,9 +134,15 @@ class Encounter(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "encounters"
     __table_args__ = (
         CheckConstraint(
-            "encounter_type IS NULL OR encounter_type IN "
-            "('outpatient', 'inpatient', 'emergency', 'teleconsultation', 'follow_up', 'other')",
+            f"encounter_type IS NULL OR encounter_type IN ({_TYPE_VALUES})",
             name="ck_encounters_type",
+        ),
+        CheckConstraint(
+            f"telehealth_modality IS NULL OR telehealth_modality IN ({_MODALITY_VALUES})",
+            name="ck_encounters_telehealth_modality",
+        ),
+        CheckConstraint(
+            TELEHEALTH_MODALITY_MATCHES_TYPE, name="ck_encounters_telehealth_modality_matches_type"
         ),
         CheckConstraint(f"status IN ({_STATUS_VALUES})", name="ck_encounters_status"),
         CheckConstraint(SIGNATURE_COMPLETE, name="ck_encounters_signature_complete"),
@@ -163,6 +202,24 @@ class Encounter(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     encounter_date: Mapped[date] = mapped_column(Date, nullable=False)
     encounter_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # How a teleconsultation was actually conducted, and what it is billed as.
+    #
+    # ``teleconsultation`` has been an accepted ``encounter_type`` since this table existed, and
+    # it carried no consequence whatever: the visit was recorded as remote and then treated
+    # identically to one conducted in clinic. That is the gap these two columns close, and the
+    # first is the one that does work — ``app.core.telehealth`` turns it into prescribing checks,
+    # because a video consultation and a telephone call differ in what the prescriber has seen,
+    # and India's Telemedicine Practice Guidelines draw the line in exactly that place.
+    #
+    # Constrained to be present only on a teleconsultation, and required on one: a remote visit
+    # that does not say how it was conducted cannot be checked against those rules at all, and a
+    # modality on an in-clinic visit is a contradiction rather than extra information.
+    telehealth_modality: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The billing code, free-form because the code set is the payer's and this product spans
+    # several. Not validated against a list here for that reason — an unvalidated string a
+    # clinician typed is honest, whereas a validation against the wrong payer's list would
+    # refuse correct codes.
+    billing_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     presenting_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
     clinician_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     extraction_region: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)

@@ -560,3 +560,46 @@ class HardBlockError(AetherError):
 
     status_code = 409
     code = "hard_block"
+
+
+class HandoffSentError(ConflictError):
+    """This handoff has been sent, so its content can no longer be edited.
+
+    Sending is the point at which a clinician asserted "this is what I am handing over", and a
+    handover note that can be rewritten afterwards is not a record of what was handed over —
+    the same reasoning that freezes a signed encounter. A correction is a new handoff.
+
+    Refused here *and* by ``trg_handoffs_sent_frozen`` on the table (migration 0037), the
+    belt-and-braces every immutable table in this schema gets: a future writer that has not read
+    this docstring must not be able to do it either.
+    """
+
+    code = "handoff_sent"
+
+
+class HandoffChecklistStaleError(ConflictError):
+    """The chart changed since this checklist was confirmed. Re-read it and send again.
+
+    Raised when the checklist recomputed at send time does not match the one the clinician
+    confirmed — a critical lab value arrived, a hard block was raised, a medication was charted
+    between drafting the handover and sending it.
+
+    Refused rather than silently re-snapshotted, because the checklist's entire value is that
+    somebody looked. A handoff sent with a confirmation of a state that no longer holds is
+    worse than one sent with no checklist at all: it carries a signed assertion that the
+    outgoing clinician reviewed something they never saw. Same judgement as
+    ``reasoning_chart_changed_under_run``, which refuses to publish reasoning built on a chart
+    that has moved underneath it.
+    """
+
+    code = "handoff_checklist_stale"
+
+
+class HandoffNotSentError(ConflictError):
+    """Only a sent handoff can be acknowledged. A draft has not been handed to anyone yet.
+
+    Acknowledging a draft would record a receipt for something the outgoing clinician is still
+    writing, and would then freeze it mid-sentence.
+    """
+
+    code = "handoff_not_sent"

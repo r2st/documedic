@@ -26,7 +26,7 @@ accepting it while staying readable.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +37,7 @@ from app.exceptions import (
     EncounterNotFoundError,
     EncounterSignedError,
     EncounterTransitionError,
+    ValidationError,
 )
 from app.models.encounter import SIGNED_STATUSES, Encounter
 from app.schemas.encounter import EncounterAmend, EncounterCreate, EncounterUpdate
@@ -130,12 +131,15 @@ class EncounterService:
         self, account_id: uuid.UUID, patient_id: uuid.UUID, data: EncounterCreate
     ) -> Encounter:
         """Open a visit as a ``draft``. Audited as ``encounter_created``."""
+        _validate_telehealth(data.encounter_type, data.telehealth_modality)
         encounter = Encounter(
             patient_id=patient_id,
             encounter_date=data.encounter_date,
             encounter_type=data.encounter_type,
             presenting_complaint=data.presenting_complaint,
             clinician_notes=data.clinician_notes,
+            telehealth_modality=data.telehealth_modality,
+            billing_code=data.billing_code,
             status="draft",
         )
         self.db.add(encounter)
@@ -176,6 +180,16 @@ class EncounterService:
             )
 
         fields = data.model_dump(exclude_unset=True)
+        # Validated against the row as it *will be*, not against what the request happens to
+        # carry. A PATCH that changes the type from teleconsultation to outpatient leaves the
+        # modality behind, and one that sets a modality on an encounter whose type is already
+        # outpatient names neither field the check needs — both would slip past a validation
+        # that only looked at the payload, and both land as a database constraint violation
+        # (a 500) rather than as the 422 the clinician can act on.
+        _validate_telehealth(
+            fields.get("encounter_type", encounter.encounter_type),
+            fields.get("telehealth_modality", encounter.telehealth_modality),
+        )
         for key, value in fields.items():
             setattr(encounter, key, value)
         await self.db.flush()
@@ -294,17 +308,26 @@ class EncounterService:
             )
 
         supplied = data.model_dump(exclude_unset=True)
+        encounter_type = _pick(supplied, "encounter_type", original.encounter_type)
+        telehealth_modality = _pick(supplied, "telehealth_modality", original.telehealth_modality)
+        # Checked against the amendment's own resulting pair, not the original's. An amendment
+        # that corrects the type from teleconsultation to outpatient inherits the modality from
+        # the row it is amending, and would otherwise be written as an in-clinic visit still
+        # claiming to have been conducted over video.
+        _validate_telehealth(encounter_type, telehealth_modality)
         amendment = Encounter(
             patient_id=patient_id,
             # Carried across so the amendment cites the same scan the original was read from.
             # It is the same visit; only what was written about it has changed.
             source_document_id=original.source_document_id,
             encounter_date=_pick(supplied, "encounter_date", original.encounter_date),
-            encounter_type=_pick(supplied, "encounter_type", original.encounter_type),
+            encounter_type=encounter_type,
             presenting_complaint=_pick(
                 supplied, "presenting_complaint", original.presenting_complaint
             ),
             clinician_notes=_pick(supplied, "clinician_notes", original.clinician_notes),
+            telehealth_modality=telehealth_modality,
+            billing_code=_pick(supplied, "billing_code", original.billing_code),
             status="draft",
             amends_encounter_id=original.id,
             amendment_reason=data.amendment_reason,
@@ -327,8 +350,12 @@ class EncounterService:
         return amendment
 
 
-def _pick(supplied: dict, key: str, fallback: date | str | None) -> date | str | None:
+def _pick[T](supplied: dict, key: str, fallback: T) -> T:
     """The submitted value for ``key`` if the body carried one, else the original's.
+
+    Generic in the fallback's type so each call site keeps the column's own type — the amendment
+    passes the results straight into ``Encounter(...)`` and into ``_validate_telehealth``, and a
+    union of every column's type would make all of those ``date | str | None``.
 
     Reads ``exclude_unset`` output rather than testing for ``None``, because the two are
     different requests: a body that omits ``clinician_notes`` keeps the original note, and one
@@ -336,3 +363,40 @@ def _pick(supplied: dict, key: str, fallback: date | str | None) -> date | str |
     impossible to express.
     """
     return supplied[key] if key in supplied else fallback
+
+
+def _validate_telehealth(encounter_type: str | None, modality: str | None) -> None:
+    """A modality belongs to a teleconsultation, and a teleconsultation needs one.
+
+    Both directions, and each closes a different hole:
+
+    * **A teleconsultation without a modality** is a visit the telemedicine prescribing rules
+      cannot be applied to at all (``app.core.telehealth`` returns nothing when the modality is
+      unknown, deliberately — inventing a restriction from silence would put format-dependent
+      flags on every in-clinic prescription in the system). Before these columns existed that
+      was the state of every remote visit; allowing it to persist would mean the encounter now
+      *claims* to have been checked while nothing checked it.
+    * **A modality on an in-clinic visit** is a contradiction rather than extra information, and
+      one that would make the encounter's own record of itself unreadable: a row saying
+      "outpatient, conducted over video" gives a later reader no way to know which half is
+      wrong.
+
+    Raised here as a 422 as well as being enforced by ``ck_encounters_telehealth_modality_``
+    ``matches_type`` on the table. Without this the constraint still holds the invariant — but
+    it holds it by aborting the transaction, which reaches the clinician as a 500 with no
+    indication of which field to fix.
+    """
+    is_tele = encounter_type == "teleconsultation"
+    if is_tele and not modality:
+        raise ValidationError(
+            "A teleconsultation needs to say how it was conducted: set telehealth_modality to "
+            "'video' or 'audio'. The distinction decides which prescribing rules apply — on a "
+            "video call the patient has been seen and on a telephone call they have not.",
+            detail="teleconsultation without telehealth_modality",
+        )
+    if modality and not is_tele:
+        raise ValidationError(
+            "telehealth_modality applies only to an encounter of type 'teleconsultation'. "
+            f"This one is {encounter_type or 'untyped'}.",
+            detail=f"telehealth_modality set on encounter_type={encounter_type!r}",
+        )

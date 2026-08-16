@@ -762,7 +762,7 @@ async def test_end_to_end_telma_40_beside_telma_h_is_a_doubled_dose(db) -> None:
 
 
 async def test_end_to_end_the_ingredient_rules_are_actually_loaded_into_the_context(db) -> None:
-    """The scope guard. If ``_build_context`` queried only the product's own reference id, the
+    """The scope guard. If ``build_context`` queried only the product's own reference id, the
     metformin rules would never reach the engine and every check above would pass vacuously."""
     account, patient = await _patient(db)
     await _egfr(db, patient, 20.0)
@@ -783,7 +783,7 @@ async def test_end_to_end_components_survive_a_medication_linked_only_by_name(db
     account, patient = await _patient(db)
     await _medication(db, patient, "Glycomet GP")  # brand name, no drug_vocabulary_id
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
 
     combo = next(m for m in ctx.current_meds if m.reference_id == "MET-GLM-1-500")
     assert [c.generic_name for c in combo.components] == ["Metformin", "Glimepiride"]

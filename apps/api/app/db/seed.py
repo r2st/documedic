@@ -132,7 +132,7 @@ class DanglingRuleError(RuntimeError):
 
     Such a rule loads without complaint, is counted as applied, and can never fire. The safety
     engine scopes both rule tables to the drugs actually in play —
-    ``SafetyService._build_context`` collects reference ids off the patient's *resolved*
+    ``SafetyService.build_context`` collects reference ids off the patient's *resolved*
     medications and the query is an exact ``IN`` — so a rule whose ``drug_reference_id`` matches
     no vocabulary row is never even fetched, let alone evaluated. What reaches the clinician is
     a clean check.

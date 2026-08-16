@@ -87,7 +87,7 @@ async def test_a_brand_the_vocabulary_does_not_carry_is_reported_not_dropped(db)
     _account, patient = await _patient(db)
     await _approve(db, patient, {"brand_name_raw": UNSEEDED_BRAND, "event_type": "continue"})
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert ctx.current_meds == []
     assert ctx.unresolved_current_meds == [UNSEEDED_BRAND]
     assert (await _notes(db, patient))["unevaluated_medication"]["unresolved_medications"] == [
@@ -167,7 +167,7 @@ async def test_a_brand_the_vocabulary_does_carry_still_resolves_through_it(db):
     _account, patient = await _patient(db)
     await _approve(db, patient, {"brand_name_raw": "Glycomet", "event_type": "continue"})
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert [m.reference_id for m in ctx.current_meds] == ["MET-500"]
     assert ctx.unresolved_current_meds == []
 
@@ -193,7 +193,7 @@ async def test_seeding_the_brand_later_makes_an_already_charted_row_resolve(db):
     )
     await db.flush()
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert [m.reference_id for m in ctx.current_meds] == ["MET-500"]
 
 
@@ -212,7 +212,7 @@ async def test_the_generic_wins_when_a_row_carries_both_names(db):
     )
     await db.flush()
 
-    ctx = await SafetyService(db)._build_context(patient.id)
+    ctx = await SafetyService(db).build_context(patient.id)
     assert [m.reference_id for m in ctx.current_meds] == ["MET-500"]
     assert ctx.unresolved_current_meds == []
 

@@ -640,6 +640,54 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # of it is clinician free text.
     "critical_lab_value_not_evaluated": {"unreadable"},
     "drug_safety_check": {"drug", "reference_id", "flag_count", "hard_block"},
+    # Counts and a closed-vocabulary transition. No drug names: a reconciliation's medication
+    # list is the patient's whole current prescribing, and this trail is unencrypted,
+    # append-only and never pruned. ``dispositions`` is a count per disposition — how many
+    # continued, started, stopped — which is the shape a later reviewer needs and carries no
+    # drug. The names themselves live on the ``drug_safety_checks`` rows the same call wrote.
+    # The value and severity are facts about the event; the marker is a lab test, not anything
+    # about this person; ``acknowledged_by`` is the *clinician's* name and is the whole point of
+    # the entry. The note itself is a clinician's prose about a patient, so only its length is
+    # recorded and the row it lives on is reachable through ``entity_id``.
+    "critical_lab_value_acknowledged": {
+        "lab_result_id",
+        "marker_name",
+        "value",
+        "unit",
+        "severity",
+        "acknowledged_by",
+        "action_note_chars",
+    },
+    "critical_lab_queue_viewed": {"outstanding", "acknowledged", "truncated"},
+    # SBAR handover. The prose never leaves the row: only its total length is recorded, and
+    # ``entity_id`` points at the handoff that holds it. The two clinician names ARE recorded —
+    # they are the *clinicians'* names, not the patient's, and "who handed this patient to whom"
+    # is the entire clinical meaning of the entry. The checklist goes in as its closed-vocabulary
+    # keys and their counts.
+    "handoff_created": {"status", "sbar_chars"},
+    "handoff_updated": {"status", "sbar_chars"},
+    "handoff_sent": {"from_clinician", "to_clinician", "checklist", "sbar_chars"},
+    "handoff_acknowledged": {"acknowledged_by", "note_chars", "seconds_since_sent"},
+    "handoff_list_viewed": {"handoff_count"},
+    # Keyed by checklist item, so the declared key set is the checklist vocabulary itself.
+    "handoff_checklist_viewed": {
+        "unacknowledged_critical_labs",
+        "active_hard_blocks",
+        "documented_allergies",
+        "current_medications",
+        "documents_needing_confirmation",
+    },
+    "medications_reconciled": {
+        "context",
+        "proposed_count",
+        "charted_count",
+        "reconciled_count",
+        "unresolved_proposed",
+        "unresolved_charted",
+        "dispositions",
+        "list_flag_count",
+        "hard_block",
+    },
     "drug_safety_flags_viewed": {"drugs_evaluated", "flag_count"},
     "drug_safety_hard_block_overridden": {
         "check_type",
@@ -694,6 +742,11 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
 PAYLOAD_NOT_A_LITERAL = {
     # GraphService.merge_entities' per-entity-type insert counts: {"medications": 2, ...}.
     "graph_merged",
+    # The handover checklist's per-item counts, keyed by the item keys in
+    # ``HandoffService.CHECKLIST_ITEMS``: {"unacknowledged_critical_labs": 1, ...}. Counts only —
+    # the checklist carries no clinician prose, and the summaries it renders for the screen are
+    # built in the response model rather than in the payload.
+    "handoff_checklist_viewed",
 }
 
 # Field names that are, by definition, prose a person typed about a patient. None of them may

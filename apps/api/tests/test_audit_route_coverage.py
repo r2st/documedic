@@ -111,6 +111,31 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/patients/{patient_id}/drug-safety/override"): (
         "drug_safety_hard_block_overridden",
     ),
+    # Reconciliation runs an ordinary per-drug check for every proposed medication, so it emits
+    # the same two actions the single-drug route does, plus one entry for the reconciliation
+    # itself. All three, because a route mapped to a subset of what it writes is the same gap
+    # this module exists to close.
+    ("POST", "/api/v1/patients/{patient_id}/drug-safety/reconcile"): (
+        "medications_reconciled",
+        "drug_safety_check",
+        "hard_block_triggered",
+    ),
+    # A named clinician attesting that they have seen a panic value. The detection entry says
+    # the system noticed; this is the only one that says a person did, and the interval between
+    # them is what a post-incident review asks about.
+    ("POST", "/api/v1/patients/{patient_id}/labs/critical-flags/{lab_result_id}/acknowledge"): (
+        "critical_lab_value_acknowledged",
+    ),
+    # --- SBAR handover. Every step is recorded, drafts included: the prose is patient content,
+    # so a write to it is a write to the chart. The pair that matters clinically is send +
+    # acknowledge — who handed this patient to whom, and how long they spent handed over with
+    # nobody having accepted them.
+    ("POST", "/api/v1/patients/{patient_id}/handoffs"): ("handoff_created",),
+    ("PATCH", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}"): ("handoff_updated",),
+    ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/send"): ("handoff_sent",),
+    ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/acknowledge"): (
+        "handoff_acknowledged",
+    ),
     # --- The reasoning engine.
     ("POST", "/api/v1/patients/{patient_id}/reasoning"): ("reasoning_session_started",),
     ("POST", "/api/v1/reasoning/{session_id}/intake/answers"): ("reasoning_intake_answered",),

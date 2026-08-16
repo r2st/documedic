@@ -22,6 +22,13 @@ EncounterType = Literal[
     "outpatient", "inpatient", "emergency", "teleconsultation", "follow_up", "other"
 ]
 
+# How a remote consultation was conducted. Not administrative detail: on a video call the
+# prescriber has seen the patient and on a telephone call they have not, and that decides
+# whether a new medicine may be started at this visit. See ``app.core.telehealth``.
+TelehealthModality = Literal["video", "audio"]
+
+_BILLING_CODE_MAX = 50
+
 # Long enough for a consultation note, bounded because the column is unbounded ``Text`` and an
 # unbounded body is a memory surface. The per-route body ceiling (app/middleware.py) is the
 # other half of that; this is the field-level statement of the same limit.
@@ -82,6 +89,14 @@ class EncounterCreate(BaseModel):
     encounter_type: EncounterType | None = None
     presenting_complaint: str | None = Field(default=None, max_length=_COMPLAINT_MAX)
     clinician_notes: str | None = Field(default=None, max_length=_NOTES_MAX)
+    telehealth_modality: TelehealthModality | None = Field(
+        default=None,
+        description=(
+            "How a teleconsultation was conducted. Required when encounter_type is "
+            "'teleconsultation', and refused on any other type."
+        ),
+    )
+    billing_code: str | None = Field(default=None, max_length=_BILLING_CODE_MAX)
 
     _check_date = field_validator("encounter_date")(_validate_encounter_date)
     _check_prose = field_validator("presenting_complaint", "clinician_notes")(_clean_prose)
@@ -101,6 +116,14 @@ class EncounterUpdate(BaseModel):
     presenting_complaint: str | None = Field(default=None, max_length=_COMPLAINT_MAX)
     clinician_notes: str | None = Field(default=None, max_length=_NOTES_MAX)
     status: Literal["draft", "in_progress"] | None = None
+    telehealth_modality: TelehealthModality | None = Field(
+        default=None,
+        description=(
+            "How a teleconsultation was conducted. Required when encounter_type is "
+            "'teleconsultation', and refused on any other type."
+        ),
+    )
+    billing_code: str | None = Field(default=None, max_length=_BILLING_CODE_MAX)
 
     _check_date = field_validator("encounter_date")(_validate_encounter_date)
     _check_prose = field_validator("presenting_complaint", "clinician_notes")(_clean_prose)
@@ -121,6 +144,15 @@ class EncounterAmend(BaseModel):
     presenting_complaint: str | None = Field(default=None, max_length=_COMPLAINT_MAX)
     clinician_notes: str | None = Field(default=None, max_length=_NOTES_MAX)
 
+    telehealth_modality: TelehealthModality | None = Field(
+        default=None,
+        description=(
+            "How a teleconsultation was conducted. Required when encounter_type is "
+            "'teleconsultation', and refused on any other type."
+        ),
+    )
+    billing_code: str | None = Field(default=None, max_length=_BILLING_CODE_MAX)
+
     _check_reason = field_validator("amendment_reason")(_validate_reason)
     _check_date = field_validator("encounter_date")(_validate_encounter_date)
     _check_prose = field_validator("presenting_complaint", "clinician_notes")(_clean_prose)
@@ -136,6 +168,8 @@ class EncounterResponse(BaseModel):
     encounter_type: EncounterType | None = None
     presenting_complaint: str | None = None
     clinician_notes: str | None = None
+    telehealth_modality: TelehealthModality | None = None
+    billing_code: str | None = None
     status: EncounterStatus
     signed_at: datetime | None = None
     signed_by_account_id: uuid.UUID | None = None

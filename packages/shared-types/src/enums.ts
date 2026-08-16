@@ -56,7 +56,16 @@ export type SafetyCheckType =
   // than as a property of the patient. A weight taken two years ago is a weight a growing child
   // has grown out of, and every mg/kg ceiling divided by it cleared silently.
   // See app.core.safety.check_weight_staleness.
-  | 'stale_weight';
+  | 'stale_weight'
+  // Three statements about the *format* of the consultation rather than about the drug or the
+  // patient — the same drug prescribed in clinic raises none of them. A remote consultation
+  // cannot administer an injection, cannot have a baseline blood level in hand at the moment
+  // the prescription is written, and on an audio-only call has not seen the patient at all.
+  // Raised only when the drug is being *started*: continuing established therapy remotely is
+  // the ordinary use of a teleconsultation. See app.core.telehealth.
+  | 'telehealth_in_person_required'
+  | 'telehealth_baseline_monitoring_required'
+  | 'telehealth_audio_only_initiation';
 
 export type ReasoningStatus =
   | 'created'

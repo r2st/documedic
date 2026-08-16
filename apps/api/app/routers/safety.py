@@ -12,6 +12,12 @@ from app.db.session import get_db
 from app.dependencies import get_current_account
 from app.models.user import Account
 from app.openapi import PATIENT_ERRORS
+from app.schemas.med_reconciliation import (
+    MedicationReconciliationRequest,
+    MedicationReconciliationResponse,
+    ReconciliationFlagResponse,
+    ReconciliationLineResponse,
+)
 from app.schemas.safety import (
     ActiveFlagsResponse,
     DrugSafetyOverrideRequest,
@@ -21,6 +27,7 @@ from app.schemas.safety import (
     SafetyFlagResponse,
 )
 from app.services.audit_service import AuditService
+from app.services.med_reconciliation_service import MedReconciliationService, ProposedLine
 from app.services.safety_service import SafetyService
 
 router = APIRouter(prefix="/patients/{patient_id}/drug-safety", tags=["drug-safety"])
@@ -100,6 +107,7 @@ async def check_medication(
         dose=body.dose,
         dose_unit=body.dose_unit,
         frequency=body.frequency,
+        modality=body.modality,
     )
     blocked = has_hard_block(flags)
     return SafetyCheckResponse(
@@ -181,6 +189,84 @@ async def active_flags(
     )
     await db.commit()
     return ActiveFlagsResponse(patient_id=patient_id, flags=flags)
+
+
+@router.post(
+    "/reconcile",
+    response_model=MedicationReconciliationResponse,
+    summary="Reconcile a whole proposed medication list against the chart",
+    responses=PATIENT_ERRORS,
+)
+async def reconcile_medications(
+    patient_id: uuid.UUID,
+    body: MedicationReconciliationRequest,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> MedicationReconciliationResponse:
+    """List-level reconciliation at a transition of care. Deterministic; no LLM on this path.
+
+    `POST ../check` asks whether one drug is safe for this patient. This asks what is different
+    between two medication lists, which is a question no number of single-drug checks answers.
+    Three of its findings are structurally unreachable from that endpoint:
+
+    * a charted drug **absent** from the proposed list — there is no drug to pass in, so the
+      check is not one that failed but one that was never called;
+    * an interaction between two drugs that are **both new** — checked singly, each is clean,
+      because neither is on the chart yet;
+    * the same molecule arriving **twice in one list**, typically as a brand on one line and its
+      INN on another.
+
+    Every proposed line is *also* put through the ordinary per-drug check, so allergies,
+    contraindications and renal/hepatic thresholds are evaluated exactly as they are on the
+    single-drug screen — and the hard blocks come back carrying the same `id`, so
+    `POST ../override` works against them unchanged. Nothing here writes to the chart: the
+    response is a comparison, and starting, stopping or changing a medication is still done
+    through the ordinary medication routes so that each carries its own reason.
+
+    A proposed name that resolves to no known drug does not fail the request; it is returned
+    under `unresolved_proposed` and counted out of `reconciled_count`. Refusing the whole list
+    over one unseeded brand would leave the clinician with no reconciliation at all, and the
+    remaining lines are where the omissions are.
+    """
+    result = await MedReconciliationService(db).reconcile(
+        account_id=account.id,
+        patient_id=patient_id,
+        proposed=[
+            ProposedLine(
+                name=med.name, dose=med.dose, dose_unit=med.dose_unit, frequency=med.frequency
+            )
+            for med in body.medications
+        ],
+        context=body.context,
+    )
+    await db.commit()
+    return MedicationReconciliationResponse(
+        patient_id=patient_id,
+        context=body.context,
+        lines=[
+            ReconciliationLineResponse.model_validate(line, from_attributes=True)
+            for line in result.lines
+        ],
+        list_flags=[
+            ReconciliationFlagResponse(
+                finding=flag.finding,
+                severity=flag.severity,
+                summary=flag.summary,
+                details=flag.details,
+                drug_interaction_id=_uuid(flag.drug_interaction_id),
+            )
+            for flag in result.list_flags
+        ],
+        safety_flags=[
+            _flag_to_response(f.flag, f.check_id, f.drug) for f in result.safety_findings
+        ],
+        is_blocked=result.has_hard_block,
+        proposed_count=len(body.medications),
+        charted_count=result.charted_count,
+        reconciled_count=result.reconciled_line_count,
+        unresolved_proposed=result.unresolved_proposed,
+        unresolved_charted=result.unresolved_charted,
+    )
 
 
 @router.post(
