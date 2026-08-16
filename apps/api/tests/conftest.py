@@ -27,6 +27,7 @@ from app.main import create_app
 from app.models import Base
 from app.services.auth_service import reset_sweep_schedule
 from app.services.guideline_service import reset_corpus_cache
+from app.services.summary_service import reset_summary_cache
 
 
 @pytest.fixture(autouse=True)
@@ -109,6 +110,21 @@ def _reset_guideline_corpus_cache():
     reset_corpus_cache()
     yield
     reset_corpus_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_clinical_summary_cache():
+    """Clear the process-wide summary narrative cache around every test.
+
+    Keyed on a hash of the prompt text, which is derived from chart content — and every test
+    builds a fresh in-memory database behind the same process, so two tests that chart the same
+    patient produce the same key. The second would read the first's prose without calling its
+    own stubbed provider, and the assertion it makes about that provider would pass for the
+    wrong reason. Same class of hazard as the guideline corpus cache above, and the same fix.
+    """
+    reset_summary_cache()
+    yield
+    reset_summary_cache()
 
 
 @pytest.fixture(autouse=True)

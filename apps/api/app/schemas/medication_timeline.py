@@ -7,6 +7,8 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
+from app.schemas.common import PaginationMeta
+
 
 class TimelineEntryOut(BaseModel):
     """One medication event, placed in its own drug's history."""
@@ -60,7 +62,16 @@ class TimelineDrugOut(BaseModel):
 
 class PrescriptionTimelineResponse(BaseModel):
     patient_id: uuid.UUID
-    # Current therapy first, then most recently touched, then by name.
+    # Current therapy first, then most recently touched, then by name. One page of them.
     medications: list[TimelineDrugOut] = Field(default_factory=list)
+    # Both counts are over the whole chart, before paging. Read `pagination.has_more` rather than
+    # comparing `len(medications)` to either.
     total_drugs: int = 0
     total_events: int = 0
+    pagination: PaginationMeta
+    # True when this chart holds more medication events than one call reads. The oldest were
+    # kept — every group's `started_on` and dose sequence is built forwards from them — so what
+    # is missing is the most recent activity. A prescribing history quietly missing its newest
+    # entries is indistinguishable from one that ended, which is why this is on the wire and not
+    # only in a log.
+    events_truncated: bool = False

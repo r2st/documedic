@@ -62,8 +62,11 @@ async def _event(db, patient: Patient, **fields) -> MedicationEvent:
     return row
 
 
-async def _timeline(db, patient: Patient):
-    return await PrescriptionTimelineService(db).timeline(patient.id)
+async def _timeline(db, patient: Patient, **kwargs):
+    """The page's drug groups. The tests below are about grouping, and every chart they build is
+    far inside one page — the bounds themselves are asserted in ``test_prescription_timeline_
+    bounds.py``, against charts built to exceed them."""
+    return (await PrescriptionTimelineService(db).timeline(patient.id, **kwargs)).drugs
 
 
 # --- grouping ---------------------------------------------------------------------------------
@@ -451,4 +454,13 @@ async def test_the_timeline_read_is_on_the_audit_trail(auth_client) -> None:
 
     entries = [e for e in trail["items"] if e["action"] == "prescription_timeline_viewed"]
     assert len(entries) == 1
-    assert set(entries[0]["payload"]) == {"drugs", "events"}
+    # The chart's totals plus what this particular request actually returned. Both, because the
+    # trail answers "how much of this patient's history was assembled for someone" — a page size
+    # is a fact about the client — and because a truncated assembly is a different disclosure
+    # from a complete one.
+    assert set(entries[0]["payload"]) == {
+        "drugs",
+        "events",
+        "returned_drugs",
+        "events_truncated",
+    }

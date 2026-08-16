@@ -220,6 +220,19 @@ class Settings(BaseSettings):
     # ceiling here would let a chatty provider turn a per-patient read into the most expensive
     # LLM route in the API.
     summary_max_tokens: int = 1500
+    # How long a summary written from an unchanged chart may be re-served, and how many are
+    # held. The cache key is a hash of the exact prompt the model is asked (see
+    # ``app.services.summary_service``), so **any** change to the chart — a drug started, a lab
+    # arriving, an allergy recorded — misses it. That is what makes caching clinical prose
+    # defensible at all; this TTL is a ceiling on how long a *correct* answer is reused, not the
+    # thing that keeps it correct.
+    #
+    # Five minutes because the value is in the burst: a ward-round tool opening the same chart on
+    # two screens, a clinician navigating back, a page that re-mounts. Beyond that the saving is
+    # small and the reason to hold patient-derived prose in memory gets weaker. Either at 0
+    # switches the cache off entirely, and the route simply pays for every call.
+    summary_cache_ttl_seconds: int = 300
+    summary_cache_max_entries: int = 256
 
     # --- Clinical measurement staleness ---
     # How old a recorded body weight may be before the deterministic engine says so on a chart
@@ -323,6 +336,38 @@ class Settings(BaseSettings):
     # live refresh token on a machine nobody remembers signing out of.
     session_max_concurrent: int = 10
 
+    # --- Step-up re-authentication ---
+    # How recently the person at the keyboard must have proved they hold the account password
+    # before the API will perform a *sensitive* operation — deleting a chart, importing charts
+    # in bulk, or exporting a whole record out of the system. See
+    # ``app.dependencies.require_recent_authentication`` for which routes, and why those.
+    #
+    # This is not a second factor and does not pretend to be one. It closes a narrower gap that
+    # this product's own deployment model opens: one practice login, used from a consulting room
+    # and a ward workstation, held signed in all day (``session_max_concurrent`` is 10 for
+    # exactly that reason). An access token on an unattended machine is therefore the normal
+    # state of the system rather than an incident, and the controls around it — idle timeout,
+    # absolute expiry, revocation — all measure *token* age, which is not the question. The
+    # question a wide disclosure has to answer is whether the person performing it is the person
+    # who signed in, and only a password re-prompt asks that.
+    #
+    # Fifteen minutes matches ``jwt_access_ttl_minutes``: long enough that a clinician who signs
+    # in and immediately exports a record is not asked twice in a row, short enough that a
+    # workstation left open over a coffee break has gone cold. Raising it weakens the control
+    # smoothly rather than suddenly, which is the right shape for a knob an operator will tune.
+    #
+    # 0 disables the prompt entirely. Permitted for development and refused in production by
+    # ``production_config_errors`` — a deployment holding real patient records must not be able
+    # to switch off the one check that distinguishes the clinician from whoever walked past.
+    reauthentication_max_age_minutes: int = 15
+
+    # --- Bulk patient import ---
+    # Most rows one CSV upload may carry. The import is synchronous — it validates every row,
+    # checks each against the charts already on the account, and writes in one transaction — so
+    # this is the bound that keeps it a request rather than a job. A practice migrating a larger
+    # list splits the file; the response names the ceiling when a file exceeds it.
+    patient_import_max_rows: int = 500
+
     # --- Reverse proxy ---
     # How many reverse proxies this deployment operates in front of the API. 0 means uvicorn
     # is exposed directly and ``X-Forwarded-For`` is ignored entirely (the safe default: the
@@ -383,6 +428,19 @@ class Settings(BaseSettings):
     # source. Set generously, because a shared hospital egress address carries everyone's
     # genuine resets — the same reasoning as login_max_failed_attempts_per_ip.
     rate_limit_password_resets_per_hour: int = 60
+    # Step-up re-authentication attempts, per account per hour. This is the ceiling that stands
+    # in for a lockout: `AuthService.reauthenticate` deliberately does not feed the login
+    # lockout, because its only possible callers are people at an already signed-in keyboard and
+    # a lockout there would hand a passer-by a way to deny a clinician their own record. Thirty
+    # is far above a working clinician's rate (the prompt appears on chart deletion, bulk import
+    # and whole-record export) and far below a useful guessing rate against a bcrypt hash.
+    rate_limit_reauthentications_per_hour: int = 30
+    # Bulk patient import, per account per hour. Small because this is an onboarding action, not
+    # a clinical one: a practice loads its list once, and each call may create
+    # `patient_import_max_rows` charts. A dry run costs the same ceiling as a real one on
+    # purpose — validating a 500-row file is the same work minus the writes, and letting dry
+    # runs go unmetered would leave the expensive half of the route uncapped.
+    rate_limit_patient_imports_per_hour: int = 10
     # The Phase 4 validation harness, and by far the most expensive route in the system: one
     # request replays every gold-standard vignette, and each vignette costs a full eight-agent
     # panel plus its intake rounds. A single POST therefore spends several times what the
@@ -618,8 +676,33 @@ def production_config_errors(cfg: "Settings") -> list[str]:
             "a delivery integration exists."
         )
     problems.extend(_llm_demo_fallback_errors(cfg))
+    problems.extend(_reauthentication_errors(cfg))
     problems.extend(_database_url_errors(cfg))
     return problems
+
+
+def _reauthentication_errors(cfg: "Settings") -> list[str]:
+    """Reject a production deployment with the step-up password prompt switched off.
+
+    ``REAUTHENTICATION_MAX_AGE_MINUTES=0`` removes the prompt from chart deletion, bulk import
+    and whole-record export. In development that is a convenience; in production it means an
+    access token found on an unlocked workstation can delete a chart or walk out with every
+    record on it, and nothing in the system ever asks whether the person holding the token is
+    the clinician who signed in.
+
+    Refused rather than clamped, for the reason every gate in this function is refused: an
+    operator who set this deliberately should find out at startup, not discover months later
+    from an audit trail that the control they believed was on had been off the whole time.
+    """
+    if not cfg.is_production or cfg.reauthentication_max_age_minutes > 0:
+        return []
+    return [
+        "REAUTHENTICATION_MAX_AGE_MINUTES must be greater than 0 in production. At 0 the "
+        "step-up password prompt is off, so deleting a chart, importing charts in bulk and "
+        "exporting a whole patient record need nothing but a live access token — which on this "
+        "product's shared-workstation deployment is the normal resting state of the system. "
+        "Set it to 15 (matching the access-token lifetime) unless you have a reason not to."
+    ]
 
 
 def _llm_demo_fallback_errors(cfg: "Settings") -> list[str]:

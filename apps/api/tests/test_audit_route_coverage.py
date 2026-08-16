@@ -56,8 +56,21 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
         "auth_password_reset_token_reused",
     ),
     ("DELETE", "/api/v1/auth/sessions/{session_id}"): ("auth_session_revoked",),
+    # The step-up prompt. Mutating in the strict sense — it writes `last_authenticated_at` —
+    # and both outcomes are recorded. The refusal is the one worth having: only a caller who
+    # already holds a valid access token can produce it, so it means a wrong password was typed
+    # at a signed-in workstation, which no other entry in this trail would show.
+    ("POST", "/api/v1/auth/reauthenticate"): (
+        "auth_reauthenticated",
+        "auth_reauthentication_failed",
+    ),
     # --- The chart itself.
     ("POST", "/api/v1/patients"): ("patient_created",),
+    # Both, and the pair is the point: each created chart writes its own `patient_created`, and
+    # `patients_imported` is the only row saying those N creations were one act by one clinician
+    # from one file. A dry run writes only the second, which is correct — nothing was created,
+    # and "who tried to load what into this account" is still a question the trail must answer.
+    ("POST", "/api/v1/patients/import"): ("patients_imported", "patient_created"),
     ("PATCH", "/api/v1/patients/{patient_id}"): ("patient_updated",),
     ("DELETE", "/api/v1/patients/{patient_id}"): ("patient_deleted",),
     # A POST because the search term is patient-identifying and must not reach a query string

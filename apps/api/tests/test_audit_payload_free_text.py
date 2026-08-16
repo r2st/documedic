@@ -473,6 +473,12 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "auth_refresh_token_reuse_detected": {"reused_session_id", "revoked_count"},
     "auth_session_revoked": {"session_id"},
     "auth_session_idle_expired": {"ip_address", "session_id"},
+    # The step-up prompt, both outcomes. Provenance only — no password material of any kind,
+    # not even a length. ``session_id`` because the proof is scoped to one sign-in: a run of
+    # failures against one session is a person at that keyboard guessing, which is precisely
+    # what this pair exists to make visible.
+    "auth_reauthenticated": {"ip_address", "session_id"},
+    "auth_reauthentication_failed": {"ip_address", "session_id"},
     "auth_logout": set(),
     "auth_logout_all": {"revoked_count"},
     # Two counts and the ceiling that produced them. No session ids and no addresses: the rows
@@ -521,6 +527,20 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # withdrawal were the same entry.
     "patient_updated": {"changed_fields", "consent_given"},
     "patient_deleted": {"soft_delete"},
+    # --- bulk import. Counts and file shape, and nothing from inside the file: every name in
+    # an imported list is a direct identifier, and the charts that were created carry their own
+    # ``patient_created`` entries. ``encoding`` and ``date_convention`` are how the file was
+    # *read* — if a chart later turns out to hold the wrong date of birth, this row is what says
+    # whether the importer read the file day-first or month-first when it made it.
+    "patients_imported": {
+        "dry_run",
+        "rows",
+        "created",
+        "skipped",
+        "invalid",
+        "encoding",
+        "date_convention",
+    },
     "patient_viewed": set(),
     "patient_record_viewed": set(),
     # ``format`` is the interchange format, ``resources`` a count. Neither is patient data, and
@@ -558,10 +578,21 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
         "labs",
         "encounters",
         "prescriber_framing_applied",
+        # Whether the prose came from the narrative cache. Load-bearing next to ``source``:
+        # ``source: "model"`` is what says the chart was sent to a third-party provider, and on
+        # a cache hit it was not — so without this the trail claims a processing event that did
+        # not happen.
+        "cached",
     },
-    # --- prescription timeline. Two counts. Drug names are the clinical content here and stay
-    # on the medication rows, where a reader of the chart finds them.
-    "prescription_timeline_viewed": {"drugs", "events"},
+    # --- prescription timeline. Counts and page shape. Drug names are the clinical content
+    # here and stay on the medication rows, where a reader of the chart finds them.
+    #
+    # ``drugs``/``events`` are the *chart's* totals and ``returned_drugs`` is what this request
+    # actually carried away, which are different facts: the first two say how much prescribing
+    # history was assembled, the third how much of it left. ``events_truncated`` says the
+    # assembly hit the read ceiling, so a reviewer can tell a complete disclosure from a partial
+    # one rather than reading a short answer as a short history.
+    "prescription_timeline_viewed": {"drugs", "events", "returned_drugs", "events_truncated"},
     # --- encounters. ``status`` is one of four lifecycle words from a closed vocabulary
     # (ck_encounters_status); ``fields`` is the *names* of the columns an edit touched, never
     # what they now say. The two id keys are the amendment link, which is the fact the trail has

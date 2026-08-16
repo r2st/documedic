@@ -62,6 +62,23 @@ class Session(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     family_started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # The last time the holder of this sign-in proved they know the password — the sign-in
+    # itself, or a later `POST /auth/reauthenticate`. Read by the step-up gate in
+    # `app.dependencies.require_recent_authentication`.
+    #
+    # A third timestamp on a row that already has three, because each answers a different
+    # question and no two of them are substitutes:
+    #   * `family_started_at` — when this sign-in began. Moves never.
+    #   * `last_used_at` — when a token was last exchanged. Moves on every rotation, and so
+    #     measures whether the *client* is alive, not whether a person is at it. A browser tab
+    #     left open refreshes on a timer.
+    #   * `last_authenticated_at` — when a *person* last typed the password. This one.
+    # Carried across rotation exactly like `family_started_at`, because rotating a token is not
+    # proof of anything about the person: if refresh re-stamped it, an idle tab would hold the
+    # step-up gate open indefinitely and the control would be decorative.
+    last_authenticated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
     account: Mapped[Account] = relationship(back_populates="sessions")
 

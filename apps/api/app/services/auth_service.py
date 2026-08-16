@@ -141,6 +141,7 @@ class AuthService:
         ip_address: str | None = None,
         user_agent: str | None = None,
         family_started_at: datetime | None = None,
+        last_authenticated_at: datetime | None = None,
     ) -> TokenResponse:
         """Mint an access/refresh pair, as a new sign-in or as the next link in a family.
 
@@ -159,12 +160,19 @@ class AuthService:
         :meth:`_enforce_concurrent_session_limit`. ``family_started_at`` is what tells the two
         cases apart: a rotation carries one and must not evict, because it has already revoked
         the row it is replacing and so leaves the count where it found it.
+
+        ``last_authenticated_at`` is carried the same way and for a sharper reason: it is what
+        the step-up gate reads, and rotating a refresh token is not evidence about the person
+        holding it. Re-stamping it here would mean a browser tab refreshing on a timer kept the
+        password prompt permanently satisfied, so a login stamps ``now`` and every rotation
+        after it inherits that moment unchanged. See ``Session.last_authenticated_at``.
         """
         if family_started_at is None:
             await self._enforce_concurrent_session_limit(account.id)
         refresh = generate_refresh_token()
         now = datetime.now(UTC)
         started = _aware(family_started_at) if family_started_at else now
+        authenticated = _aware(last_authenticated_at) if last_authenticated_at else now
         session = Session(
             account_id=account.id,
             token_hash=hash_token(refresh),
@@ -173,6 +181,7 @@ class AuthService:
             user_agent=user_agent,
             last_used_at=now,
             family_started_at=started,
+            last_authenticated_at=authenticated,
         )
         self.db.add(session)
         await self.db.flush()
@@ -432,10 +441,11 @@ class AuthService:
             await self.db.commit()
             raise SessionExpiredError(detail=f"session {session.id} idle past the timeout")
 
-        # Rotate: revoke the presented token, issue a new pair. Read before the flush below,
-        # because the new row inherits it and the old row is about to stop being the one the
-        # family is dated from.
+        # Rotate: revoke the presented token, issue a new pair. Both read before the flush
+        # below, because the new row inherits them and the old row is about to stop being the
+        # one the family is dated from.
         family_started_at = _aware(session.family_started_at)
+        last_authenticated_at = _aware(session.last_authenticated_at)
         session.is_revoked = True
         await self.db.flush()
         account = await self.db.get(Account, session.account_id)
@@ -449,6 +459,7 @@ class AuthService:
             ip_address=ip_address,
             user_agent=user_agent,
             family_started_at=family_started_at,
+            last_authenticated_at=last_authenticated_at,
         )
         await self.audit.record(
             action="auth_token_refreshed",
@@ -496,6 +507,80 @@ class AuthService:
                 entity_id=session.account_id,
                 payload={},
             )
+
+    # --- Step-up re-authentication -----------------------------------------------------------
+
+    async def reauthenticate(
+        self,
+        account: Account,
+        password: str,
+        *,
+        auth_session_id: uuid.UUID,
+        ip_address: str | None = None,
+    ) -> datetime:
+        """Re-prove the password for one live sign-in. Returns the new stamp.
+
+        Distinct from :meth:`login` in what it does *not* do: no token is minted, no session is
+        created, none is evicted, and the caller's access token is unchanged. The whole effect is
+        one column on one row — the sign-in named by the access token the request already carried.
+
+        Scoped to that one sign-in deliberately. Stamping the account, or every session on it,
+        would mean a clinician confirming their password on a phone also unlocked the ward
+        workstation someone else is standing at, which inverts the control: the gate exists to
+        ask about the person at *this* keyboard.
+
+        **A wrong guess here does not feed the login lockout.** It is audited, and it is metered
+        by its own rate-limit bucket, but ``_assert_not_locked_out`` is not consulted and no
+        ``auth_login_failed`` row is written. The reason is that this endpoint is reachable only
+        with a valid access token, so the *only* population that can drive it is someone at a
+        signed-in keyboard — and letting them lock the account would hand a passer-by a way to
+        deny a clinician their own record mid-shift by typing rubbish three times. The failed
+        attempts are on the trail, which is where a burst of them belongs.
+
+        No timing equalisation either, unlike ``login``: the account is already known to the
+        caller (it is theirs), so there is no enumeration oracle to close, and the one bcrypt
+        verification is the honest cost of the check.
+        """
+        session = await self.db.get(Session, auth_session_id)
+        if session is None or session.account_id != account.id:
+            # Unreachable through the dependency chain, which resolved this session id from a
+            # token whose subject is this account. Stated rather than assumed: this method
+            # writes an authorisation fact, and one that could be written against another
+            # account's sign-in is worth failing loudly instead of trusting a caller to pair
+            # them correctly. Same reasoning as `assert_auth_session_live`'s account_id check.
+            raise TokenError(
+                detail=(
+                    f"reauthenticate called with session {auth_session_id}, which does not "
+                    f"belong to account {account.id}"
+                )
+            )
+        if not await verify_password_async(password, account.password_hash):
+            await self.audit.record(
+                action="auth_reauthentication_failed",
+                account_id=account.id,
+                entity_type="account",
+                entity_id=account.id,
+                payload={"ip_address": ip_address, "session_id": str(auth_session_id)},
+            )
+            # Committed immediately, for the reason every refused-credential path here commits:
+            # the router's commit never runs once this raises, and a rollback would erase the
+            # one record that a wrong password was typed at a signed-in workstation.
+            await self.db.commit()
+            raise InvalidCredentialsError(
+                "That password was not recognised. Check it and try again.",
+                detail=f"step-up re-authentication rejected for account {account.id}",
+            )
+        now = datetime.now(UTC)
+        session.last_authenticated_at = now
+        await self.db.flush()
+        await self.audit.record(
+            action="auth_reauthenticated",
+            account_id=account.id,
+            entity_type="account",
+            entity_id=account.id,
+            payload={"ip_address": ip_address, "session_id": str(auth_session_id)},
+        )
+        return now
 
     # --- Password change and reset ---------------------------------------------------------
 
@@ -549,7 +634,11 @@ class AuthService:
             )
         account.password_hash = await hash_password_async(new_password)
         await self.db.flush()
-        revoked = await self.revoke_all_sessions(account.id, keep_refresh_token=keep_refresh_token)
+        revoked = await self.revoke_all_sessions(
+            account.id,
+            keep_refresh_token=keep_refresh_token,
+            stamp_kept_authenticated=True,
+        )
         # After the password is written, not before: only a change that actually happened
         # retires anything. The rejected-current-password branch above has already raised, so a
         # wrong guess at a borrowed keyboard cannot burn the clinician's reset link and deny
@@ -950,7 +1039,11 @@ class AuthService:
             return 0
 
     async def revoke_all_sessions(
-        self, account_id: uuid.UUID, *, keep_refresh_token: str | None = None
+        self,
+        account_id: uuid.UUID,
+        *,
+        keep_refresh_token: str | None = None,
+        stamp_kept_authenticated: bool = False,
     ) -> int:
         """Revoke every active session for an account, optionally keeping the caller's own
         current one alive. Returns the number of sessions revoked."""
@@ -959,6 +1052,14 @@ class AuthService:
         revoked = 0
         for session in sessions:
             if keep_hash is not None and session.token_hash == keep_hash:
+                if stamp_kept_authenticated:
+                    # A password change is a password proof, so the sign-in that survives it has
+                    # just re-authenticated. Without this the clinician who changed their
+                    # password — the strongest evidence of identity the product ever collects —
+                    # would be asked for it again by the step-up gate a minute later, purely
+                    # because the stamp only ever moved on sign-in. Off by default: the other
+                    # caller of this method is "sign out everywhere", which proves nothing.
+                    session.last_authenticated_at = datetime.now(UTC)
                 continue
             session.is_revoked = True
             revoked += 1

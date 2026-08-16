@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ from app.config import settings
 from app.core.client_address import client_address
 from app.core.timing import with_minimum_duration
 from app.db.session import get_db
-from app.dependencies import get_current_account, rate_limit_by_ip
+from app.dependencies import get_current_account, rate_limit, rate_limit_by_ip
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, errors
 from app.schemas.auth import (
@@ -23,6 +24,8 @@ from app.schemas.auth import (
     PasswordResetConfirm,
     PasswordResetRequest,
     PasswordResetResponse,
+    ReauthenticateRequest,
+    ReauthenticateResponse,
     RefreshRequest,
     SessionResponse,
     SignupRequest,
@@ -195,6 +198,51 @@ async def change_password(
     )
     await db.commit()
     return MessageResponse(message=f"Password changed. {revoked} other session(s) were signed out.")
+
+
+@router.post(
+    "/reauthenticate",
+    response_model=ReauthenticateResponse,
+    summary="Re-prove this account's password for a sensitive action",
+    responses=errors(401, 429),
+    dependencies=[Depends(rate_limit("reauthentication"))],
+)
+async def reauthenticate(
+    body: ReauthenticateRequest,
+    request: Request,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> ReauthenticateResponse:
+    """Confirm the password for the sign-in this request was made on, without signing in again.
+
+    Deleting a chart, importing charts in bulk and exporting a whole record are refused with
+    `403 reauthentication_required` when the password has not been typed within
+    `REAUTHENTICATION_MAX_AGE_MINUTES`. Answer that by POSTing here and retrying the original
+    request — the client keeps its tokens, nothing is rotated, and no other device is affected.
+
+    **What this changes is one timestamp on one sign-in.** Confirming on a phone does not unlock
+    a ward workstation signed in to the same account; the gate asks about the person at *this*
+    keyboard, so the answer is scoped to this keyboard.
+
+    A wrong password gives `401 invalid_credentials` and does **not** count towards the sign-in
+    lockout — only someone already holding a valid token can reach this route, and letting them
+    lock the account would give anyone passing an unattended screen a way to shut the clinician
+    out of their own records. Attempts are metered per account and both outcomes are audited.
+    """
+    ip_address, _user_agent = _client_meta(request)
+    authenticated_at = await AuthService(db).reauthenticate(
+        account,
+        body.password,
+        auth_session_id=request.state.auth_session_id,
+        ip_address=ip_address,
+    )
+    await db.commit()
+    window = timedelta(minutes=settings.reauthentication_max_age_minutes)
+    return ReauthenticateResponse(
+        authenticated_at=authenticated_at,
+        valid_until=authenticated_at + window,
+        valid_for_seconds=int(window.total_seconds()),
+    )
 
 
 @router.post(

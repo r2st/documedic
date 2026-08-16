@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependencies import get_current_account
+from app.dependencies import get_current_account, rate_limit, require_recent_authentication
 from app.exceptions import UnsupportedQueryParameterError
 from app.models.patient import Patient
 from app.models.user import Account
@@ -21,6 +21,12 @@ from app.schemas.patient import (
     PatientSummary,
     PatientUpdate,
 )
+from app.schemas.patient_import import (
+    COLUMN_HELP,
+    ImportRowResult,
+    PatientImportResponse,
+)
+from app.services.patient_import_service import PatientImportService
 from app.services.patient_service import PatientService
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -57,6 +63,84 @@ async def create_patient(
     """
     patient = await PatientService(db).create(account.id, body)
     return PatientResponse.model_validate(patient)
+
+
+@router.post(
+    "/import",
+    response_model=PatientImportResponse,
+    summary="Create charts in bulk from a CSV of demographics",
+    responses=AUTH_ERRORS | errors(403, 413, 429),
+    dependencies=[Depends(rate_limit("patient_import"))],
+)
+async def import_patients(
+    file: UploadFile = File(..., description="A CSV file. " + COLUMN_HELP),
+    dry_run: bool = Query(
+        default=False,
+        description=(
+            "Validate and report without writing anything. Costs the same rate-limit budget as "
+            "a real import."
+        ),
+    ),
+    account: Account = Depends(require_recent_authentication),
+    db: AsyncSession = Depends(get_db),
+) -> PatientImportResponse:
+    """Load a practice's patient list from a spreadsheet, one decided outcome per row.
+
+    Send the file as `multipart/form-data`. It is read as CSV — which is what every spreadsheet
+    exports, including Excel — in whichever of UTF-8, UTF-16 or CP1252 it decodes as, with the
+    delimiter (`,`, `;` or tab) taken from the header row. The response says which of each it
+    used, so a mangled name is diagnosable without experiment.
+
+    **`consent_given` is a required column and a row without it is not created.** Under the DPDP
+    Act consent is the lawful basis for holding these identifiers at all, so the bulk path
+    refuses exactly what the create form refuses. `yes`/`no`, `true`/`false` and `1`/`0` are all
+    read; anything else is reported rather than assumed.
+
+    **A row whose name is already on this account is never created**, and is reported as
+    `duplicate` (same name and date of birth) or `possible_duplicate` (same name, and one of the
+    two has no date of birth, so they cannot be told apart). There is no override: two charts for
+    one patient split their allergies and prescriptions across both, and every deterministic
+    safety check then runs against half a record. Rename or add a date of birth and upload again.
+
+    **Ambiguous dates are refused, not guessed.** `03/04/1990` is 3 April in one locale's export
+    and 4 March in another's, and a wrong date of birth changes which dose ceiling a child's
+    prescription is judged against. The order is inferred from the file's own unambiguous rows —
+    any date with a component over 12 settles it for the whole file — and rows that nothing
+    settles are refused individually asking for `YYYY-MM-DD`. A file that proves both orders is
+    refused whole.
+
+    Partial success is the normal outcome: valid rows are created even when others are refused,
+    so a file with three bad lines does not have to be uploaded again in full. Use `dry_run=true`
+    to see the same report with nothing written.
+
+    **Needs a recent password** (`403 reauthentication_required`): this route creates charts in
+    bulk from a signed-in workstation. Every chart created is audited as `patient_created` as
+    usual, and the upload itself as `patients_imported`.
+    """
+    raw = await file.read()
+    result = await PatientImportService(db).import_csv(account.id, raw, dry_run=dry_run)
+    return PatientImportResponse(
+        dry_run=result.dry_run,
+        total_rows=result.total_rows,
+        created=result.created,
+        skipped=result.skipped,
+        invalid=result.invalid,
+        encoding=result.encoding,
+        delimiter=result.delimiter,
+        date_convention=result.date_convention,
+        unknown_columns=list(result.unknown_columns),
+        rows=[
+            ImportRowResult(
+                row_number=row.row_number,
+                status=row.status,
+                full_name=row.full_name,
+                patient_id=row.patient_id,
+                existing_patient_id=row.existing_patient_id,
+                message=row.message,
+            )
+            for row in result.rows
+        ],
+    )
 
 
 @router.get(
@@ -158,17 +242,23 @@ async def update_patient(
     "/{patient_id}",
     response_model=MessageResponse,
     summary="Withdraw a patient chart from use",
-    responses=PATIENT_ERRORS,
+    responses=PATIENT_ERRORS | errors(403),
 )
 async def delete_patient(
     patient_id: uuid.UUID,
-    account: Account = Depends(get_current_account),
+    account: Account = Depends(require_recent_authentication),
     db: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Soft delete: the chart stops appearing and stops resolving, and the deletion is audited.
 
     The rows survive underneath, because the audit trail is append-only and its hash chain
     references them — a clinical record that can be made to vanish is not an audit trail.
+
+    **Needs a recent password.** Returns `403 reauthentication_required` when the password has
+    not been confirmed within `REAUTHENTICATION_MAX_AGE_MINUTES`; POST `/auth/reauthenticate`
+    and retry. This is the one route that takes a whole chart out of clinical use with a single
+    call, and it is reachable from any signed-in workstation — which on this product's shared
+    login is a screen someone else may be standing at.
     """
     await PatientService(db).soft_delete(account.id, patient_id)
     return MessageResponse(message="Patient deleted")

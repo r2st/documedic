@@ -35,6 +35,14 @@ AUDIT_ACTIONS = (
     "auth_session_evicted",
     "auth_password_changed",
     "auth_password_change_failed",
+    # The step-up prompt in front of chart deletion, bulk import and whole-record export. Both
+    # outcomes are here, and the failure is the more interesting of the two: it can only be
+    # produced by someone who already holds a live access token, so a run of them is a person
+    # at a signed-in workstation guessing at the password of the clinician who left it open.
+    # That is precisely the event this gate exists to notice, and nothing else in the trail
+    # would show it — the sign-in was legitimate and the tokens are valid.
+    "auth_reauthenticated",
+    "auth_reauthentication_failed",
     # The reset flow. All four are recorded even though the endpoint tells the caller nothing:
     # the response is deliberately identical whether the address exists, is over its ceiling, or
     # got a token, so the trail is the *only* place a burst of reset attempts against one
@@ -53,6 +61,13 @@ AUDIT_ACTIONS = (
     "patient_created",
     "patient_updated",
     "patient_deleted",
+    # One CSV upload, as a single event. The charts it creates each write their own
+    # ``patient_created`` row — this is the row that says those N creations were one act by one
+    # clinician from one file, which is not recoverable from N individual entries that look
+    # exactly like N charts typed in by hand. It is also written when nothing was created: a
+    # file that was entirely rejected, or a dry run, is a disclosure-free event that still
+    # answers "who tried to load what into this account, and when".
+    "patients_imported",
     # The encounter lifecycle. ``encounter_signed`` is the one that matters most: it is the
     # moment a clinician attested to a visit note, and from then on the row's content cannot
     # change. ``encounter_amended`` is written against the *superseded* encounter — the original

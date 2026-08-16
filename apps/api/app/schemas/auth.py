@@ -87,6 +87,28 @@ class PasswordResetConfirm(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
+class ReauthenticateRequest(BaseModel):
+    """The password, and nothing else. No email: this route is authenticated, so which account
+    is being re-proved is already settled by the token — accepting an address would invite a
+    caller to name a different one."""
+
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class ReauthenticateResponse(BaseModel):
+    """When the proof was taken and when it lapses.
+
+    ``valid_until`` is returned so a client can decide whether to prompt *before* sending a
+    request it expects to be refused, rather than discovering it from a 403 halfway through a
+    chart deletion. It is advisory: the server re-derives the window from configuration on every
+    gated request, so a client that ignores this is simply prompted at the moment of use."""
+
+    authenticated_at: datetime
+    valid_until: datetime
+    # The configured window, so a client need not infer it by subtracting the two above.
+    valid_for_seconds: int
+
+
 class SessionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -96,3 +118,9 @@ class SessionResponse(BaseModel):
     created_at: datetime
     last_used_at: datetime
     expires_at: datetime
+    # When a person last proved the password on this sign-in — the sign-in itself, or a later
+    # step-up prompt. On the session list because that list is the "where am I signed in?"
+    # screen: a row whose token was refreshed a minute ago but whose password was last typed
+    # nine hours back is exactly the unattended workstation the step-up gate is about, and
+    # `last_used_at` alone makes it look like the liveliest session on the account.
+    last_authenticated_at: datetime

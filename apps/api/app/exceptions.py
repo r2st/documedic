@@ -129,6 +129,26 @@ class ForbiddenError(AetherError):
     code = "forbidden"
 
 
+class ReauthenticationRequiredError(AetherError):
+    """Confirm your password to continue. This action needs it because of what it does to the
+    record, and it has been a while since you signed in.
+
+    A 403 rather than a 401, and the distinction is the whole point of the class. A 401 means
+    "your credential is not good"; every client in this codebase answers one by rotating its
+    refresh token and retrying, and the frontend answers a failed rotation by signing the
+    clinician out. Neither is right here: the access token is perfectly valid, the sign-in is
+    live, and nothing about it should be discarded. What is being asked for is a fresh proof
+    that the person at the keyboard is the person the token belongs to, which is one password
+    prompt and not a re-login. Sending a 401 would have logged clinicians out of a session that
+    was never in question.
+
+    ``retry_after`` is deliberately absent for the same reason: this does not clear by waiting.
+    """
+
+    status_code = 403
+    code = "reauthentication_required"
+
+
 class TooManyAttemptsError(AetherError):
     """Too many failed attempts. Try again later."""
 

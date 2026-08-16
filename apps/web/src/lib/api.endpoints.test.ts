@@ -495,4 +495,76 @@ describe('exportPatientRecord', () => {
     await expect(api.exportPatientRecord('pat-1')).rejects.toBeInstanceOf(ApiError);
     expect(click).not.toHaveBeenCalled();
   });
+
+  it('carries the API error code through, so the caller can tell the refusals apart', async () => {
+    // This threw a fixed `export_error` with the bare HTTP status text, which was survivable
+    // while every failure here meant "it did not work". It stopped being survivable when one of
+    // them started meaning "confirm your password and try again": the patient page branches on
+    // this code to show the prompt instead of an error banner, and a discarded code makes that
+    // branch unreachable.
+    seedTokens('a1');
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse(
+        { code: 'reauthentication_required', message: 'Confirm your password to continue.' },
+        403,
+      ),
+    );
+
+    await expect(api.exportPatientRecord('pat-1')).rejects.toMatchObject({
+      status: 403,
+      code: 'reauthentication_required',
+      message: 'Confirm your password to continue.',
+    });
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the status text when the error body is not JSON', async () => {
+    seedTokens('a1');
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('<html>502</html>', { status: 502 }));
+
+    await expect(api.exportPatientRecord('pat-1')).rejects.toMatchObject({
+      status: 502,
+      code: 'export_error',
+    });
+  });
+});
+
+describe('reauthenticate', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('posts only the password, because the token already names the account', async () => {
+    seedTokens('a1');
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        authenticated_at: '2026-08-15T10:00:00Z',
+        valid_until: '2026-08-15T10:15:00Z',
+        valid_for_seconds: 900,
+      }),
+    );
+
+    const result = await api.reauthenticate('password123');
+
+    const call = callAt(0);
+    expect(call.url).toBe(`${PREFIX}/auth/reauthenticate`);
+    expect(call.method).toBe('POST');
+    expect(call.json).toEqual({ password: 'password123' });
+    expect(result.valid_for_seconds).toBe(900);
+  });
+
+  it('leaves the stored tokens alone on success and on failure', async () => {
+    // Confirming a password is not signing in. Nothing is rotated, so a client that cleared or
+    // replaced its tokens here would sign the clinician out of a session that was never in
+    // question — which is the whole reason the API answers 403 and not 401.
+    seedTokens('a1', 'r1');
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ code: 'invalid_credentials', message: 'Not recognised.' }, 401),
+    );
+
+    await expect(api.reauthenticate('wrong')).rejects.toBeInstanceOf(ApiError);
+    expect(tokenStore.refresh).toBe('r1');
+  });
 });

@@ -57,6 +57,53 @@ describe('api requests', () => {
     vi.unstubAllGlobals();
   });
 
+  it('rotates and retries when a 401 means the access token has expired', async () => {
+    tokenStore.set({
+      access_token: 'stale',
+      refresh_token: 'r1',
+      token_type: 'bearer',
+      expires_in: 900,
+    });
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse({ code: 'invalid_token', message: 'expired' }, 401))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access_token: 'fresh',
+          refresh_token: 'r2',
+          token_type: 'bearer',
+          expires_in: 900,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: 'acc-1', email: 'doc@example.com' }));
+
+    await api.me();
+
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(3);
+    expect(tokenStore.access).toBe('fresh');
+  });
+
+  it('does not rotate when a 401 is about credentials in the request body', async () => {
+    // A wrong current password on `/auth/password`, or a wrong password on the step-up prompt.
+    // The bearer token is fine, so there is nothing a rotation could fix — and rotating anyway
+    // is not merely wasteful: a failed exchange clears the token store, which would sign a
+    // clinician out of a live session for mistyping their own password.
+    tokenStore.set({
+      access_token: 'a1',
+      refresh_token: 'r1',
+      token_type: 'bearer',
+      expires_in: 900,
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ code: 'invalid_credentials', message: 'Not recognised.' }, 401),
+    );
+
+    await expect(api.reauthenticate('wrong')).rejects.toBeInstanceOf(ApiError);
+
+    // One call: the attempt itself. No refresh, no retry.
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+    expect(tokenStore.refresh).toBe('r1');
+  });
+
   it('login stores the returned tokens', async () => {
     const tokens = {
       access_token: 'a1',

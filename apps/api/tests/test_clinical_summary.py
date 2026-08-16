@@ -441,6 +441,9 @@ async def test_the_audit_payload_carries_counts_and_never_clinical_content(auth_
         "labs",
         "encounters",
         "prescriber_framing_applied",
+        # Beside `source`, and needed by it: `source: "model"` is what tells a DPDP reviewer the
+        # chart was sent to a third-party provider, and a cache hit did not send it anywhere.
+        "cached",
     }
     assert all(
         not isinstance(value, str) or value in {"model", "deterministic", "empty"}

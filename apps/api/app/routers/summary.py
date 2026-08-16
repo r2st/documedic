@@ -81,6 +81,11 @@ async def get_summary(
             "labs": len(result["chart"]["recent_labs"]),
             "encounters": len(result["chart"]["recent_encounters"]),
             "prescriber_framing_applied": result["prescriber_framing_applied"],
+            # Whether the prose was written for this read or re-served from the narrative cache.
+            # Not a performance note: `source: "model"` is what tells a DPDP reviewer the chart
+            # was sent to a third-party provider, and on a cache hit it was not. Without this
+            # the trail would claim a processing event that did not happen, on every hit.
+            "cached": result["cached"],
         },
     )
     await db.commit()

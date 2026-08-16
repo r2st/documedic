@@ -34,9 +34,13 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
     ),
     403: (
         "Authenticated, but not permitted. `code` is `forbidden` when this account does not "
-        "have access to the record, and `consent_withdrawn` when the patient has withdrawn "
+        "have access to the record, `consent_withdrawn` when the patient has withdrawn "
         "consent — the chart stays readable, but nothing new may be added to it and the "
-        "reasoning engine may not be run over it until consent is re-recorded (DPDP Act)."
+        "reasoning engine may not be run over it until consent is re-recorded (DPDP Act) — and "
+        "`reauthentication_required` when the action needs a password confirmed more recently "
+        "than this sign-in has one. The last of those is not a broken session and must not be "
+        "answered by rotating tokens or signing the clinician out: POST "
+        "`/auth/reauthenticate` with the password and retry the original request."
     ),
     404: (
         "No such record, or it belongs to another account — the two are deliberately "
@@ -56,6 +60,12 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
         "of it was asked for, `extraction_already_approved` when re-reading a document whose "
         "extracted details are already merged into the record was asked for, `conflict` "
         "otherwise."
+    ),
+    413: (
+        "The request body is larger than this route accepts. `code` is `request_too_large` "
+        "when the whole-body ceiling refused it on the envelope, before anything read it, and "
+        "`file_too_large` when the upload route's own rule refused a file it had begun reading. "
+        "Neither stored anything; split the upload rather than retrying it."
     ),
     429: (
         "Rate limited. `code` is `rate_limited` when a per-account ceiling on work that costs "

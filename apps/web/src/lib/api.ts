@@ -73,21 +73,33 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
 
   const resp = await fetch(`${PREFIX}${path}`, { ...options, headers });
 
-  if (resp.status === 401 && retry && tokenStore.refresh) {
-    const refreshed = await tryRefresh();
-    if (refreshed) return request<T>(path, options, false);
-  }
-
   if (!resp.ok) {
     let code = 'error';
     let message = resp.statusText;
     try {
-      const body = await resp.json();
+      const body = await resp.clone().json();
       code = body.code ?? code;
       message = body.message ?? body.detail ?? message;
     } catch {
       /* non-JSON error */
     }
+
+    // A 401 usually means the access token has expired, and rotating then retrying is the
+    // right answer. `invalid_credentials` is the exception, and reading the code before
+    // reaching for `tryRefresh` is the whole point of parsing the body first.
+    //
+    // That code means the credentials *in the request body* were rejected — the current
+    // password on `/auth/password`, the password on `/auth/reauthenticate`. The bearer token
+    // is fine, so there is nothing for a rotation to fix, and rotating anyway is not merely
+    // wasteful: `exchangeRefreshToken` clears the token store when an exchange fails, so a
+    // clinician who mistyped their password could be signed out of a session that was never in
+    // question, on nothing worse than a typo.
+    const tokenMayBeStale = code !== 'invalid_credentials';
+    if (resp.status === 401 && tokenMayBeStale && retry && tokenStore.refresh) {
+      const refreshed = await tryRefresh();
+      if (refreshed) return request<T>(path, options, false);
+    }
+
     throw new ApiError(resp.status, code, message);
   }
   if (resp.status === 204) return undefined as T;
@@ -208,6 +220,20 @@ export const api = {
   /** Proactively rotate the access/refresh pair (used for scheduled, idle-free refresh). */
   refreshAccessToken: () => tryRefresh(),
 
+  /**
+   * Re-prove the password for the current sign-in, without signing in again.
+   *
+   * Answers a `403 reauthentication_required` from a sensitive route (deleting a chart,
+   * importing charts in bulk, exporting a whole record). Nothing is rotated and no other device
+   * is affected — the effect is one timestamp on this sign-in — so a caller answers by
+   * confirming and retrying the original request, never by clearing tokens.
+   */
+  reauthenticate: (password: string) =>
+    request<{ authenticated_at: string; valid_until: string; valid_for_seconds: number }>(
+      '/auth/reauthenticate',
+      { method: 'POST', body: JSON.stringify({ password }) },
+    ),
+
   // --- Session management ---
   listSessions: () =>
     request<
@@ -218,6 +244,10 @@ export const api = {
         created_at: string;
         last_used_at: string;
         expires_at: string;
+        /** When a person last typed the password on this sign-in, as opposed to when a client
+         * last used a token. A row refreshed a minute ago whose password was typed nine hours
+         * back is an unattended workstation, and `last_used_at` alone hides that. */
+        last_authenticated_at: string;
       }>
     >('/auth/sessions'),
   revokeSession: (sessionId: string) =>
@@ -398,7 +428,20 @@ export const api = {
     }
 
     if (!resp.ok) {
-      throw new ApiError(resp.status, 'export_error', resp.statusText);
+      // The envelope is read rather than assumed. This threw a fixed `export_error` with the
+      // bare HTTP status text, which was survivable while every failure here meant "it did not
+      // work" — and stopped being survivable when one of them started meaning "confirm your
+      // password and try again". A caller cannot branch on a code the client discarded.
+      let code = 'export_error';
+      let message = resp.statusText;
+      try {
+        const body = await resp.json();
+        code = body.code ?? code;
+        message = body.message ?? message;
+      } catch {
+        /* the error body is not JSON; the status text is all there is */
+      }
+      throw new ApiError(resp.status, code, message);
     }
 
     const blob = await resp.blob();
@@ -417,7 +460,8 @@ export const api = {
     current_password: string;
     new_password: string;
     keep_current_refresh_token?: string | null;
-  }) => request<{ message: string }>(`/auth/password`, { method: 'POST', body: JSON.stringify(body) }),
+  }) =>
+    request<{ message: string }>(`/auth/password`, { method: 'POST', body: JSON.stringify(body) }),
 
   requestPasswordReset: (email: string) =>
     request<{ message: string; reset_token: string | null }>(`/auth/password-reset/request`, {

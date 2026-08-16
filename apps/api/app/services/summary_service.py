@@ -42,7 +42,9 @@ than 503ing. A clinician who cannot get the prose can still get the facts.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -60,6 +62,7 @@ from app.core.clinical import age_from_dob
 from app.core.clinical_language import prescriber_framed, prescriber_framed_list
 from app.core.dates import is_plausible_clinical_date
 from app.core.safety import CONDITION_RESOLVED_STATUSES
+from app.core.ttl_cache import TTLCache
 from app.models.allergy import Allergy
 from app.models.condition import Condition
 from app.models.encounter import Encounter
@@ -87,6 +90,58 @@ _LIST_FIELDS = (
     "recent_encounters",
     "record_gaps",
 )
+
+
+# --- The narrative cache ---------------------------------------------------------------------
+#
+# The summary is the only per-patient read in this API that costs a provider call, and it is the
+# shape a ward-round tool or a handover screen is most tempted to fire on every page load. Two
+# clinicians opening the same chart ten minutes apart, or one clinician navigating back to it,
+# paid for the same paragraph twice.
+#
+# **What makes caching a clinical summary safe is the key, and only the key.** Serving stale
+# prose about a patient is the worst failure this module could have — a handover that omits an
+# allergy charted five minutes ago is not a slow response, it is a wrong one. So the key is not
+# the patient id with a short TTL and a hope; it is a hash of ``_prompt_text(facts)``, which is
+# the exact string the model is asked about. If the key matches, the model would be asked a
+# byte-identical question, so the answer already held is the answer it would give. Anything that
+# changes the chart — a drug started, a lab arriving, an allergy recorded, a visit charted —
+# changes that string and therefore misses the cache. There is no invalidation to forget,
+# because there is no table to enumerate.
+#
+# Derived from the *prompt* rather than from the source rows deliberately. A fingerprint built by
+# listing tables is only correct while someone remembers to add the next table to the list, and
+# the failure mode of forgetting is silent and clinical. This one cannot be wrong about its own
+# inputs.
+#
+# The prompt template and the token ceiling are in the key for the same reason: change either and
+# the same chart is a different question. The patient id is in it too — two patients with
+# identical charts would get equally valid prose, but a cache that quietly shares entries between
+# records is not a property anyone should have to discover.
+_narrative_cache: TTLCache[tuple[dict[str, Any], datetime]] = TTLCache(
+    max_entries=settings.summary_cache_max_entries,
+    ttl_seconds=settings.summary_cache_ttl_seconds,
+)
+
+
+def reset_summary_cache() -> None:
+    """Drop everything held. For tests, and for anything that must be sure nothing is retained."""
+    _narrative_cache.clear()
+
+
+def _cache_key(patient_id: uuid.UUID, prompt_text: str) -> str:
+    digest = hashlib.sha256()
+    for part in (
+        str(patient_id),
+        CLINICAL_SUMMARY,
+        str(settings.summary_max_tokens),
+        prompt_text,
+    ):
+        # Length-prefixed, so two different tuples of parts cannot serialise to the same bytes.
+        digest.update(str(len(part)).encode())
+        digest.update(b"\x00")
+        digest.update(part.encode())
+    return digest.hexdigest()
 
 
 def _iso(value: datetime | date | None) -> str | None:
@@ -126,6 +181,18 @@ class ChartFacts:
         )
 
 
+@dataclass
+class Narrative:
+    """The prose half of a summary, with the two facts a reader needs about its provenance."""
+
+    fields: dict[str, Any]
+    # "model", "deterministic" or "empty" — see :meth:`ClinicalSummaryService._narrate`.
+    source: str
+    # When these words were written. Not when they were served: see ``summarize``.
+    written_at: datetime
+    cached: bool = False
+
+
 class ClinicalSummaryService:
     """Assemble a chart, then narrate it. Never the other way round."""
 
@@ -142,21 +209,29 @@ class ClinicalSummaryService:
         computed the same way.
         """
         facts = await self.chart_facts(patient)
-        narrative, source = await self._narrate(facts)
-        framed, reframed = _frame(narrative)
+        narrated = await self._narrate(facts)
+        framed, reframed = _frame(narrated.fields)
         return {
             "patient_id": patient.id,
-            "generated_at": datetime.now(UTC),
+            # When the prose was *written*, which for a cache hit is not now. Stamping the
+            # response time would have a re-read of an unchanged chart claim to be a fresh
+            # reading of it, and "how old is this summary" is a question a clinician on a ward
+            # round is entitled to a true answer to.
+            "generated_at": narrated.written_at,
             # Deliberately first in the response body as well as in the code: evidence before
             # conclusion, which is Rule #6 applied to a paragraph.
             "chart": _serialise(facts),
             "summary": framed,
-            "source": source,
-            "degraded": source != "model",
+            "source": narrated.source,
+            "degraded": narrated.source != "model",
             # Whether the deterministic Rule #4 control had to rewrite anything the model wrote.
             # Surfaced rather than swallowed: it is a fact about the provider on this call, and
             # the only place a prompt being ignored is visible.
             "prescriber_framing_applied": reframed,
+            # Whether this paragraph was written for this request or served from the narrative
+            # cache. On the wire rather than in a log: it is a fact about what the clinician is
+            # reading, and the `generated_at` beside it only makes sense with it.
+            "cached": narrated.cached,
         }
 
     async def chart_facts(self, patient: Patient) -> ChartFacts:
@@ -290,8 +365,8 @@ class ClinicalSummaryService:
         ]
         return facts
 
-    async def _narrate(self, facts: ChartFacts) -> tuple[dict[str, Any], str]:
-        """``(summary fields, how they were produced)``.
+    async def _narrate(self, facts: ChartFacts) -> Narrative:
+        """The summary fields, how they were produced, and when.
 
         Three sources, and the caller is told which: ``model`` (a provider answered),
         ``deterministic`` (none did, so the chart is restated without prose), and ``empty`` (an
@@ -308,16 +383,28 @@ class ClinicalSummaryService:
         ``degraded`` asking "is a key configured" rather than "did the call work".
         """
         if facts.is_empty():
-            return _empty_summary(), "empty"
+            return Narrative(_empty_summary(), "empty", datetime.now(UTC))
         if not available_providers():
-            return _deterministic_summary(facts), "deterministic"
+            return Narrative(_deterministic_summary(facts), "deterministic", datetime.now(UTC))
+
+        prompt_text = _prompt_text(facts)
+        key = _cache_key(facts.patient_id, prompt_text)
+        held = _narrative_cache.get(key)
+        if held is not None:
+            fields, written_at = held
+            # A copy, because `_frame` rewrites in place and the cached object outlives this
+            # request. Without it the first framing pass would mutate the stored narrative and
+            # every later hit would report `prescriber_framing_applied: false` for a rewrite that
+            # had in fact happened — the one signal that says a model ignored Rule #4.
+            return Narrative(deepcopy(fields), "model", written_at, cached=True)
+
         result = await complete_json_off_loop(
             LLMClient(max_tokens=settings.summary_max_tokens),
             CLINICAL_SUMMARY,
-            "Patient record to summarise:\n" + fenced("patient record", _prompt_text(facts)),
+            "Patient record to summarise:\n" + fenced("patient record", prompt_text),
         )
         if not isinstance(result, dict) or result.get("_demo"):
-            return _deterministic_summary(facts), "deterministic"
+            return Narrative(_deterministic_summary(facts), "deterministic", datetime.now(UTC))
         narrative = {
             "overview": as_text(result.get("overview")),
             **{field_name: _string_list(result.get(field_name)) for field_name in _LIST_FIELDS},
@@ -326,8 +413,13 @@ class ClinicalSummaryService:
             # A provider that answered with a well-formed object containing nothing. Serving it
             # would present an empty handover for a chart that has content on it, which reads as
             # "there is nothing here" rather than as "the summary failed".
-            return _deterministic_summary(facts), "deterministic"
-        return narrative, "model"
+            return Narrative(_deterministic_summary(facts), "deterministic", datetime.now(UTC))
+        written_at = datetime.now(UTC)
+        # Only a model answer is stored. The other two are assembled from rows already in hand
+        # and cost nothing worth saving — and caching a degraded answer would make an outage
+        # outlive itself, serving "the provider was down" for minutes after it came back.
+        _narrative_cache.put(key, (deepcopy(narrative), written_at))
+        return Narrative(narrative, "model", written_at)
 
 
 def _string_list(value: Any) -> list[str]:

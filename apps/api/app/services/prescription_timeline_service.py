@@ -37,6 +37,27 @@ this": the record holds prescribing events, not dispensing or ingestion, and the
 between them is exactly where a confident-sounding inference would be wrong.
 
 Deterministic and offline — a query and a regrouping, no LLM anywhere on this path.
+
+Bounded, in two independent places
+----------------------------------
+This read is a whole-chart read, and it was unbounded in both directions: every medication event
+the chart holds was loaded, grouped, and serialised into one response. That is fine for the
+twelve-event chart it was written against and wrong as a shape — a patient with twenty years of
+prescribing, or one whose list arrived through the bulk importer, is the same route returning
+megabytes assembled in memory, on the ordinary authenticated rate budget. The paged chart read
+(``GET ../record``) and the FHIR export both bounded themselves; this one, added later, did not.
+
+The two bounds are separate because they solve different problems and neither implies the other:
+
+* ``EVENT_CEILING`` bounds the **rows read**, before any grouping. It has to be a ceiling on the
+  read rather than a page, because every figure a group reports — ``started_on``, the dose
+  changes, ``is_current`` — is computed *across* the whole group, so paging the SQL would produce
+  groups that are confidently wrong rather than visibly short. When it is hit the response says
+  so (``events_truncated``), because a prescribing history missing its oldest half is
+  indistinguishable from a shorter history, and that is a clinical difference.
+* ``limit``/``offset`` page the **drug groups** returned, after grouping. That is what keeps a
+  response bounded for a chart on forty drugs, and it is safe precisely because it happens after
+  every per-group figure has been computed from the full set.
 """
 
 from __future__ import annotations
@@ -128,17 +149,57 @@ class TimelineDrug:
         return self.generic_name or self.brand_name_raw or "unnamed medication"
 
 
+@dataclass
+class Timeline:
+    """One page of drug groups, and what the whole chart holds behind it."""
+
+    drugs: list[TimelineDrug]
+    # Before paging, both of them. `total_events` counts the events in every group, not only the
+    # ones on this page, so it answers "how much prescribing is on this chart" rather than "how
+    # much did you just send me".
+    total_drugs: int
+    total_events: int
+    # True when the chart holds more events than EVENT_CEILING and the oldest were kept. Carried
+    # to the wire: a history missing its most recent entries reads exactly like a history that
+    # ended, and a clinician must not have to guess which they are looking at.
+    events_truncated: bool
+
+
+# How many medication events one call will read before it stops. Sized so that no real chart
+# reaches it — a patient on ten drugs for twenty years, re-prescribed monthly, is about 2,400
+# events — while still bounding what a chart assembled by a broken importer or an automated
+# ingest can cost a single request.
+EVENT_CEILING = 5000
+
+# Drug groups per page, and the ceiling a client may ask for. Both are about response size rather
+# than database work: the events are already read and grouped by the time paging applies. Twenty
+# five is more drugs than a chart normally carries, so the ordinary request is one page.
+DEFAULT_DRUG_LIMIT = 25
+MAX_DRUG_LIMIT = 200
+
+
 class PrescriptionTimelineService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def timeline(self, patient_id: uuid.UUID) -> list[TimelineDrug]:
-        """Every medication event for this chart, grouped by drug and ordered within each group.
+    async def timeline(
+        self,
+        patient_id: uuid.UUID,
+        *,
+        limit: int = DEFAULT_DRUG_LIMIT,
+        offset: int = 0,
+    ) -> Timeline:
+        """This chart's prescribing history, grouped by drug, as one page of groups.
 
         Three queries regardless of how many drugs the chart holds: the events, the vocabulary
         rows they point at, and the encounters they were recorded at. The per-row alternative
         would be an N+1 on the two lookups, which is the shape this codebase has removed from
         the safety path twice.
+
+        ``limit``/``offset`` page the **groups**, and every figure inside a group is still
+        computed from every event the ceiling let through — see the module docstring for why
+        those are two different bounds. ``Timeline.total_drugs`` and ``total_events`` are the
+        counts before paging, so a short page and a last page are distinguishable.
         """
         rows = list(
             (
@@ -159,13 +220,24 @@ class PrescriptionTimelineService:
                         MedicationEvent.created_at.asc(),
                         MedicationEvent.id,
                     )
+                    # One past the ceiling, so "we read exactly the ceiling" and "there was
+                    # more" are distinguishable without a second COUNT over the same rows.
+                    .limit(EVENT_CEILING + 1)
                 )
             )
             .scalars()
             .all()
         )
+        events_truncated = len(rows) > EVENT_CEILING
+        if events_truncated:
+            # The *oldest* events are kept and the newest dropped, because the ordering above is
+            # oldest-first and a group's story is built forwards: `started_on` and every
+            # `previous_dose_text` depend on the beginning being present. Dropping the tail
+            # loses recent entries, which the response admits; dropping the head would silently
+            # invent a start date and a first dose for every drug on the chart.
+            rows = rows[:EVENT_CEILING]
         if not rows:
-            return []
+            return Timeline(drugs=[], total_drugs=0, total_events=0, events_truncated=False)
 
         vocab = await self._vocabulary(rows)
         encounters = await self._encounters(rows)
@@ -189,7 +261,7 @@ class PrescriptionTimelineService:
 
         for group in groups.values():
             self._summarise(group)
-        return sorted(
+        ordered = sorted(
             groups.values(),
             key=lambda g: (
                 # Current therapy first — it is what a clinician is looking for — then the most
@@ -198,6 +270,14 @@ class PrescriptionTimelineService:
                 -_ordinal(_latest_date(g)),
                 g.display_name.lower(),
             ),
+        )
+        return Timeline(
+            drugs=ordered[offset : offset + limit],
+            # Counts over the whole assembly, not over the page: a client must not have to infer
+            # "is there more" from the length of the array it was handed.
+            total_drugs=len(ordered),
+            total_events=sum(len(g.entries) for g in ordered),
+            events_truncated=events_truncated,
         )
 
     @staticmethod

@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import type { AuditEntry, LongitudinalRecord, Patient } from '@/lib/types';
 import { medicationDocumentedLabel } from '@/lib/medications';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { ReauthPrompt } from '@/components/ReauthPrompt';
 import { Timeline } from '@/components/patient/Timeline';
 import { Button, Card, LoadingBlock, Skeleton, SkeletonCards } from '@aether/ui';
 
@@ -103,6 +104,9 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
   // "Exporting…" for whichever one was pressed, and a clinician who meant to hand the patient a
   // PDF has no way to tell which file the browser is about to save.
   const [exporting, setExporting] = useState<'fhir' | 'pdf' | null>(null);
+  // The export the API refused for want of a recent password, held so it can be retried the
+  // moment the clinician confirms. Null when nothing is waiting on a password.
+  const [exportNeedingPassword, setExportNeedingPassword] = useState<'fhir' | 'pdf' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -151,12 +155,22 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
     setExporting(format);
     try {
       await api.exportPatientRecord(id, format);
+      setExportNeedingPassword(null);
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? `Could not export this record: ${err.message}`
-          : 'Could not export this record. Check the connection and try again.',
-      );
+      // `reauthentication_required` is not a failure to report — it is the API asking a
+      // question. Rendering it in the error banner beside "check the connection" would leave
+      // the clinician with a message they cannot act on for a request that is one password
+      // away from succeeding. Note this is a 403 and not a 401 precisely so that neither this
+      // handler nor the client's refresh path treats it as a broken sign-in.
+      if (err instanceof ApiError && err.code === 'reauthentication_required') {
+        setExportNeedingPassword(format);
+      } else {
+        setError(
+          err instanceof ApiError
+            ? `Could not export this record: ${err.message}`
+            : 'Could not export this record. Check the connection and try again.',
+        );
+      }
     } finally {
       setExporting(null);
     }
@@ -383,6 +397,21 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
           </Link>
         </div>
       </div>
+
+      {/* Sits directly under the buttons it is about — a password prompt that appears somewhere
+          else on the page is one a clinician reads as an unrelated interruption. It replaces
+          nothing and signs nobody out; the export runs the moment it is answered. */}
+      {exportNeedingPassword && (
+        <ReauthPrompt
+          action={`export this record as ${exportNeedingPassword === 'pdf' ? 'a PDF' : 'FHIR'}`}
+          onConfirmed={() => {
+            const format = exportNeedingPassword;
+            setExportNeedingPassword(null);
+            void exportRecord(format);
+          }}
+          onCancel={() => setExportNeedingPassword(null)}
+        />
+      )}
 
       {/* Chronological timeline (anti-automation-bias: raw history before any interpretation) */}
       {/* One boundary per section rather than one around the chart: a Timeline that cannot

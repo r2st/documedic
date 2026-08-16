@@ -171,9 +171,7 @@ describe('PatientDetailPage', () => {
     const allergies = section('Allergies');
     expect(within(allergies).getByText('Penicillin · severe · active')).toBeInTheDocument();
     expect(within(allergies).getByText('1')).toBeInTheDocument();
-    expect(
-      within(section('Medications')).getByText('Metformin · 500mg · BD'),
-    ).toBeInTheDocument();
+    expect(within(section('Medications')).getByText('Metformin · 500mg · BD')).toBeInTheDocument();
     expect(within(section('Conditions')).getByText('No conditions')).toBeInTheDocument();
     expect(within(section('Lab results')).getByText('No labs')).toBeInTheDocument();
   });
@@ -234,13 +232,13 @@ describe('PatientDetailPage', () => {
 
     const meds = section('Medications');
     // The one that matters: charted before the pandemic, still listed as current.
-    expect(within(meds).getByText(/Documented 1 Jun 2019 · over \d+ years ago/)).toBeInTheDocument();
+    expect(
+      within(meds).getByText(/Documented 1 Jun 2019 · over \d+ years ago/),
+    ).toBeInTheDocument();
     // "No date" and "today" must not look the same either.
     expect(within(meds).getByText('No date on the prescription')).toBeInTheDocument();
     // A fresh row gets the date and no caution — the phrasing carries the warning, not a colour.
-    expect(
-      within(meds).getByText('Metformin · 500mg').closest('li'),
-    ).not.toHaveTextContent('ago');
+    expect(within(meds).getByText('Metformin · 500mg').closest('li')).not.toHaveTextContent('ago');
   });
 
   it('confirms the audit hash chain when the backend verifies it', async () => {
@@ -543,5 +541,62 @@ describe('record export', () => {
     await userEvent.click(screen.getByRole('button', { name: /export record \(FHIR\)/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not export this record/i);
+  });
+
+  it('asks for the password instead of an error when the API says the proof is stale', async () => {
+    // `reauthentication_required` is the API asking a question, not reporting a failure.
+    // Rendering it in the error banner beside "check the connection" leaves the clinician with a
+    // message they cannot act on for a request that is one password away from succeeding.
+    vi.mocked(api.exportPatientRecord).mockRejectedValue(
+      new ApiError(403, 'reauthentication_required', 'Confirm your password to continue.'),
+    );
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText('Asha Reddy');
+
+    await userEvent.click(screen.getByRole('button', { name: /export record \(PDF\)/i }));
+
+    expect(
+      await screen.findByRole('heading', { name: /confirm your password to export this record/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/could not export this record/i)).not.toBeInTheDocument();
+  });
+
+  it('retries the export the clinician actually asked for once it is confirmed', async () => {
+    // The format matters: a clinician who pressed "PDF", confirmed a password, and received a
+    // FHIR bundle has been handed a file no viewer will open.
+    vi.mocked(api.exportPatientRecord).mockRejectedValueOnce(
+      new ApiError(403, 'reauthentication_required', 'Confirm your password to continue.'),
+    );
+    vi.spyOn(api, 'reauthenticate').mockResolvedValue({
+      authenticated_at: '2026-08-15T10:00:00Z',
+      valid_until: '2026-08-15T10:15:00Z',
+      valid_for_seconds: 900,
+    });
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText('Asha Reddy');
+    await userEvent.click(screen.getByRole('button', { name: /export record \(PDF\)/i }));
+    await screen.findByLabelText('Password');
+
+    vi.mocked(api.exportPatientRecord).mockResolvedValue(undefined);
+    await userEvent.type(screen.getByLabelText('Password'), 'password123');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(api.exportPatientRecord).toHaveBeenLastCalledWith('pat-1', 'pdf'));
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+  });
+
+  it('leaves the chart alone when the prompt is dismissed', async () => {
+    vi.mocked(api.exportPatientRecord).mockRejectedValue(
+      new ApiError(403, 'reauthentication_required', 'Confirm your password to continue.'),
+    );
+    render(<PatientDetailPage params={{ id: 'pat-1' }} />);
+    await screen.findByText('Asha Reddy');
+    await userEvent.click(screen.getByRole('button', { name: /export record \(FHIR\)/i }));
+    await screen.findByLabelText('Password');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(screen.getByText('Asha Reddy')).toBeInTheDocument();
   });
 });

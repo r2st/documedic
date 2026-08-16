@@ -10,9 +10,14 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.dependencies import get_current_account, rate_limit
+from app.dependencies import (
+    get_current_account,
+    rate_limit,
+    require_recent_authentication,
+)
 from app.models.user import Account
 from app.openapi import PATIENT_ERRORS, errors
+from app.schemas.common import PaginationMeta
 from app.schemas.medication_timeline import PrescriptionTimelineResponse, TimelineDrugOut
 from app.schemas.record import (
     CriticalLabFlagItem,
@@ -24,7 +29,12 @@ from app.services.audit_service import AuditService
 from app.services.export_service import PatientExportService
 from app.services.lab_safety_service import LabSafetyService
 from app.services.patient_service import PatientService
-from app.services.prescription_timeline_service import PrescriptionTimelineService, serialise
+from app.services.prescription_timeline_service import (
+    DEFAULT_DRUG_LIMIT,
+    MAX_DRUG_LIMIT,
+    PrescriptionTimelineService,
+    serialise,
+)
 from app.services.record_pdf import build_record_pdf
 from app.services.record_service import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, RecordService
 
@@ -101,7 +111,7 @@ async def get_record(
 @export_router.get(
     "",
     summary="The patient's whole record as a FHIR R4 Bundle",
-    responses=PATIENT_ERRORS | errors(429),
+    responses=PATIENT_ERRORS | errors(403, 429),
     response_class=JSONResponse,
     # Metered, unlike the paged chart read above it. This is the unpaged one — the whole chart
     # in one file, leaving the system — so it is both the most expensive read and the bulk
@@ -110,7 +120,7 @@ async def get_record(
 )
 async def export_record(
     patient_id: uuid.UUID,
-    account: Account = Depends(get_current_account),
+    account: Account = Depends(require_recent_authentication),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """Everything in the patient graph, as a FHIR R4 `collection` Bundle
@@ -133,7 +143,10 @@ async def export_record(
     that arrives elsewhere as a plain FHIR `Condition` is indistinguishable from a diagnosis a
     clinician made.
 
-    Audited as `patient_record_exported` — the widest disclosure this API performs.
+    Audited as `patient_record_exported` — the widest disclosure this API performs, which is
+    also why it **needs a recent password**: `403 reauthentication_required` when the password
+    has not been confirmed within `REAUTHENTICATION_MAX_AGE_MINUTES`. POST
+    `/auth/reauthenticate` and retry. A file, once written, cannot be recalled.
     """
     patient = await PatientService(db).get(account.id, patient_id)
     bundle = await PatientExportService(db).build_bundle(patient)
@@ -158,7 +171,7 @@ async def export_record(
 @export_router.get(
     "/pdf",
     summary="The patient's whole record as a printable PDF",
-    responses=PATIENT_ERRORS | errors(429),
+    responses=PATIENT_ERRORS | errors(403, 429),
     response_class=Response,
     # The same bucket as the JSON export above, deliberately. The ceiling is on how often a
     # whole chart may be pulled out of the system, and that question does not have a different
@@ -168,7 +181,7 @@ async def export_record(
 )
 async def export_record_pdf(
     patient_id: uuid.UUID,
-    account: Account = Depends(get_current_account),
+    account: Account = Depends(require_recent_authentication),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """The same record as `GET ../export`, typeset for a person rather than for a system.
@@ -185,7 +198,8 @@ async def export_record_pdf(
     The document is typeset in a Latin-alphabet font. If any character in the record could not
     be represented, the page says so and points at the JSON export, which is lossless.
 
-    Audited as `patient_record_exported`, alongside the JSON export and against the same limit.
+    Audited as `patient_record_exported`, alongside the JSON export and against the same limit,
+    and **needs a recent password** for the same reason — see `GET ../export`.
     """
     patient = await PatientService(db).get(account.id, patient_id)
     sections = await PatientExportService(db).load(patient)
@@ -220,7 +234,7 @@ async def export_record_pdf(
 @export_router.get(
     "/{resource_type}",
     summary="One FHIR R4 resource type from this patient's record",
-    responses=PATIENT_ERRORS | errors(429),
+    responses=PATIENT_ERRORS | errors(403, 429),
     response_class=JSONResponse,
     # The same bucket as the whole-record export, deliberately: the ceiling is on how often a
     # chart may be pulled out of the system, and a caller who can ask for six resource types in
@@ -236,7 +250,7 @@ async def export_resource_type(
         max_length=MAX_RESOURCE_TYPE_CHARS,
         description="A FHIR R4 resource type. Case-insensitive.",
     ),
-    account: Account = Depends(get_current_account),
+    account: Account = Depends(require_recent_authentication),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """One resource type from the chart, as a FHIR R4 `searchset` Bundle
@@ -262,7 +276,9 @@ async def export_resource_type(
     can point at the `Encounter` it was recorded at because both are in that file; here they are
     not, and a reference to a resource the file does not contain is worse than no reference.
 
-    Audited as `patient_record_exported`, against the same ceiling as the full export.
+    Audited as `patient_record_exported`, against the same ceiling as the full export, and
+    **needs a recent password** on the same terms — asking for one type at a time must not be a
+    way around the prompt that guards asking for all of them.
     """
     patient = await PatientService(db).get(account.id, patient_id)
     bundle = await PatientExportService(db).build_resource_bundle(patient, resource_type)
@@ -295,10 +311,17 @@ async def export_resource_type(
 )
 async def prescription_timeline(
     patient_id: uuid.UUID,
+    limit: int = Query(
+        default=DEFAULT_DRUG_LIMIT,
+        ge=1,
+        le=MAX_DRUG_LIMIT,
+        description="Drug groups to return, not events.",
+    ),
+    offset: int = Query(default=0, ge=0, description="Drug groups to skip."),
     account: Account = Depends(get_current_account),
     db: AsyncSession = Depends(get_db),
 ) -> PrescriptionTimelineResponse:
-    """Every medication event on this chart, assembled per drug instead of per row.
+    """This chart's medication events, assembled per drug instead of per row.
 
     `GET ../record` returns the medication log the way it is stored — every drug's events
     interleaved by date — so answering "when did this start, what has the dose been, and who
@@ -321,10 +344,22 @@ async def prescription_timeline(
     holds what was prescribed, and the distance between that and what a patient swallowed is
     exactly where a confident inference would be wrong.
 
+    **Paged by drug, not by event.** `limit` and `offset` select whole drug groups, and every
+    figure inside a group — `started_on`, the dose sequence, `is_current` — is still computed
+    from that drug's entire history, never from the page. `total_drugs` and `total_events` are
+    the chart's totals before paging; read `pagination.has_more` rather than the array length.
+
+    `events_truncated: true` means the chart holds more medication events than one call reads.
+    The oldest are kept, because each group's story is built forwards from its beginning, so what
+    is missing is the most recent activity — which is the half a clinician is usually asking
+    about, and why the flag is on the response rather than in a log.
+
     Deterministic and offline. Audited as `prescription_timeline_viewed`.
     """
     await PatientService(db).get(account.id, patient_id)
-    groups = await PrescriptionTimelineService(db).timeline(patient_id)
+    timeline = await PrescriptionTimelineService(db).timeline(
+        patient_id, limit=limit, offset=offset
+    )
     await AuditService(db).record(
         action="prescription_timeline_viewed",
         account_id=account.id,
@@ -332,16 +367,28 @@ async def prescription_timeline(
         entity_type="patient",
         entity_id=patient_id,
         payload={
-            "drugs": len(groups),
-            "events": sum(len(group.entries) for group in groups),
+            # The chart's totals, not the page's: the trail answers "how much of this patient's
+            # prescribing history was assembled for someone", and a page size is a fact about
+            # the client rather than about the disclosure.
+            "drugs": timeline.total_drugs,
+            "events": timeline.total_events,
+            "returned_drugs": len(timeline.drugs),
+            "events_truncated": timeline.events_truncated,
         },
     )
     await db.commit()
     return PrescriptionTimelineResponse(
         patient_id=patient_id,
-        medications=[TimelineDrugOut.model_validate(row) for row in serialise(groups)],
-        total_drugs=len(groups),
-        total_events=sum(len(group.entries) for group in groups),
+        medications=[TimelineDrugOut.model_validate(row) for row in serialise(timeline.drugs)],
+        total_drugs=timeline.total_drugs,
+        total_events=timeline.total_events,
+        pagination=PaginationMeta(
+            total=timeline.total_drugs,
+            limit=limit,
+            offset=offset,
+            has_more=offset + len(timeline.drugs) < timeline.total_drugs,
+        ),
+        events_truncated=timeline.events_truncated,
     )
 
 

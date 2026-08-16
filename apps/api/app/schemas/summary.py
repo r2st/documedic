@@ -49,6 +49,9 @@ class SummaryNarrative(BaseModel):
 
 class ClinicalSummaryResponse(BaseModel):
     patient_id: uuid.UUID
+    # When the prose was *written*, which on a cache hit is earlier than this response. Stamping
+    # the response time would let a re-read of an unchanged chart claim to be a fresh reading of
+    # it, and "how old is this summary" is a question a clinician is entitled to a true answer to.
     generated_at: datetime
     chart: SummaryChart
     summary: SummaryNarrative
@@ -60,3 +63,8 @@ class ClinicalSummaryResponse(BaseModel):
     # Whether the deterministic prescriber-framing control had to rewrite what the model wrote.
     # The only place a provider ignoring its framing instructions is visible.
     prescriber_framing_applied: bool
+    # True when this paragraph was written for an earlier request about a chart that has not
+    # changed since. The cache key is a hash of the exact text the model is asked about, so a
+    # hit means the question was byte-identical — anything charted in between misses it. Read it
+    # together with `generated_at`, which says how long ago that was.
+    cached: bool = False

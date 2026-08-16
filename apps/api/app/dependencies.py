@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,7 +15,11 @@ from app.core.client_address import client_address
 from app.core.rate_limit import RateLimit, SlidingWindowLimiter, retry_after_seconds
 from app.core.security import decode_token
 from app.db.session import get_db
-from app.exceptions import RateLimitExceededError, TokenError
+from app.exceptions import (
+    RateLimitExceededError,
+    ReauthenticationRequiredError,
+    TokenError,
+)
 from app.models.user import Account
 from app.models.user import Session as AuthSession
 
@@ -143,9 +147,82 @@ async def assert_auth_session_live(
         )
 
 
+async def require_recent_authentication(
+    request: Request,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> Account:
+    """Refuse a sensitive operation unless the password was proved within the step-up window.
+
+    **What this is for.** This product's deployment model is one practice login used from
+    several machines and held signed in through a shift — ``session_max_concurrent`` defaults to
+    ten because that is normal, not exceptional. Every other session control here measures the
+    age or standing of a *token*: idle timeout, absolute expiry, revocation, reuse detection.
+    None of them can answer the question a wide or destructive action actually raises, which is
+    whether the person performing it is the clinician who signed in, or whoever reached an
+    unlocked consulting-room workstation. A password re-prompt is the only thing that asks.
+
+    **Where it is applied**, and the rule that decides: an operation qualifies when a stranger
+    at a signed-in keyboard could do something with it that the clinician cannot undo or call
+    back. Three do — deleting a chart, importing charts in bulk, and exporting a whole record
+    out of the system (a file that, once written, is gone).
+
+    **Where it is deliberately not applied**, because a security control that fires on a
+    clinical path does not make the path safer:
+
+    * Ordinary chart reads and writes. Prompting for a password to open a record would be asked
+      dozens of times a shift, and a prompt asked that often is answered without being read.
+    * The drug-safety hard-block override. It is on the prescribing path, in front of a
+      clinician who has just been stopped by a block and must document why they are proceeding.
+      Adding a password to that is friction on the one workflow where friction pushes people
+      towards the worse option — and the override is already the most heavily evidenced action
+      in the system (written reasoning, its own table, its own audit action).
+    * Changing the password, which verifies the current one itself and is stronger for it.
+
+    A failure here is a 403 carrying ``reauthentication_required`` — never a 401, which every
+    client in this codebase answers by rotating tokens and, on failure, signing the clinician
+    out. Nothing is wrong with the sign-in and it must survive. See
+    :class:`app.exceptions.ReauthenticationRequiredError`.
+
+    Returns the account, so a handler can depend on this *instead of* ``get_current_account``
+    rather than as well as it. FastAPI caches ``get_current_account`` per request either way,
+    so the token is decoded once.
+    """
+    max_age_minutes = settings.reauthentication_max_age_minutes
+    if max_age_minutes <= 0:
+        # Off. Permitted for local development and refused in production by
+        # `config.production_config_errors`, so this branch cannot be reached on a deployment
+        # holding real records.
+        return account
+    auth_session_id = getattr(request.state, "auth_session_id", None)
+    if auth_session_id is None:
+        # `get_current_account` sets this on every authenticated request, so reaching here means
+        # the dependency order was rearranged. Refused rather than waved through: the whole
+        # value of this gate is that it cannot be satisfied by accident.
+        raise TokenError(detail="no auth_session_id on request state; the step-up gate cannot run")
+    session = await db.get(AuthSession, auth_session_id)
+    if session is None:
+        raise TokenError(detail=f"no session row for asid {auth_session_id}")
+    authenticated_at = session.last_authenticated_at
+    if authenticated_at.tzinfo is None:
+        authenticated_at = authenticated_at.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - authenticated_at
+    if age > timedelta(minutes=max_age_minutes):
+        raise ReauthenticationRequiredError(
+            detail=(
+                f"session {auth_session_id} last authenticated {age.total_seconds():.0f}s ago, "
+                f"over the {max_age_minutes}m step-up window"
+            )
+        )
+    return account
+
+
 # Convenience alias used across routers.
 CurrentAccount = Depends(get_current_account)
 DBSession = Depends(get_db)
+# Attach to a route whose handler needs the account *and* the step-up proof:
+# ``account: Account = RecentlyAuthenticatedAccount``.
+RecentlyAuthenticatedAccount = Depends(require_recent_authentication)
 
 
 # --- Rate limiting ------------------------------------------------------------------------
@@ -168,6 +245,16 @@ _BUCKETS: dict[str, tuple[str, float]] = {
     "guideline_search": ("rate_limit_searches_per_minute", _SECONDS_PER_MINUTE),
     "signup": ("rate_limit_signups_per_hour", _SECONDS_PER_HOUR),
     "password_reset": ("rate_limit_password_resets_per_hour", _SECONDS_PER_HOUR),
+    # The step-up password prompt. Metered because it is a password-guessing surface that
+    # deliberately does *not* feed the login lockout (see `AuthService.reauthenticate`): the
+    # only callers are people at a signed-in keyboard, and locking the account would let a
+    # passer-by deny the clinician their own record. A ceiling is what remains, and an hourly
+    # one is right for a prompt a working clinician sees a handful of times a day.
+    "reauthentication": ("rate_limit_reauthentications_per_hour", _SECONDS_PER_HOUR),
+    # Bulk chart creation from a file. Hourly and small: this is a migration action performed
+    # once when a practice onboards, not part of any clinical workflow, and each call may write
+    # `patient_import_max_rows` charts.
+    "patient_import": ("rate_limit_patient_imports_per_hour", _SECONDS_PER_HOUR),
     "validation_run": ("rate_limit_validation_runs_per_hour", _SECONDS_PER_HOUR),
     "record_export": ("rate_limit_exports_per_hour", _SECONDS_PER_HOUR),
     # One provider call over one chart. Cheaper than a reasoning run by an order of magnitude,

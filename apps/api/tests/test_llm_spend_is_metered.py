@@ -61,6 +61,11 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/auth/sessions"): DETERMINISTIC,
     ("DELETE", "/api/v1/auth/sessions/{session_id}"): DETERMINISTIC,
     ("POST", "/api/v1/auth/password"): DETERMINISTIC,
+    # One bcrypt verification. Capped anyway, and for a reason peculiar to it: it deliberately
+    # does not feed the sign-in lockout (locking the account would let anyone at an unattended
+    # signed-in screen deny the clinician their own records), so a ceiling is the only thing
+    # standing between it and unlimited password guessing by whoever reached that keyboard.
+    ("POST", "/api/v1/auth/reauthenticate"): BOUNDED_FOR_OTHER_REASONS,
     # Unauthenticated, so there is no account to key a ceiling on — capped per address instead,
     # for the same reason signup is: without it an unauthenticated caller can walk an address
     # list. The per-*account* ceiling that stops one clinician's inbox being flooded is
@@ -69,6 +74,11 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/auth/password-reset/confirm"): DETERMINISTIC,
     # --- patients and chart reads. Never metered; a clinician must always be able to read.
     ("POST", "/api/v1/patients"): DETERMINISTIC,
+    # No LLM: a CSV parse, a per-row Pydantic validation and a bulk insert. Capped because one
+    # call may create `patient_import_max_rows` charts and because a dry run costs the same
+    # validation work as a real import — leaving the expensive half uncapped would be leaving
+    # the route uncapped.
+    ("POST", "/api/v1/patients/import"): BOUNDED_FOR_OTHER_REASONS,
     ("GET", "/api/v1/patients"): DETERMINISTIC,
     ("POST", "/api/v1/patients/search"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}"): DETERMINISTIC,

@@ -20,6 +20,32 @@ class PatientService:
         self.audit = AuditService(db)
 
     async def create(self, account_id: uuid.UUID, data: PatientCreate) -> Patient:
+        patient = await self._add(account_id, data)
+        await self.db.commit()
+        await self.db.refresh(patient)
+        return patient
+
+    async def create_many(self, account_id: uuid.UUID, rows: list[PatientCreate]) -> list[Patient]:
+        """Create several charts in one transaction, in the order given.
+
+        The bulk import's only way in, and it goes through the same :meth:`_add` a single
+        creation does — the consent gate, the encrypted columns and the per-chart
+        ``patient_created`` audit entry are the ones the create form gets, not a second
+        implementation of them that could drift. What is different is the number of commits:
+        one, so a file either lands or does not.
+
+        An empty list is a no-op that still commits, which keeps the caller's control flow
+        uniform: an import whose every row was a duplicate has nothing to write and still has an
+        audit entry to record.
+        """
+        created = [await self._add(account_id, data) for data in rows]
+        await self.db.commit()
+        for patient in created:
+            await self.db.refresh(patient)
+        return created
+
+    async def _add(self, account_id: uuid.UUID, data: PatientCreate) -> Patient:
+        """One chart and its audit entry, flushed but not committed."""
         if not data.consent_given:
             raise ConsentRequiredError()
         patient = Patient(
@@ -49,8 +75,6 @@ class PatientService:
             entity_id=patient.id,
             payload={"consent_given": True},
         )
-        await self.db.commit()
-        await self.db.refresh(patient)
         return patient
 
     async def get(
