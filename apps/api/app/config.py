@@ -617,6 +617,15 @@ class Settings(BaseSettings):
                 leads.add(minutes)
         return tuple(sorted(leads, reverse=True))
 
+    # --- Protocol templates ---
+    # The length of a follow-up appointment booked by applying a template. Fifteen minutes: a
+    # review, not a new-patient consultation. A clinician who needs longer moves it.
+    protocol_follow_up_duration_minutes: int = 15
+    # The clinic-local hour a computed follow-up lands at. The ordinary application supplies no
+    # time — "review in twelve weeks" is a date — and a booking made at whatever o'clock the
+    # request happened to arrive is a booking somebody has to move.
+    protocol_follow_up_local_hour: int = 10
+
     # --- CORS ---
     cors_origins: str = "http://localhost:3000"
 

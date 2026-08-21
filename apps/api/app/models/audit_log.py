@@ -113,6 +113,21 @@ AUDIT_ACTIONS = (
     "appointment_list_viewed",
     "appointment_diary_viewed",
     "appointment_reminders_viewed",
+    # When a provider's week is declared to work. Not patient data — but the windows are what
+    # decides whether a booking is flagged as out-of-hours, so "this slot raised no warning" is
+    # only answerable later if the availability the arithmetic read at the time is on record.
+    "provider_availability_recorded",
+    "provider_availability_removed",
+    # Applying a curated order set. ``protocol_applied`` is the entry that matters and it is
+    # the only place one question has an answer: the medication events an application creates
+    # are ordinary rows on the chart afterwards, indistinguishable from ones typed in one at a
+    # time, so nothing else can say those five things were one decision. The preview is
+    # recorded too — it runs the whole deterministic engine over the chart and returns what
+    # stands against it, which is a disclosure of the chart's allergies and interactions.
+    "protocol_previewed",
+    "protocol_applied",
+    "protocol_applications_viewed",
+    "protocol_suggestions_viewed",
     "document_uploaded",
     "extraction_completed",
     "extraction_failed",

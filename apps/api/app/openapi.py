@@ -230,6 +230,19 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "protocols",
+        "description": (
+            "Curated protocol templates — reusable order sets pairing a workup, first-line "
+            "therapy and a follow-up interval per condition. Everything is phrased as a "
+            "proposal and every item is deselectable. Applying one runs the full deterministic "
+            "safety engine over the selected medications, plus a check for interactions "
+            "*within* the template that no per-drug pass can see, and is all-or-nothing: a "
+            "hard block, an unresolvable drug, or a clash on the follow-up refuses the whole "
+            "application rather than charting part of it. Investigations are recorded as "
+            "ordered, never as results."
+        ),
+    },
+    {
         "name": "appointments",
         "description": (
             "The clinic diary: bookings against a chart, the account's forthcoming list, "

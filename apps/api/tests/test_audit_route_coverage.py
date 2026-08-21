@@ -150,6 +150,36 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/reasoning/{session_id}/suggestions/{suggestion_id}/decision"): (
         "clinician_decision_recorded",
     ),
+    # --- The clinic diary. Booking, moving and closing a slot are all writes about a patient —
+    # who they were booked with and whether they came — so each is recorded. Declaring an
+    # availability window is not patient data, but it is what decides whether a booking is
+    # flagged as out-of-hours, so it is recorded too: "this slot raised no warning" is only
+    # answerable later if the timetable the arithmetic read at the time is on record.
+    ("POST", "/api/v1/patients/{patient_id}/appointments"): ("appointment_booked",),
+    ("POST", "/api/v1/patients/{patient_id}/appointments/{appointment_id}/reschedule"): (
+        "appointment_rescheduled",
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/appointments/{appointment_id}/cancel"): (
+        "appointment_cancelled",
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/appointments/{appointment_id}/outcome"): (
+        "appointment_closed",
+    ),
+    ("POST", "/api/v1/appointments/availability"): ("provider_availability_recorded",),
+    ("DELETE", "/api/v1/appointments/availability/{window_id}"): ("provider_availability_removed",),
+    # --- Curated order sets. Both routes run the deterministic engine over every selected
+    # medication, and each of those evaluations persists its own ``drug_safety_check`` — the
+    # same entry the prescribing screen writes, carrying the id an override would name. Applying
+    # additionally books the follow-up, which writes the diary's own entry.
+    ("POST", "/api/v1/patients/{patient_id}/order-sets/{order_set_key}/preview"): (
+        "protocol_previewed",
+        "drug_safety_check",
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/order-sets/{order_set_key}/apply"): (
+        "protocol_applied",
+        "drug_safety_check",
+        "appointment_booked",
+    ),
     # --- Validation and regulatory.
     ("POST", "/api/v1/validation/run"): ("validation_run_executed",),
     ("POST", "/api/v1/safety-reports"): ("safety_report_filed",),

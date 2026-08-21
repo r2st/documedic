@@ -698,6 +698,45 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # name the caller supplied, not anything about a patient.
     "appointment_diary_viewed": {"days", "appointment_count", "provider_filtered"},
     "appointment_reminders_viewed": {"horizon_minutes", "reminder_count"},
+    # A provider's declared working week: a clinician's name and four numbers from a clinic
+    # timetable. Nothing about a patient is in it.
+    "provider_availability_recorded": {
+        "provider_name",
+        "weekday",
+        "start_minute",
+        "end_minute",
+    },
+    "provider_availability_removed": {
+        "provider_name",
+        "weekday",
+        "start_minute",
+        "end_minute",
+    },
+    # --- curated order sets. The template key and version are shared reference data — the same
+    # two strings for every patient the template touches — and everything beside them is a count
+    # or a boolean. No drug name appears: what an application charted lives on the medication
+    # events it points at, each of which wrote its own ``drug_safety_check`` entry naming the
+    # drug. ``applied_by`` is the *clinician's* name, like ``acknowledged_by`` above, and "who
+    # applied this order set" is the entire accountability meaning of the entry.
+    "protocol_suggestions_viewed": {"matched_templates"},
+    "protocol_previewed": {
+        "template_key",
+        "template_version",
+        "selected_count",
+        "finding_count",
+        "is_blocked",
+    },
+    "protocol_applied": {
+        "template_key",
+        "template_version",
+        "selected_count",
+        "investigations_ordered",
+        "medications_charted",
+        "follow_up_booked",
+        "warning_count",
+        "applied_by",
+    },
+    "protocol_applications_viewed": {"application_count"},
     # Keyed by checklist item, so the declared key set is the checklist vocabulary itself.
     "handoff_checklist_viewed": {
         "unacknowledged_critical_labs",

@@ -598,8 +598,11 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
     #     guideline corpus;
     #   resource_type — the per-type export takes a FHIR type name ("Condition",
     #     "MedicationRequest"), a fixed vocabulary shared by every deployment. The chart it reads
-    #     is chosen by the {patient_id} beside it, which the sweep above does cover.
-    not_a_resource = {"condition_name", "resource_type"}
+    #     is chosen by the {patient_id} beside it, which the sweep above does cover;
+    #   order_set_key — the protocol routes take a curated template key ("t2dm_initial_workup"),
+    #     compiled into the application and identical on every deployment. No account owns one,
+    #     and the chart it is applied to is the {patient_id} beside it.
+    not_a_resource = {"condition_name", "resource_type", "order_set_key"}
 
     found = {
         part[1:-1]

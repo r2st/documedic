@@ -161,6 +161,31 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/patients/{patient_id}/drug-safety/override"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/drug-safety/overrides"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/labs/critical-flags"): DETERMINISTIC,
+    # --- the clinic diary. Ordinary rows and calendar arithmetic; no model anywhere in the
+    # path. The diary and reminder reads are bounded by a horizon the schema caps rather than by
+    # a page the caller chooses, and the timetable routes touch one account's own windows.
+    ("POST", "/api/v1/patients/{patient_id}/appointments"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/appointments"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/appointments/{appointment_id}/reschedule"): (
+        DETERMINISTIC
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/appointments/{appointment_id}/cancel"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/appointments/{appointment_id}/outcome"): DETERMINISTIC,
+    ("GET", "/api/v1/appointments/diary"): DETERMINISTIC,
+    ("GET", "/api/v1/appointments/reminders"): DETERMINISTIC,
+    ("GET", "/api/v1/appointments/availability"): DETERMINISTIC,
+    ("POST", "/api/v1/appointments/availability"): DETERMINISTIC,
+    ("DELETE", "/api/v1/appointments/availability/{window_id}"): DETERMINISTIC,
+    # --- curated order sets. The catalogue is compiled-in content. Preview and apply run the
+    # deterministic safety engine over the selected medications — bounded by the template, which
+    # is curated and small — and nothing on this path reaches a provider. Rule #8 applies with
+    # its full force here: a 429 on the preview would withhold exactly the hard block the
+    # one-click path exists to put in front of a clinician.
+    ("GET", "/api/v1/order-sets"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/order-sets/suggested"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/order-sets/applications"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/order-sets/{order_set_key}/preview"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/order-sets/{order_set_key}/apply"): DETERMINISTIC,
     # --- pathways. Rule-based matching against the local corpus.
     ("GET", "/api/v1/pathways"): DETERMINISTIC,
     ("GET", "/api/v1/pathways/{condition_name}"): DETERMINISTIC,

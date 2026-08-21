@@ -19,6 +19,7 @@ from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
+from app.models.protocol_application import ProtocolApplication
 from app.models.reasoning_session import ReasoningSession
 from app.models.user import Account, PasswordResetToken, Session
 from app.models.validation import SafetyReport, ValidationRun
@@ -52,6 +53,7 @@ __all__ = [
     "PatientHandoff",
     "Appointment",
     "ProviderAvailability",
+    "ProtocolApplication",
     "ValidationRun",
     "SafetyReport",
 ]

@@ -653,3 +653,34 @@ class AppointmentNotOpenError(ConflictError):
     """
 
     code = "appointment_not_open"
+
+
+class ProtocolTemplateNotFoundError(NotFoundError):
+    """No protocol template with that name. Open the template list to see what is available.
+
+    The templates are curated content compiled into the application, not rows a deployment
+    edits, so an unknown key is a stale link or a typo rather than a template somebody deleted.
+    """
+
+    code = "protocol_template_not_found"
+
+
+class ProtocolTemplateUnusableError(ConflictError):
+    """One of the medications in this template could not be matched to a known drug, so the
+    template cannot be applied. The investigations and the follow-up are unaffected — apply
+    them by deselecting the medication, and report the template so the drug can be added.
+
+    A template naming a drug the vocabulary does not hold is a *configuration* fault, not a
+    clinical one, and it is refused rather than worked around because the alternative is the
+    failure this codebase has closed twice already: an unresolvable medication charted as
+    though it had been checked. Nothing in the deterministic engine can evaluate a drug it
+    cannot identify — no allergy cross-check, no interaction, no contraindication — so charting
+    it from a template would put a medication on the record carrying the *appearance* of having
+    passed the same checks as its neighbours.
+
+    ``tests/test_protocol_templates.py`` refuses a template whose medications do not all resolve
+    against the seeded vocabulary, which is where this should be caught; this is the runtime
+    backstop for a vocabulary that has been edited since.
+    """
+
+    code = "protocol_template_unusable"

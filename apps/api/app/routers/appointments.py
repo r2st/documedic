@@ -447,6 +447,19 @@ async def add_availability(
         start_minute=body.start_minute,
         end_minute=body.end_minute,
     )
+    await AuditService(db).record(
+        action="provider_availability_recorded",
+        account_id=account.id,
+        patient_id=None,
+        entity_type="provider_availability",
+        entity_id=row.id,
+        payload={
+            "provider_name": row.provider_name,
+            "weekday": row.weekday,
+            "start_minute": row.start_minute,
+            "end_minute": row.end_minute,
+        },
+    )
     await db.commit()
     return AvailabilityWindowResponse(
         id=row.id,
@@ -474,5 +487,20 @@ async def remove_availability(
     bookings depend on — withdrawing it must not silently invalidate a diary that has already
     been agreed with patients.
     """
-    await AppointmentService(db).remove_availability(account_id=account.id, window_id=window_id)
+    row = await AppointmentService(db).remove_availability(
+        account_id=account.id, window_id=window_id
+    )
+    await AuditService(db).record(
+        action="provider_availability_removed",
+        account_id=account.id,
+        patient_id=None,
+        entity_type="provider_availability",
+        entity_id=row.id,
+        payload={
+            "provider_name": row.provider_name,
+            "weekday": row.weekday,
+            "start_minute": row.start_minute,
+            "end_minute": row.end_minute,
+        },
+    )
     await db.commit()
