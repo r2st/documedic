@@ -71,6 +71,10 @@ BODIES: dict[str, dict] = {
     "POST /api/v1/patients/{patient_id}/handoffs/{handoff_id}/acknowledge": {
         "acknowledged_by": "Dr Attacker",
     },
+    "POST /api/v1/patients/{patient_id}/discharge-summaries/{summary_id}/finalize": {
+        "finalized_by": "Dr Attacker",
+        "confirmed_stops": [],
+    },
     "POST /api/v1/patients/{patient_id}/labs/critical-flags/{lab_result_id}/acknowledge": {
         "acknowledged_by": "Dr Attacker",
     },
@@ -396,6 +400,54 @@ async def test_no_handoff_route_reaches_another_accounts_handover_through_your_o
     assert not leaked, "another account's handover was reachable: " + "; ".join(leaked)
 
 
+# --- Discharge summaries -------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_discharge_route_reaches_another_accounts_summary_through_your_own_chart(
+    app, auth_client, second_auth_client
+):
+    """The encounter attack, on the resource that can write medication events onto a chart.
+
+    A discharge summary is the worst target this sweep covers. ``finalize`` is not merely a
+    write to the document: it charts the take-home list — starts, dose changes and
+    discontinuations — onto the patient the summary belongs to, and then freezes itself so no
+    later correction to the document is possible. A stolen id here would take another account's
+    patient off their medicines.
+
+    ``preview`` is a read, and a thorough one: it runs the whole deterministic engine over the
+    victim's chart and returns their allergies, interactions and outstanding critical values.
+    """
+    victim = await create_patient(auth_client)
+    drafted = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/discharge-summaries",
+        json={
+            "discharge_diagnosis": "Community-acquired pneumonia, resolving.",
+            "hospital_course": "IV antibiotics, stepped down to oral on day 3.",
+            "medications": [{"name": "Metformin"}],
+        },
+    )
+    assert drafted.status_code == 201, drafted.text
+    stolen_summary_id = drafted.json()["id"]
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{summary_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{patient_id}", attacker["id"]).replace(
+            "{summary_id}", stolen_summary_id
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the discharge sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's discharge summary was reachable: " + "; ".join(leaked)
+
+
 # --- Critical lab acknowledgements ---------------------------------------------------------------
 
 
@@ -703,6 +755,7 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
         "suggestion_id",
         "run_id",
         "handoff_id",
+        "summary_id",
         "lab_result_id",
         "appointment_id",
         "window_id",

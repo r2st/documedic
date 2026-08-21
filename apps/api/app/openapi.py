@@ -230,6 +230,20 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "discharge",
+        "description": (
+            "The discharge summary: the take-home medication list, reconciled against the "
+            "chart, attested to, and — this is the part that was missing — written back to it. "
+            "Finalising charts every start, dose change and discontinuation and retires the "
+            "rows they supersede, so the medication list the next visit's safety checks run "
+            "against is the one the patient actually went home on. Refused while any blocking "
+            "readiness item stands (an unacknowledged critical value, a hard block, an "
+            "unidentifiable drug, a missing diagnosis), and no discontinuation is written that "
+            "the clinician has not named. Once finalised the document is immutable; a "
+            "correction is a new summary. Deterministic and offline-capable throughout."
+        ),
+    },
+    {
         "name": "portal",
         "description": (
             "The patient portal: the clinic's credential management, and the read-only view a "

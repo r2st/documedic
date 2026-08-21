@@ -136,6 +136,23 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
     ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/acknowledge"): (
         "handoff_acknowledged",
     ),
+    # --- Discharge. Every step is recorded, drafts included, for the same reason the handover
+    # drafts are: the prose is patient content. ``finalize`` is the one that matters most in
+    # this whole table — it writes medication events onto the chart, and afterwards those rows
+    # are indistinguishable from prescribing typed in one line at a time, so this entry is the
+    # only thing that can say they were one decision by one named clinician at one discharge.
+    # The preview writes nothing but discloses the chart's allergies, interactions and
+    # outstanding results, exactly as ``protocol_previewed`` does.
+    ("POST", "/api/v1/patients/{patient_id}/discharge-summaries"): ("discharge_summary_created",),
+    ("PATCH", "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}"): (
+        "discharge_summary_updated",
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}/preview"): (
+        "discharge_summary_previewed",
+    ),
+    ("POST", "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}/finalize"): (
+        "discharge_summary_finalized",
+    ),
     # --- The reasoning engine.
     ("POST", "/api/v1/patients/{patient_id}/reasoning"): ("reasoning_session_started",),
     ("POST", "/api/v1/reasoning/{session_id}/intake/answers"): ("reasoning_intake_answered",),

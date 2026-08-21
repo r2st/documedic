@@ -98,6 +98,19 @@ AUDIT_ACTIONS = (
     "handoff_updated",
     "handoff_sent",
     "handoff_acknowledged",
+    # The discharge. ``discharge_summary_finalized`` is the entry that matters, and it is the
+    # only place one question has an answer: finalising writes ordinary ``medication_events``
+    # rows onto the chart, indistinguishable afterwards from prescribing typed in one line at a
+    # time, so nothing else can say that those starts and stops were one decision by one named
+    # clinician at one transition of care. The preview is recorded for the same reason
+    # ``protocol_previewed`` is — it runs the whole deterministic engine over the chart and
+    # returns what stands against it, which discloses this patient's allergies, interactions and
+    # outstanding results. The draft pair covers prose that is patient content: a write to it is
+    # a write to the chart even though it has been shown to nobody and changes nothing clinically.
+    "discharge_summary_created",
+    "discharge_summary_updated",
+    "discharge_summary_previewed",
+    "discharge_summary_finalized",
     # The clinic diary. ``appointment_booked`` and ``appointment_closed`` are the pair a later
     # reader needs: the second says whether the patient came, and a follow-up nobody attended is
     # the event that matters. ``appointment_rescheduled`` carries both ends of the move, because

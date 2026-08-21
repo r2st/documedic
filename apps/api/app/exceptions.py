@@ -770,3 +770,61 @@ class PortalGrantNotFoundError(NotFoundError):
     """
 
     code = "portal_grant_not_found"
+
+
+class DischargeFinalizedError(ConflictError):
+    """This discharge summary has been finalised, so its content can no longer be edited.
+
+    Finalising is the point at which a clinician asserted "this is what the patient is going
+    home on" *and* the chart was written to match — a document that can be rewritten afterwards
+    is not evidence of what the patient was told, and it would no longer describe the medication
+    events it created. A correction is a new summary naming the one it supersedes and why, the
+    same shape ``ClinicalSuggestion`` and ``Encounter`` amendments use (Critical Safety Rule #7).
+
+    Refused here *and* by ``trg_discharge_summaries_final_frozen`` on the table (migration
+    0044), the belt-and-braces every immutable table in this schema gets.
+    """
+
+    code = "discharge_finalized"
+
+
+class DischargeNotReadyError(ConflictError):
+    """Something on the record still refuses this discharge. Each blocking item says what.
+
+    The four blocking states, and why each one refuses rather than warns:
+
+    * an **unacknowledged critical laboratory value** — a result nobody has acted on, over which
+      a discharge summary would assert that the episode concluded;
+    * a **safety hard block** against a take-home medicine — Critical Safety Rule #3 makes this
+      a refusal by construction, passed only by an override with documented reasoning recorded
+      against the check that raised it;
+    * an **unidentifiable drug name** on the take-home list — a medicine checked against nothing,
+      no allergy, no interaction and no dose range, inside a document that reads as reconciled;
+    * a **missing discharge diagnosis or hospital course** — the two things the next clinician
+      opens the document to find.
+
+    Everything else the readiness assessment reports is advisory: shown, counted, recorded on
+    the finalised summary, and proceeded past by a clinician who has read it.
+    """
+
+    status_code = 409
+    code = "discharge_not_ready"
+
+
+class DischargeStopsUnconfirmedError(ConflictError):
+    """The discontinuations confirmed do not match the ones this discharge would make.
+
+    ``app.core.med_reconciliation`` is explicit that a ``stop`` disposition is a statement about
+    two lists rather than an instruction: it means the take-home list does not carry a drug the
+    chart calls current, which is an intended discontinuation about half the time and a line
+    somebody forgot to type the other half. So finalising writes no discontinuation the
+    clinician has not named.
+
+    A mismatch in *either* direction is refused. A drug that has stopped being absent since the
+    preview — somebody added it back to the list — means the clinician confirmed a picture that
+    is no longer the current one just as much as a newly absent one does, and accepting the
+    superset would wave a stale confirmation through whenever the list happened to grow. Same
+    judgement, and the same failure mode, as ``handoff_checklist_stale``.
+    """
+
+    code = "discharge_stops_unconfirmed"

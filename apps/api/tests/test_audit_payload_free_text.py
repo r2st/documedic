@@ -669,6 +669,34 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     "handoff_sent": {"from_clinician", "to_clinician", "checklist", "sbar_chars"},
     "handoff_acknowledged": {"acknowledged_by", "note_chars", "seconds_since_sent"},
     "handoff_list_viewed": {"handoff_count"},
+    # Discharge. The narrative sections and the drug names never leave the row: only counts,
+    # closed-vocabulary dispositions and the shape of what happened are recorded, and
+    # ``entity_id`` points at the summary that holds the rest. ``finalized_by`` IS recorded for
+    # the same reason the two handover clinician names are — it is the *clinician's* name, not
+    # the patient's, and "who sent this patient home on this list" is the clinical meaning of
+    # the entry. ``sections_written`` is the fixed set of section column names, never their
+    # contents.
+    "discharge_summary_created": {"status", "medication_count", "linked_encounter"},
+    "discharge_summary_updated": {"status", "medication_count", "sections_written"},
+    "discharge_summary_previewed": {
+        "status",
+        "is_ready",
+        "blocking_count",
+        "advisory_count",
+        "stop_count",
+        "proposed_count",
+        "charted_count",
+    },
+    "discharge_summary_finalized": {
+        "finalized_by",
+        "medication_count",
+        "charted_count",
+        "events_written",
+        "stops_confirmed",
+        "dispositions",
+        "advisory_count",
+        "is_correction",
+    },
     # The diary. ``provider_name`` is the *clinician's* name and is the point of the entry —
     # whose list this went into. Why the patient is coming is clinician prose about a patient
     # and stays on the row ``entity_id`` points at; only whether one was written is recorded.

@@ -8,6 +8,7 @@ from app.models.clinical_suggestion import ClinicalSuggestion, ClinicianDecision
 from app.models.condition import Condition
 from app.models.critical_lab_acknowledgement import CriticalLabAcknowledgement
 from app.models.derived_marker import DerivedMarker
+from app.models.discharge_summary import DischargeSummary
 from app.models.document import Document
 from app.models.drug_safety_check import DrugSafetyCheck
 from app.models.drug_safety_override import DrugSafetyOverride
@@ -40,6 +41,7 @@ __all__ = [
     "Condition",
     "Allergy",
     "DerivedMarker",
+    "DischargeSummary",
     "DrugVocabulary",
     "DrugInteraction",
     "Contraindication",

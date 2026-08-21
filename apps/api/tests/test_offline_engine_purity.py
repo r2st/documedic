@@ -56,6 +56,20 @@ _OFFLINE_ROOTS = (
     # or a conversion table fetched at import, would put that behind the same availability the
     # LLM has.
     "app.core.lab_trend",
+    # The discharge readiness rules, and the list-against-list reconciliation they rest on.
+    #
+    # ``med_reconciliation`` has been pure since it was written — stdlib and ``app.core.safety``
+    # and nothing else — but nothing said so, and a module that is pure by accident stays that
+    # way only until somebody wants a threshold from settings. It belongs under this rule on its
+    # own merits: which drugs a new list continues, starts and stops is core record work, and an
+    # omitted anticonvulsant is not a finding that may wait on a provider being reachable.
+    #
+    # ``discharge`` is the rule set that decides whether a patient may be sent home at all.
+    # Deciding that is the last thing in this product that should depend on an LLM, and the
+    # blocking half of it — an unacknowledged panic value, a hard block, a drug name nothing
+    # could identify — is exactly what a degraded deployment most needs to keep refusing.
+    "app.core.med_reconciliation",
+    "app.core.discharge",
 )
 
 # Everything the standard library gives these modules today. An addition here is not forbidden,

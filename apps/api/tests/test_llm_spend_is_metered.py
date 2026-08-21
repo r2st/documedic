@@ -154,6 +154,25 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("PATCH", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}"): DETERMINISTIC,
     ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/send"): DETERMINISTIC,
     ("POST", "/api/v1/patients/{patient_id}/handoffs/{handoff_id}/acknowledge"): DETERMINISTIC,
+    # The discharge. Every route here is deterministic and deliberately so: the readiness rules
+    # and the reconciliation behind them are pure (``app.core.discharge``,
+    # ``app.core.med_reconciliation``), and deciding whether it is safe to send a patient home
+    # is the last workflow in this product that should wait on a provider being reachable.
+    # ``preview`` and ``finalize`` are the two that do real work — a bounded number of drug
+    # resolutions and safety checks, one per take-home medicine, capped by
+    # ``MAX_PROPOSED_MEDICATIONS`` at the request schema.
+    ("GET", "/api/v1/patients/{patient_id}/discharge-summaries"): DETERMINISTIC,
+    ("POST", "/api/v1/patients/{patient_id}/discharge-summaries"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}"): DETERMINISTIC,
+    ("PATCH", "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}"): DETERMINISTIC,
+    (
+        "POST",
+        "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}/preview",
+    ): DETERMINISTIC,
+    (
+        "POST",
+        "/api/v1/patients/{patient_id}/discharge-summaries/{summary_id}/finalize",
+    ): DETERMINISTIC,
     (
         "POST",
         "/api/v1/patients/{patient_id}/labs/critical-flags/{lab_result_id}/acknowledge",
