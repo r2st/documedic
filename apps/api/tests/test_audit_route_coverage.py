@@ -180,6 +180,25 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
         "drug_safety_check",
         "appointment_booked",
     ),
+    # --- The patient portal. Issuing and withdrawing a credential are the entries a DPDP
+    # subject-access question is answered from. The patient's own reads write
+    # ``portal_record_viewed``, but they are GETs and so are not this table's business.
+    ("POST", "/api/v1/patients/{patient_id}/portal-access"): ("portal_access_granted",),
+    ("DELETE", "/api/v1/patients/{patient_id}/portal-access/{grant_id}"): (
+        "portal_access_revoked",
+    ),
+    # --- Multi-provider encounters. The grant and the withdrawal are what an access review
+    # runs on. The countersignature writes ``encounter_signed`` — the same action the owner's
+    # signing route writes, deliberately: it is the same clinical act, and splitting it would
+    # mean an audit query for "who signed this" had to know which door it came through.
+    ("POST", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/participants"): (
+        "encounter_participant_added",
+    ),
+    (
+        "DELETE",
+        "/api/v1/patients/{patient_id}/encounters/{encounter_id}/participants/{participant_id}",
+    ): ("encounter_participant_removed",),
+    ("POST", "/api/v1/encounters/shared/{encounter_id}/sign"): ("encounter_signed",),
     # --- Notes search. A POST that reads: the query is clinical content about the person being
     # searched for, and a query string is written into access logs and browser history. It
     # still writes an entry — reading a panel's notes is a PHI read whoever asked for it.

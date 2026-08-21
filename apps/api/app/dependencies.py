@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -16,12 +17,16 @@ from app.core.rate_limit import RateLimit, SlidingWindowLimiter, retry_after_sec
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.exceptions import (
+    PortalAccessError,
     RateLimitExceededError,
     ReauthenticationRequiredError,
     TokenError,
 )
 from app.models.user import Account
 from app.models.user import Session as AuthSession
+
+if TYPE_CHECKING:  # pragma: no cover - import-time only, for the portal return annotation
+    from app.services.patient_portal_service import PortalContext
 
 # Declared purely so the OpenAPI schema records that these routes take a bearer token: without
 # a security scheme in the dependency tree, the generated spec claimed every patient route was
@@ -255,6 +260,12 @@ _BUCKETS: dict[str, tuple[str, float]] = {
     # once when a practice onboards, not part of any clinical workflow, and each call may write
     # `patient_import_max_rows` charts.
     "patient_import": ("rate_limit_patient_imports_per_hour", _SECONDS_PER_HOUR),
+    # Sharing a consultation with a colleague. Metered not because it is expensive but because
+    # the route takes an email address and answers whether it has an account here — an answer
+    # worth giving to a signed-in clinician naming a specific colleague, and one that must not
+    # become an address-enumeration tool. Hourly: granting access is a handful-of-times-a-day
+    # act, not a workflow.
+    "participant_grant": ("rate_limit_participant_grants_per_hour", _SECONDS_PER_HOUR),
     "validation_run": ("rate_limit_validation_runs_per_hour", _SECONDS_PER_HOUR),
     "record_export": ("rate_limit_exports_per_hour", _SECONDS_PER_HOUR),
     # One provider call over one chart. Cheaper than a reasoning run by an order of magnitude,
@@ -356,3 +367,48 @@ def rate_limit_by_ip(bucket: str) -> Callable[[Request], Awaitable[None]]:
         enforce_rate_limit(bucket, key, subject="address")
 
     return enforce
+
+
+# Declared so the OpenAPI schema records that the portal routes take their own bearer credential
+# and not the clinician's. Separate from ``bearer_scheme`` deliberately: a generated client that
+# sent the clinician's access token to a portal route would be sending a credential to a path
+# that must never accept one, and one shared scheme in the spec is exactly how that gets built.
+portal_bearer_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="PortalToken",
+    description=(
+        "The opaque, single-chart, read-only credential a clinic issues to a patient from "
+        "`POST /api/v1/patients/{patient_id}/portal-access`, sent as `Bearer <token>`. Not a "
+        "JWT, and not interchangeable with a clinician's access token in either direction."
+    ),
+)
+
+
+async def get_portal_context(
+    request: Request,
+    _credentials: HTTPAuthorizationCredentials | None = Depends(portal_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> PortalContext:
+    """Resolve the patient behind a portal credential.
+
+    The mirror image of :func:`get_current_account`, and structurally unable to be confused with
+    it. A portal token is an opaque random string, so nothing here decodes a JWT and nothing in
+    ``get_current_account`` can resolve a portal token — the two credential vocabularies do not
+    overlap, which is a stronger guarantee than checking a ``type`` claim would be.
+
+    Every failure is the same 401 with the same message; see ``PortalAccessError``.
+
+    Imported inside the function because ``PatientPortalService`` reaches the model layer, which
+    reaches this module for nothing at all today — but the service layer importing dependencies
+    is the cycle this codebase has closed twice, and the deferred import is what keeps the
+    dependency graph one-directional.
+    """
+    from app.services.patient_portal_service import PatientPortalService
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise PortalAccessError(detail="portal request carried no Bearer authorization header")
+    token = auth.split(" ", 1)[1].strip()
+    if not token:
+        raise PortalAccessError(detail="portal request carried an empty Bearer token")
+    return await PatientPortalService(db).authenticate(token)

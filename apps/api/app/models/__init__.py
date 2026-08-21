@@ -13,12 +13,14 @@ from app.models.drug_safety_check import DrugSafetyCheck
 from app.models.drug_safety_override import DrugSafetyOverride
 from app.models.drug_vocabulary import Contraindication, DrugInteraction, DrugVocabulary
 from app.models.encounter import Encounter
+from app.models.encounter_participant import EncounterParticipant
 from app.models.guideline import GuidelineChunk
 from app.models.handoff import PatientHandoff
 from app.models.intake import IntakeAnswer, IntakeQuestion
 from app.models.lab_result import LabResult
 from app.models.medication_event import MedicationEvent
 from app.models.patient import Patient
+from app.models.patient_portal_grant import PatientPortalGrant
 from app.models.protocol_application import ProtocolApplication
 from app.models.reasoning_session import ReasoningSession
 from app.models.user import Account, PasswordResetToken, Session
@@ -53,6 +55,8 @@ __all__ = [
     "PatientHandoff",
     "Appointment",
     "ProviderAvailability",
+    "EncounterParticipant",
+    "PatientPortalGrant",
     "ProtocolApplication",
     "ValidationRun",
     "SafetyReport",

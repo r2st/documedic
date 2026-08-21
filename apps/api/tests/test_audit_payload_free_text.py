@@ -697,6 +697,26 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # ``provider_filtered`` is the provider name the caller narrowed to, or null — a clinician's
     # name the caller supplied, not anything about a patient.
     "appointment_diary_viewed": {"days", "appointment_count", "provider_filtered"},
+    # The patient portal. Never the token — that would be a working credential to a living
+    # patient's record written into an unencrypted, never-pruned table — and never its hash,
+    # which is enough to recognise one. Never the label either: it is free text a clinician
+    # typed about a patient. ``labelled`` is the boolean that survives it.
+    "portal_access_granted": {"days_valid", "labelled"},
+    "portal_access_revoked": {"grant_id"},
+    "portal_access_listed": {"grants"},
+    # ``by_patient`` is the field that keeps the trail honest: without it, a read at 3am from
+    # the patient's own phone would be attributed to the practice that issued the credential.
+    "portal_record_viewed": {"section", "items", "by_patient"},
+    # Multi-provider encounters. The participating account's *id*, never their email, and
+    # never the purpose or the removal reason: both of those are free text a clinician typed
+    # about a patient, and this table is unencrypted and never pruned. The id is what an access
+    # review needs and is not itself a contact detail.
+    "encounter_participant_added": {"role", "encounter_id", "participant_account_id"},
+    "encounter_participant_removed": {"role", "encounter_id", "participant_account_id"},
+    "encounter_participants_viewed": {"participants", "include_removed"},
+    "shared_encounters_viewed": {"shared"},
+    # The role only. Which encounter and which chart are already columns on the row.
+    "shared_encounter_viewed": {"role"},
     # Notes search. Counts and shape only, and above all never the query: a permanent,
     # unencrypted record of what a clinician was looking for, scoped to one chart, names a
     # patient and a suspicion in the same row.

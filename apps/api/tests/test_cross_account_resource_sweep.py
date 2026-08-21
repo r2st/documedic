@@ -84,6 +84,11 @@ BODIES: dict[str, dict] = {
     "POST /api/v1/patients/{patient_id}/appointments/{appointment_id}/outcome": {
         "attended": False,
     },
+    "DELETE /api/v1/patients/{patient_id}/encounters/{encounter_id}/participants"
+    "/{participant_id}": {"reason": "sweeping for cross-account writes"},
+    "DELETE /api/v1/patients/{patient_id}/portal-access/{grant_id}": {
+        "reason": "sweeping for cross-account writes",
+    },
 }
 
 
@@ -516,6 +521,115 @@ async def test_no_availability_route_reaches_another_accounts_window(
     assert [row["id"] for row in still_there.json()] == [stolen_window_id]
 
 
+@pytest.mark.asyncio
+async def test_no_participant_route_reaches_another_accounts_grant_through_your_own_chart(
+    app, auth_client, second_auth_client
+):
+    """``{participant_id}`` names an access grant over somebody else's consultation.
+
+    Both halves are bad and the write half is worse. Reading one discloses which colleague was
+    given sight of another practice's visit, and why. Withdrawing one is a quiet denial of
+    service against a clinical workflow: the supervising consultant loses the note they were
+    about to countersign, and nothing tells either practice it happened except the audit trail.
+
+    The attacker fills ``{patient_id}`` and ``{encounter_id}`` from their own account, so every
+    patient-scoped check answers "yes, this is mine" and the only thing left between the two
+    practices is whether the participant lookup is scoped to the encounter in the path.
+    """
+    victim = await create_patient(auth_client)
+    victim_visit = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/encounters",
+        json={"encounter_date": "2026-01-05", "presenting_complaint": "Chest pain"},
+    )
+    assert victim_visit.status_code == 201, victim_visit.text
+    granted = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/encounters/{victim_visit.json()['id']}/participants",
+        json={
+            "email": "doc2@example.com",
+            "role": "consulting",
+            "purpose": "A grant the sweep will try to reach from another chart.",
+        },
+    )
+    assert granted.status_code == 201, granted.text
+    stolen_participant_id = granted.json()["id"]
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+    attacker_visit = await second_auth_client.post(
+        f"/api/v1/patients/{attacker['id']}/encounters",
+        json={"encounter_date": "2026-01-05", "presenting_complaint": "Ankle sprain"},
+    )
+    assert attacker_visit.status_code == 201, attacker_visit.text
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{participant_id}" not in template:
+            continue
+        swept += 1
+        path = (
+            template.replace("{patient_id}", attacker["id"])
+            .replace("{encounter_id}", attacker_visit.json()["id"])
+            .replace("{participant_id}", stolen_participant_id)
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the participant sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's participation was reachable: " + "; ".join(leaked)
+
+    # And it is still live — a sweep that 4xx'd while having already revoked the grant would
+    # pass while having done the damage.
+    still_there = await auth_client.get(
+        f"/api/v1/patients/{victim['id']}/encounters/{victim_visit.json()['id']}/participants"
+    )
+    assert [row["id"] for row in still_there.json()["participants"]] == [stolen_participant_id]
+
+
+@pytest.mark.asyncio
+async def test_no_portal_access_route_reaches_another_accounts_grant_through_your_own_chart(
+    app, auth_client, second_auth_client
+):
+    """``{grant_id}`` names a live credential to somebody else's patient's record.
+
+    The write half is a denial of service against a patient rather than against a practice:
+    withdrawing another clinic's portal link stops a patient reading their own results, and the
+    only trace is an audit entry in a trail neither of them is watching. The read half leaks
+    when the link expires and whether it has ever been used.
+
+    The attacker supplies their own ``{patient_id}``, so the ownership check answers "yes, mine"
+    and the only thing left is whether the grant lookup is scoped to the patient in the path.
+    """
+    victim = await create_patient(auth_client)
+    issued = await auth_client.post(
+        f"/api/v1/patients/{victim['id']}/portal-access", json={"days_valid": 30}
+    )
+    assert issued.status_code == 201, issued.text
+    stolen_grant_id = issued.json()["id"]
+
+    attacker = await create_patient(second_auth_client, full_name="Attacker's Own Patient")
+
+    swept, leaked = 0, []
+    for method, template in _routes(app):
+        if "{grant_id}" not in template:
+            continue
+        swept += 1
+        path = template.replace("{patient_id}", attacker["id"]).replace(
+            "{grant_id}", stolen_grant_id
+        )
+        resp = await _call(second_auth_client, method, template, path)
+        if resp.status_code < 400:
+            leaked.append(f"{method} {template} -> {resp.status_code}")
+
+    assert swept, "the portal-grant sweep matched no routes; it is proving nothing"
+    assert not leaked, "another account's portal grant was reachable: " + "; ".join(leaked)
+
+    # Still live: a sweep that 4xx'd after already revoking the patient's link would pass while
+    # having done exactly the damage it exists to detect.
+    still_there = await auth_client.get(f"/api/v1/patients/{victim['id']}/portal-access")
+    assert [row["id"] for row in still_there.json()["grants"]] == [stolen_grant_id]
+    assert still_there.json()["grants"][0]["is_live"] is True
+
+
 # --- Sign-in sessions --------------------------------------------------------------------------
 
 
@@ -592,6 +706,8 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
         "lab_result_id",
         "appointment_id",
         "window_id",
+        "participant_id",
+        "grant_id",
     }
     # Not resource ids, and neither is scoped to an account:
     #   condition_name — the pathway routes take a condition *name*, a lookup into the shared

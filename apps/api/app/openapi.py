@@ -230,6 +230,20 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "portal",
+        "description": (
+            "The patient portal: the clinic's credential management, and the read-only view a "
+            "patient gets of their own record. Portal routes carry no patient id in any path — "
+            "the chart is named by the credential, so there is no id a holder could substitute. "
+            "Credentials are opaque random strings rather than JWTs, stored only as hashes, so "
+            "they revoke instantly and cannot be confused with a clinician's access token in "
+            "either direction. **A critical lab value is withheld until a clinician has "
+            "acknowledged it**: a panic result needs a phone call, not a web page. Diagnoses, "
+            "clinician notes, reasoning output and drug-safety findings are absent from every "
+            "portal response model rather than filtered out of it."
+        ),
+    },
+    {
         "name": "notes",
         "description": (
             "Relevance-ranked full-text search across the calling account's clinical notes. "

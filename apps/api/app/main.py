@@ -32,12 +32,14 @@ from app.routers import (
     auth,
     dashboard,
     documents,
+    encounter_participants,
     encounters,
     guidelines,
     handoffs,
     health,
     note_search,
     pathways,
+    patient_portal,
     patients,
     protocols,
     reasoning,
@@ -336,6 +338,8 @@ def create_app() -> FastAPI:
         appointments,
         protocols,
         note_search,
+        encounter_participants,
+        patient_portal,
         dashboard,
         validation,
     ):
@@ -346,6 +350,8 @@ def create_app() -> FastAPI:
     app.include_router(records.critical_labs_router, prefix=API_PREFIX)
     app.include_router(appointments.diary_router, prefix=API_PREFIX)
     app.include_router(protocols.catalogue_router, prefix=API_PREFIX)
+    app.include_router(encounter_participants.shared_router, prefix=API_PREFIX)
+    app.include_router(patient_portal.portal_router, prefix=API_PREFIX)
 
     return app
 

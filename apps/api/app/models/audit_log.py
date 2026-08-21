@@ -128,6 +128,23 @@ AUDIT_ACTIONS = (
     "protocol_applied",
     "protocol_applications_viewed",
     "protocol_suggestions_viewed",
+    # The patient portal. ``portal_record_viewed`` is attributed to the account that issued
+    # the credential — the patient has no account id and an entry with no actor is one a review
+    # cannot follow — and its payload carries ``by_patient`` so the trail does not read as the
+    # practice having opened the chart at 3am.
+    "portal_access_granted",
+    "portal_access_revoked",
+    "portal_access_listed",
+    "portal_record_viewed",
+    # Multi-provider encounters. The grant and the withdrawal are the entries an access review
+    # runs on: who was given sight of a consultation belonging to a chart they do not own, by
+    # whom, and when it stopped. ``shared_encounter_viewed`` is the read that answers "did they
+    # actually look", which is a different question from "were they entitled to".
+    "encounter_participant_added",
+    "encounter_participant_removed",
+    "encounter_participants_viewed",
+    "shared_encounters_viewed",
+    "shared_encounter_viewed",
     # Reading a chart's laboratory history as series. Clinical content — values, units and
     # reference intervals across years — so it is a PHI read like any other, not a "chart
     # rendering" that escapes the trail because nothing was written.

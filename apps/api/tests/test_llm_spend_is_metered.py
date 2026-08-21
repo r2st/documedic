@@ -163,6 +163,39 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/patients/{patient_id}/labs/critical-flags"): DETERMINISTIC,
     # Lab trending: a bounded query and pure arithmetic in ``app.core.lab_trend``, which is on
     # the offline roster and therefore cannot reach a provider even by accident.
+    # The patient portal. Credential management and four narrow reads; no provider anywhere,
+    # and each patient-side read is capped in the service (labs 200, medications 100,
+    # appointments 50), so none of them is the unbounded-local shape that would need a ceiling.
+    ("POST", "/api/v1/patients/{patient_id}/portal-access"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/portal-access"): DETERMINISTIC,
+    ("DELETE", "/api/v1/patients/{patient_id}/portal-access/{grant_id}"): DETERMINISTIC,
+    ("GET", "/api/v1/portal/me"): DETERMINISTIC,
+    ("GET", "/api/v1/portal/labs"): DETERMINISTIC,
+    ("GET", "/api/v1/portal/medications"): DETERMINISTIC,
+    ("GET", "/api/v1/portal/appointments"): DETERMINISTIC,
+    # Multi-provider encounters. Access grants, a role lookup in a frozen table, and a
+    # countersignature: queries and pure logic, no provider anywhere.
+    #
+    # The grant route is BOUNDED_FOR_OTHER_REASONS rather than DETERMINISTIC, which is the
+    # distinction this vocabulary exists to draw. It spends nothing upstream, and it takes an
+    # email address and answers whether that address has an account here — an answer worth
+    # giving to a signed-in clinician naming a colleague, and one that must not become an
+    # enumeration tool. Rule #8's argument does not reach it either: nobody meets this route
+    # mid-consultation and a 429 here delays an administrative act rather than reading as
+    # "no conflict found".
+    ("POST", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/participants"): (
+        BOUNDED_FOR_OTHER_REASONS
+    ),
+    ("GET", "/api/v1/patients/{patient_id}/encounters/{encounter_id}/participants"): (
+        DETERMINISTIC
+    ),
+    (
+        "DELETE",
+        "/api/v1/patients/{patient_id}/encounters/{encounter_id}/participants/{participant_id}",
+    ): DETERMINISTIC,
+    ("GET", "/api/v1/encounters/shared"): DETERMINISTIC,
+    ("GET", "/api/v1/encounters/shared/{encounter_id}"): DETERMINISTIC,
+    ("POST", "/api/v1/encounters/shared/{encounter_id}/sign"): DETERMINISTIC,
     # Notes search: bounded LIKE prefilter plus BM25 in ``app.core.note_search``. No provider.
     # A POST that reads — see the router docstring for why the query is not in the URL.
     ("POST", "/api/v1/notes/search"): DETERMINISTIC,

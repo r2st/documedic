@@ -451,6 +451,9 @@ class Settings(BaseSettings):
     # Per hour, not per minute: this is a batch job run after a prompt or corpus change, and one
     # execution takes minutes of wall clock. Twelve an hour is far beyond any human cadence
     # while still capping a runaway loop at a bounded spend.
+    # Consultation shares per account per hour. Generous for the real act — a ward round
+    # might share half a dozen visits — and far below what an address-enumeration sweep needs.
+    rate_limit_participant_grants_per_hour: int = 60
     rate_limit_validation_runs_per_hour: int = 12
     # Whole-chart export (`GET /patients/{id}/export`), per account per hour. The one read in
     # this API that is deliberately *not* paged: it serialises every medication, lab, condition,

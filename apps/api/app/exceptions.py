@@ -698,3 +698,75 @@ class LabMarkerNotFoundError(NotFoundError):
     """
 
     code = "lab_marker_not_found"
+
+
+class ParticipantAccountNotFoundError(NotFoundError):
+    """No account here uses that email address. Check the spelling with your colleague — they
+    need an account on this system before a consultation can be shared with them.
+
+    Named separately from :class:`PatientNotFoundError` so a client can tell "the colleague does
+    not exist" from "the chart does not exist"; they call for completely different corrections
+    and the API should not make the clinician guess which one happened.
+    """
+
+    code = "participant_account_not_found"
+
+
+class ParticipantNotFoundError(NotFoundError):
+    """That participation is not on this encounter. It may already have been withdrawn.
+
+    Deliberately raised by an attempt to withdraw an already-withdrawn access rather than
+    succeeding quietly: "I have just revoked this" and "somebody else revoked it in March" must
+    not render as the same result to whoever is looking.
+    """
+
+    code = "participant_not_found"
+
+
+class ParticipantAlreadyPresentError(ConflictError):
+    """That colleague already participates in this consultation. Withdraw the existing
+    participation first if their role has changed.
+
+    A role change is a withdrawal and a fresh grant rather than an edit, so that the record
+    keeps both spells and the dates each applied — an in-place update would leave the chart
+    saying the consultant had been supervising all along.
+    """
+
+    code = "participant_already_present"
+
+
+class ParticipantRoleNotPermittedError(AetherError):
+    """That role cannot be used here. An author or a supervisor cannot be added to a note that
+    has already been signed, and a colleague asked for an opinion cannot attest to the visit.
+
+    A **403** rather than a 404 in both cases, and for the same reason: the caller has already
+    been shown that the encounter exists, so there is nothing left to conceal, and being told
+    "you may read this and may not sign it" is what lets them do the right thing next.
+    """
+
+    status_code = 403
+    code = "participant_role_not_permitted"
+
+
+class PortalAccessError(AuthError):
+    """This link is not valid. It may have expired, or your clinic may have withdrawn it —
+    contact them for a new one.
+
+    One message for every way of failing: expired, revoked, issued against a chart that has
+    since been withdrawn, and never a token at all. The caller is an unauthenticated member of
+    the public holding a link, and telling them which of those it is would tell somebody who
+    found the link on a shared phone what kind of thing they had found.
+    """
+
+    code = "portal_access_denied"
+
+
+class PortalGrantNotFoundError(NotFoundError):
+    """That portal link is not on this chart. It may already have been withdrawn.
+
+    Raised by an attempt to withdraw an already-withdrawn grant rather than succeeding quietly:
+    "I have just stopped this" and "this stopped in March" are answers a practice acts on
+    differently.
+    """
+
+    code = "portal_grant_not_found"
