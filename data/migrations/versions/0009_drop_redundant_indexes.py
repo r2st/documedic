@@ -56,14 +56,14 @@ Create Date: 2026-08-10
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "0009"
-down_revision: Union[str, None] = "0008"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0008"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # (index name, table, definition tail) -- the tail is what downgrade() recreates.
 _REDUNDANT: list[tuple[str, str, str]] = [

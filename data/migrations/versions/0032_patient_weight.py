@@ -31,17 +31,16 @@ Create Date: 2026-08-15
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
 from app.db.migration_guards import column_exists
 
 revision: str = "0032"
-down_revision: Union[str, None] = "0031"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0031"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _TABLE = "patients"
 _CHECK = "ck_patients_weight_kg_plausible"
@@ -71,9 +70,7 @@ def upgrade() -> None:
         if not column_exists(bind, _TABLE, name):
             op.add_column(_TABLE, column)
 
-    existing = {
-        c["name"] for c in sa.inspect(bind).get_check_constraints(_TABLE) if c.get("name")
-    }
+    existing = {c["name"] for c in sa.inspect(bind).get_check_constraints(_TABLE) if c.get("name")}
     if _CHECK not in existing:
         # Every existing row has a NULL weight — the column did not exist a moment ago — so
         # this validates immediately. NOT VALID first anyway, so that a database which somehow

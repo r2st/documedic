@@ -40,23 +40,23 @@ Create Date: 2026-08-15
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "0030"
-down_revision: Union[str, None] = "0029"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0029"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _RANGE_ORDER = (
     "reference_range_low IS NULL OR reference_range_high IS NULL "
     "OR reference_range_low <= reference_range_high"
 )
 _BANDS = ("high", "moderate", "low", "very_low", "insufficient_data")
-_CONFIDENCE_BAND = "confidence_band IS NULL OR confidence_band IN (" + ", ".join(
-    repr(b) for b in _BANDS
-) + ")"
+_CONFIDENCE_BAND = (
+    "confidence_band IS NULL OR confidence_band IN (" + ", ".join(repr(b) for b in _BANDS) + ")"
+)
 
 # (table, constraint name, expression) for the two interval checks.
 _RANGE_TABLES = (
@@ -112,9 +112,7 @@ def upgrade() -> None:
         "ck_derived_markers_value_positive",
         "CHECK (value_numeric > 0) NOT VALID",
     )
-    op.execute(
-        "ALTER TABLE derived_markers VALIDATE CONSTRAINT ck_derived_markers_value_positive"
-    )
+    op.execute("ALTER TABLE derived_markers VALIDATE CONSTRAINT ck_derived_markers_value_positive")
     _replace_constraint(
         "clinical_suggestions",
         "ck_clinical_suggestions_confidence_band",

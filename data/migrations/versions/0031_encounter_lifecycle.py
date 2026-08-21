@@ -31,16 +31,15 @@ Create Date: 2026-08-15
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
 from app.db.migration_guards import column_exists, index_exists
 from app.db.types import GUID
 from app.models.encounter import (
-    AMENDMENT_COMPLETE,
     AMENDED_AT_SET,
+    AMENDMENT_COMPLETE,
     ENCOUNTER_STATUSES,
     FROZEN_ON_SIGN,
     SIGNATURE_COMPLETE,
@@ -48,9 +47,9 @@ from app.models.encounter import (
 )
 
 revision: str = "0031"
-down_revision: Union[str, None] = "0030"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0030"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _TABLE = "encounters"
 
@@ -174,9 +173,7 @@ def upgrade() -> None:
             # stops at the validate step with the row still present to look at, rather than
             # having it rewritten by a repair step nobody reviewed. Backfilled rows are all
             # plain drafts, so in practice every one of these validates immediately.
-            op.execute(
-                f"ALTER TABLE {_TABLE} ADD CONSTRAINT {name} CHECK ({predicate}) NOT VALID"
-            )
+            op.execute(f"ALTER TABLE {_TABLE} ADD CONSTRAINT {name} CHECK ({predicate}) NOT VALID")
             op.execute(f"ALTER TABLE {_TABLE} VALIDATE CONSTRAINT {name}")
 
     for name, column, target, target_column in _FOREIGN_KEYS:

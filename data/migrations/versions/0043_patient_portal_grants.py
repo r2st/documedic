@@ -33,17 +33,16 @@ Create Date: 2026-08-21
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
 from app.db.migration_guards import index_exists
 
 revision: str = "0043"
-down_revision: Union[str, None] = "0042"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0042"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _TABLE = "patient_portal_grants"
 _TOKEN_UNIQUE = "uq_patient_portal_grants_token"

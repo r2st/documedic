@@ -45,23 +45,22 @@ Create Date: 2026-08-15
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
-from app.db.migration_guards import index_exists
-from app.models.appointment import CANCELLATION_COMPLETE, SLOT_IS_AN_INTERVAL
 from app.core.scheduling import (
     APPOINTMENT_MODALITIES,
     APPOINTMENT_STATUSES,
     OCCUPYING_STATUSES,
 )
+from app.db.migration_guards import index_exists
+from app.models.appointment import CANCELLATION_COMPLETE, SLOT_IS_AN_INTERVAL
 
 revision: str = "0040"
-down_revision: Union[str, None] = "0039"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0039"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _APPOINTMENTS = "appointments"
 _AVAILABILITY = "provider_availability"
@@ -141,12 +140,8 @@ def upgrade() -> None:
             sa.Column("provider_name", sa.String(length=200), nullable=False),
             sa.Column("starts_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("ends_at", sa.DateTime(timezone=True), nullable=False),
-            sa.Column(
-                "status", sa.String(length=20), nullable=False, server_default="scheduled"
-            ),
-            sa.Column(
-                "modality", sa.String(length=20), nullable=False, server_default="in_person"
-            ),
+            sa.Column("status", sa.String(length=20), nullable=False, server_default="scheduled"),
+            sa.Column("modality", sa.String(length=20), nullable=False, server_default="in_person"),
             sa.Column("appointment_type", sa.String(length=50), nullable=True),
             sa.Column("reason", sa.Text(), nullable=True),
             sa.Column("source_protocol_key", sa.String(length=60), nullable=True),
@@ -179,13 +174,9 @@ def upgrade() -> None:
                 server_default=sa.text("now()"),
             ),
             sa.CheckConstraint(f"status IN ({_STATUS_LIST})", name="ck_appointments_status"),
-            sa.CheckConstraint(
-                f"modality IN ({_MODALITY_LIST})", name="ck_appointments_modality"
-            ),
+            sa.CheckConstraint(f"modality IN ({_MODALITY_LIST})", name="ck_appointments_modality"),
             sa.CheckConstraint(SLOT_IS_AN_INTERVAL, name="ck_appointments_slot_interval"),
-            sa.CheckConstraint(
-                CANCELLATION_COMPLETE, name="ck_appointments_cancellation_complete"
-            ),
+            sa.CheckConstraint(CANCELLATION_COMPLETE, name="ck_appointments_cancellation_complete"),
         )
 
     if not inspector.has_table(_AVAILABILITY):

@@ -37,24 +37,23 @@ Create Date: 2026-08-15
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
 from app.db.migration_guards import index_exists
 from app.models.handoff import (
     ACKNOWLEDGEMENT_COMPLETE,
+    FROZEN_ON_SEND,
     HANDOFF_STATUSES,
     SEND_COMPLETE,
     SENT_STATUSES,
-    FROZEN_ON_SEND,
 )
 
 revision: str = "0037"
-down_revision: Union[str, None] = "0036"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0036"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _TABLE = "patient_handoffs"
 _LIST_INDEX = "ix_handoffs_patient_created_live"
@@ -154,9 +153,7 @@ def upgrade() -> None:
                 nullable=True,
             ),
             sa.Column("acknowledgement_note", sa.Text(), nullable=True),
-            sa.Column(
-                "is_deleted", sa.Boolean(), nullable=False, server_default=sa.text("false")
-            ),
+            sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default=sa.text("false")),
             sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column(
                 "created_at",

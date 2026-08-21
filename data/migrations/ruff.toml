@@ -1,0 +1,23 @@
+# Ruff configuration for the Alembic migration tree.
+#
+# Ruff resolves its settings by walking up from each file it lints, and the repository root has
+# no pyproject.toml — the backend's lives at apps/api/pyproject.toml, which is not an ancestor of
+# this directory. So until this file existed, ``ruff check data/migrations`` linted the schema
+# history against ruff's built-in defaults while every other Python file in the project was held
+# to the project's own rules. The two disagreed, which is why a bare run here reported errors a
+# run in apps/api never would, and why nothing was ever cleaned up: the noise was not actionable.
+#
+# The settings mirror apps/api/pyproject.toml deliberately. Migrations are ordinary Python that
+# happens to describe a schema, and a second dialect of the house style in the one tree nobody
+# reads often is how a tree nobody reads often gets worse.
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "C4"]
+
+[lint.per-file-ignores]
+# Alembic's generated header assigns the revision identifiers before any import block that a
+# human would write, and ``script.py.mako`` reproduces that layout for every new migration. E402
+# is the shape of the template, not a mistake in any one file.
+"versions/*" = ["E402"]

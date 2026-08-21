@@ -44,17 +44,16 @@ Create Date: 2026-08-15
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
 from app.db.migration_guards import index_exists
 
 revision: str = "0041"
-down_revision: Union[str, None] = "0040"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0040"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _TABLE = "protocol_applications"
 _LIST_INDEX = "ix_protocol_applications_patient_created"
@@ -75,9 +74,7 @@ def upgrade() -> None:
             # No index of its own — the composite below leads with this column, so a bare
             # patient_id index would be its prefix and cost a write on every insert for nothing.
             sa.Column("patient_id", sa.Uuid(), sa.ForeignKey("patients.id"), nullable=False),
-            sa.Column(
-                "encounter_id", sa.Uuid(), sa.ForeignKey("encounters.id"), nullable=True
-            ),
+            sa.Column("encounter_id", sa.Uuid(), sa.ForeignKey("encounters.id"), nullable=True),
             sa.Column("template_key", sa.String(length=60), nullable=False),
             sa.Column("template_version", sa.String(length=20), nullable=False),
             sa.Column("template_title", sa.String(length=200), nullable=False),
