@@ -697,6 +697,25 @@ PAYLOAD_KEYS: dict[str, set[str]] = {
     # ``provider_filtered`` is the provider name the caller narrowed to, or null — a clinician's
     # name the caller supplied, not anything about a patient.
     "appointment_diary_viewed": {"days", "appointment_count", "provider_filtered"},
+    # Notes search. Counts and shape only, and above all never the query: a permanent,
+    # unencrypted record of what a clinician was looking for, scoped to one chart, names a
+    # patient and a suspicion in the same row.
+    "clinical_notes_searched": {
+        "term_count",
+        "phrase_count",
+        "candidates",
+        "results",
+        "scoped_to_patient",
+        "truncated",
+    },
+    # Lab trending. Counts and a truncation flag only: which analytes a chart holds is a
+    # statement about what the patient is being investigated for, and this table is unencrypted
+    # and never pruned.
+    "lab_trends_viewed": {"series", "observations", "truncated"},
+    # The single-marker read names the marker, and may only ever name the *canonical* key —
+    # a closed curated vocabulary compiled into the application, not the free text a caller
+    # put in the path. Null for an uncurated analyte, where the name is exactly that free text.
+    "lab_trend_viewed": {"canonical_marker", "points", "direction"},
     "appointment_reminders_viewed": {"horizon_minutes", "reminder_count"},
     # A provider's declared working week: a clinician's name and four numbers from a clinic
     # timetable. Nothing about a patient is in it.

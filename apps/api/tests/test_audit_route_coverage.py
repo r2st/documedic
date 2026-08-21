@@ -180,6 +180,10 @@ MUTATING_ROUTE_AUDIT: dict[tuple[str, str], tuple[str, ...]] = {
         "drug_safety_check",
         "appointment_booked",
     ),
+    # --- Notes search. A POST that reads: the query is clinical content about the person being
+    # searched for, and a query string is written into access logs and browser history. It
+    # still writes an entry — reading a panel's notes is a PHI read whoever asked for it.
+    ("POST", "/api/v1/notes/search"): ("clinical_notes_searched",),
     # --- Validation and regulatory.
     ("POST", "/api/v1/validation/run"): ("validation_run_executed",),
     ("POST", "/api/v1/safety-reports"): ("safety_report_filed",),

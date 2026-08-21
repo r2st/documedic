@@ -601,8 +601,12 @@ async def test_every_non_patient_path_parameter_is_covered_by_a_sweep(app):
     #     is chosen by the {patient_id} beside it, which the sweep above does cover;
     #   order_set_key — the protocol routes take a curated template key ("t2dm_initial_workup"),
     #     compiled into the application and identical on every deployment. No account owns one,
-    #     and the chart it is applied to is the {patient_id} beside it.
-    not_a_resource = {"condition_name", "resource_type", "order_set_key"}
+    #     and the chart it is applied to is the {patient_id} beside it;
+    #   marker_name — the lab-trend route takes an analyte *name* as printed on a report
+    #     ("S. Creatinine"). Not an id and not owned: the same string names the same test on
+    #     every chart in the world. The chart trended is the {patient_id} beside it, which the
+    #     sweep above covers, and the service filters every row read by it.
+    not_a_resource = {"condition_name", "resource_type", "order_set_key", "marker_name"}
 
     found = {
         part[1:-1]

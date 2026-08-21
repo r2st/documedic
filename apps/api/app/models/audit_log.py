@@ -128,6 +128,15 @@ AUDIT_ACTIONS = (
     "protocol_applied",
     "protocol_applications_viewed",
     "protocol_suggestions_viewed",
+    # Reading a chart's laboratory history as series. Clinical content — values, units and
+    # reference intervals across years — so it is a PHI read like any other, not a "chart
+    # rendering" that escapes the trail because nothing was written.
+    # Searching a panel's notes. Counts only — never the query: a permanent, unencrypted
+    # record of what a clinician was looking for, scoped to one chart, names a patient and a
+    # suspicion in the same row.
+    "clinical_notes_searched",
+    "lab_trends_viewed",
+    "lab_trend_viewed",
     "document_uploaded",
     "extraction_completed",
     "extraction_failed",

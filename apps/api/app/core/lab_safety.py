@@ -621,6 +621,46 @@ def creatinine_to_mg_dl(value: float, unit: str | None) -> float | None:
     return _to_canonical_value("creatinine", value, unit)
 
 
+def canonical_marker(marker_name: str) -> str | None:
+    """The curated marker key ``marker_name`` names, or None for one this module does not hold.
+
+    The public form of ``_normalize_marker``. Exposed for :mod:`app.core.lab_trend`, which needs
+    it for a reason the safety screen never had: a *series*. "S. Creatinine", "Serum Creatinine"
+    and "Creatinine" are three spellings one patient's chart genuinely accumulates as documents
+    arrive from three laboratories, and plotting them as three separate one-point series is how a
+    rising creatinine becomes invisible — each series has a single reading and therefore no trend
+    at all.
+
+    None keeps its meaning from ``_normalize_marker``: not curated, so the caller must fall back
+    to something that does not claim to know which analyte this is.
+    """
+    return _normalize_marker(marker_name)
+
+
+def canonical_unit(canonical: str) -> str | None:
+    """The unit curated values of ``canonical`` are expressed in, or None if it is not curated.
+
+    A series has to be labelled with the unit its numbers are in, and after conversion that unit
+    is this one rather than whatever any individual row was printed in. An unlabelled axis, or
+    one labelled from the first row, is the mixed-unit bug wearing the answer's clothes.
+    """
+    curated = _RANGES.get(canonical)
+    return None if curated is None else curated.unit
+
+
+def fold_marker_name(marker_name: str) -> str:
+    """``marker_name`` reduced to a comparison key, with no claim about which analyte it is.
+
+    Case, punctuation and repeated whitespace are noise in a marker name printed by a laboratory;
+    a specimen prefix is not (see ``_without_specimen_prefix``, which is deliberately not applied
+    here). This is the grouping key for a marker :func:`canonical_marker` returns None for, and
+    the whole point is that it groups only rows that were *written* the same way — an uncurated
+    "Anti-TPO" and "Anti TPO" are the same test, and nothing here is entitled to decide that
+    "Urine Protein" and "Protein" are.
+    """
+    return _collapse(_NORM_SEPARATE_RE.sub(" ", (marker_name or "").strip().lower()))
+
+
 def canonical_lab_value(
     marker_name: str, value: float | None, unit: str | None
 ) -> tuple[str, float] | None:

@@ -161,6 +161,13 @@ ROUTE_COST: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/patients/{patient_id}/drug-safety/override"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/drug-safety/overrides"): DETERMINISTIC,
     ("GET", "/api/v1/patients/{patient_id}/labs/critical-flags"): DETERMINISTIC,
+    # Lab trending: a bounded query and pure arithmetic in ``app.core.lab_trend``, which is on
+    # the offline roster and therefore cannot reach a provider even by accident.
+    # Notes search: bounded LIKE prefilter plus BM25 in ``app.core.note_search``. No provider.
+    # A POST that reads — see the router docstring for why the query is not in the URL.
+    ("POST", "/api/v1/notes/search"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/labs/trends"): DETERMINISTIC,
+    ("GET", "/api/v1/patients/{patient_id}/labs/trends/{marker_name}"): DETERMINISTIC,
     # --- the clinic diary. Ordinary rows and calendar arithmetic; no model anywhere in the
     # path. The diary and reminder reads are bounded by a horizon the schema caps rather than by
     # a page the caller chooses, and the timetable routes touch one account's own windows.

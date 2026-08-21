@@ -19,6 +19,12 @@ from app.dependencies import (
 from app.models.user import Account
 from app.openapi import AUTH_ERRORS, PATIENT_ERRORS, errors
 from app.schemas.common import PaginationMeta
+from app.schemas.lab_trend import (
+    MAX_MARKER_NAME_CHARS,
+    LabTrendListResponse,
+    LabTrendResponse,
+    SingleLabTrendResponse,
+)
 from app.schemas.medication_timeline import PrescriptionTimelineResponse, TimelineDrugOut
 from app.schemas.record import (
     CriticalLabAcknowledgementRequest,
@@ -33,6 +39,7 @@ from app.schemas.record import (
 from app.services.audit_service import AuditService
 from app.services.export_service import PatientExportService
 from app.services.lab_safety_service import LabSafetyService
+from app.services.lab_trend_service import LabTrendService
 from app.services.patient_service import PatientService
 from app.services.prescription_timeline_service import (
     DEFAULT_DRUG_LIMIT,
@@ -587,3 +594,92 @@ async def acknowledge_critical_lab(
     )
     await db.commit()
     return CriticalLabAcknowledgementResponse.model_validate(row, from_attributes=True)
+
+
+def _trend_payload(trend: object) -> dict:
+    """The engine's dataclass as the response model's fields.
+
+    Written out rather than passed through ``model_validate`` on the dataclass so that adding a
+    field to ``app.core.lab_trend`` is a decision about what the API exposes rather than an
+    automatic widening of it.
+    """
+    from dataclasses import asdict
+
+    return asdict(trend)  # type: ignore[call-overload]
+
+
+@labs_router.get(
+    "/trends",
+    response_model=LabTrendListResponse,
+    summary="Every marker on this chart as a longitudinal series",
+    responses=PATIENT_ERRORS,
+)
+async def lab_trends(
+    patient_id: uuid.UUID,
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> LabTrendListResponse:
+    """Each marker's history as a series ready to plot: points in one unit, the reference band
+    where the laboratories agree on one, and the arithmetic of the change.
+
+    Three things to render rather than ignore.
+
+    `unit` is the **series** unit, not any report's. Values are converted into the marker's
+    canonical unit, so a creatinine reported in µmol/L by one laboratory and mg/dL by the next
+    sits on one axis honestly instead of drawing a kidney injury that never happened.
+
+    `excluded` is not an error list. A result reported in a unit with no curated conversion, or
+    with no sample date, cannot be placed — and it is disproportionately the interesting one,
+    because the commonest reason is having come from a different laboratory, which is what
+    happens when a patient is admitted.
+
+    `reference.varies` means the laboratories quoted different intervals and no single band is
+    honest. That is a different answer from a null band, which means nobody quoted one.
+
+    Audited as `lab_trends_viewed`.
+    """
+    report = await LabTrendService(db).trends_for_patient(
+        account_id=account.id, patient_id=patient_id
+    )
+    await db.commit()
+    return LabTrendListResponse(
+        patient_id=str(patient_id),
+        trends=[LabTrendResponse.model_validate(_trend_payload(t)) for t in report.trends],
+        observations_considered=report.observations_considered,
+        truncated=report.truncated,
+        series_omitted=report.series_omitted,
+    )
+
+
+@labs_router.get(
+    "/trends/{marker_name}",
+    response_model=SingleLabTrendResponse,
+    summary="One marker's longitudinal series",
+    responses=PATIENT_ERRORS,
+)
+async def lab_trend_for_marker(
+    patient_id: uuid.UUID,
+    marker_name: str = Path(
+        max_length=MAX_MARKER_NAME_CHARS,
+        description=(
+            "The marker to trend, as the chart spells it. A name that resolves to a curated "
+            "analyte trends every spelling of it on the chart, not only the rows written this "
+            "way — which is what makes four years of creatinines one series rather than three."
+        ),
+    ),
+    account: Account = Depends(get_current_account),
+    db: AsyncSession = Depends(get_db),
+) -> SingleLabTrendResponse:
+    """One marker's series. **404** `lab_marker_not_found` when the chart holds no results for it.
+
+    A 404 rather than an empty series on purpose: "no results for this analyte" and "results
+    exist but none could be placed on an axis" are different facts, and an empty 200 renders as
+    the first when it may be the second.
+
+    Audited as `lab_trend_viewed`.
+    """
+    trend, truncated = await LabTrendService(db).trend_for_marker(
+        account_id=account.id, patient_id=patient_id, marker_name=marker_name
+    )
+    await db.commit()
+    return SingleLabTrendResponse.model_validate(_trend_payload(trend) | {"truncated": truncated})

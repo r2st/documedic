@@ -48,6 +48,14 @@ _OFFLINE_ROOTS = (
     # only through ``re``, ``dataclasses`` and ``app.core.dose_text``, and this line is what
     # keeps it that way.
     "app.core.dose_range",
+    # The longitudinal trend engine. Not a check that blocks anything, and here for the other
+    # half of Rule #8 — "core record access ... must work offline". Reading which way a
+    # creatinine is going is exactly what a clinician still needs when the reasoning engine is
+    # unavailable, and the module's whole correctness argument is that it converts units through
+    # ``app.core.lab_safety`` rather than plotting the column: a threshold pulled from settings,
+    # or a conversion table fetched at import, would put that behind the same availability the
+    # LLM has.
+    "app.core.lab_trend",
 )
 
 # Everything the standard library gives these modules today. An addition here is not forbidden,

@@ -230,6 +230,17 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "notes",
+        "description": (
+            "Relevance-ranked full-text search across the calling account's clinical notes. "
+            "A POST rather than a GET on purpose: a search query is clinical content about the "
+            "person being searched for, and a query string is written into access logs and "
+            "browser history. Results carry `superseded_by` where the matching note has since "
+            "been amended — the strongest textual match is quite often a statement a clinician "
+            "later corrected."
+        ),
+    },
+    {
         "name": "protocols",
         "description": (
             "Curated protocol templates — reusable order sets pairing a workup, first-line "

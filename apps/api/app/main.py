@@ -36,6 +36,7 @@ from app.routers import (
     guidelines,
     handoffs,
     health,
+    note_search,
     pathways,
     patients,
     protocols,
@@ -334,6 +335,7 @@ def create_app() -> FastAPI:
         handoffs,
         appointments,
         protocols,
+        note_search,
         dashboard,
         validation,
     ):

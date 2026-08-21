@@ -684,3 +684,17 @@ class ProtocolTemplateUnusableError(ConflictError):
     """
 
     code = "protocol_template_unusable"
+
+
+class LabMarkerNotFoundError(NotFoundError):
+    """This chart holds no results for that marker. Open the lab trends list to see which
+    markers have been reported for this patient.
+
+    Distinct from an empty series on purpose. "No results for this analyte" and "a series with
+    no comparable points" look identical in a 200 with an empty list, and they are different
+    facts: the second means results exist and something — a unit nobody can convert, a missing
+    sample date — kept them off the axis, which is a thing the clinician needs to see rather
+    than a blank chart.
+    """
+
+    code = "lab_marker_not_found"
