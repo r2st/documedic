@@ -15,4 +15,18 @@ describe('AuthLayout', () => {
     expect(screen.getByText('Diagnostic & management decision support')).toBeInTheDocument();
     expect(screen.getByText('form')).toBeInTheDocument();
   });
+
+  it('shows the DoAide parent brand attribution', () => {
+    render(
+      <AuthLayout>
+        <p>form</p>
+      </AuthLayout>,
+    );
+
+    const link = screen.getByRole('link', { name: 'DoAide' });
+    expect(link).toHaveAttribute('href', 'https://doaide.com');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getByText(/Product/)).toBeInTheDocument();
+  });
 });

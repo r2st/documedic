@@ -181,7 +181,8 @@ def create_app() -> FastAPI:
         description=(
             "Clinician-facing diagnostic & management decision-support: patient graph + "
             "deterministic drug safety (P1), 8-agent reasoning engine + Reasoning Theatre (P2), "
-            "guideline RAG with cited management (P3), validation/regulatory/pilot (P4).\n\n"
+            "guideline RAG with cited management (P3), validation/regulatory/pilot (P4). "
+            "A [DoAide](https://doaide.com) product.\n\n"
             "**The clinician decides.** Nothing here prescribes. Every clinical output is a "
             "suggestion carrying an autonomy tier, traceable to patient data or a cited "
             "guideline, and it has passed the Verifier agent — there is no route around that "

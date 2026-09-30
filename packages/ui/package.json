@@ -2,7 +2,7 @@
   "name": "@aether/ui",
   "version": "0.1.0",
   "private": true,
-  "description": "Shared React component library (design system) for Aether Clinician",
+  "description": "Shared React component library (design system) for Aether Clinician — a DoAide product",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {

@@ -1,7 +1,9 @@
 # Aether Clinician
 
+A [DoAide](https://doaide.com) product.
+
 A clinician-facing diagnostic & management **decision-support system (CDSS)** for primary
-care in India. It transforms fragmented patient histories (prescriptions, lab PDFs, scanned
+care in India. Live at [documedic.doaide.com](https://documedic.doaide.com). It transforms fragmented patient histories (prescriptions, lab PDFs, scanned
 reports) into a structured longitudinal record, runs **deterministic, offline-capable
 drug-safety checks**, and keeps an **immutable, hash-chained audit trail** of every clinical
 action. The clinician is always the decision-maker — the system supports, never prescribes.

@@ -17,6 +17,19 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         {/* A crash here is the worst place for a white page: there is no header to navigate
             from and nobody is signed in yet, so the fallback is the only way back. */}
         <ErrorBoundary section="The sign-in form">{children}</ErrorBoundary>
+
+        <p className="mt-6 text-center text-xs text-slate-400">
+          A{' '}
+          <a
+            href="https://doaide.com"
+            className="font-medium text-slate-500 hover:text-slate-600 hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            DoAide
+          </a>{' '}
+          Product
+        </p>
       </div>
     </main>
   );

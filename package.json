@@ -2,7 +2,8 @@
   "name": "aether-clinician",
   "version": "0.1.0",
   "private": true,
-  "description": "Aether Clinician \u2014 clinician-facing diagnostic & management decision-support system (CDSS)",
+  "description": "Aether Clinician \u2014 clinician-facing diagnostic & management decision-support system (CDSS). A DoAide product.",
+  "homepage": "https://documedic.doaide.com",
   "workspaces": [
     "apps/web",
     "packages/*"

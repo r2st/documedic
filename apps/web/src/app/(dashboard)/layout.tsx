@@ -235,6 +235,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </ErrorBoundary>
       </main>
+      <footer className="border-t border-slate-200/60 bg-white/80 py-3 text-center text-xs text-slate-400">
+        A{' '}
+        <a
+          href="https://doaide.com"
+          className="font-medium text-slate-500 hover:text-slate-600 hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          DoAide
+        </a>{' '}
+        Product
+      </footer>
     </div>
   );
 }

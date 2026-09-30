@@ -281,8 +281,8 @@ def _extract_openrouter(file_bytes: bytes, file_type: str) -> str:
         base_url=settings.openrouter_base_url,
         timeout=settings.llm_request_timeout_seconds,
         default_headers={
-            "HTTP-Referer": "https://documedic.aiknol.com",
-            "X-Title": "Documedic (Aether Clinician)",
+            "HTTP-Referer": "https://documedic.doaide.com",
+            "X-Title": "Documedic (Aether Clinician) — A DoAide Product",
         },
     )
     # Typed as list[Any]: the content part is a union (image_url vs OpenRouter's file part),

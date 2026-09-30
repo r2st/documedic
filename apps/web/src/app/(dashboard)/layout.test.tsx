@@ -73,6 +73,19 @@ describe('DashboardLayout', () => {
     expect(screen.getAllByRole('link', { name: 'Metrics' })[0]).toHaveAttribute('href', '/metrics');
   });
 
+  it('shows the DoAide parent brand footer', () => {
+    render(
+      <DashboardLayout>
+        <p>child</p>
+      </DashboardLayout>,
+    );
+
+    const link = screen.getByRole('link', { name: 'DoAide' });
+    expect(link).toHaveAttribute('href', 'https://doaide.com');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(screen.getByText(/Product/)).toBeInTheDocument();
+  });
+
   it('marks the active section, including nested patient routes', () => {
     pathname = '/patients/pat-1/encounter';
     render(

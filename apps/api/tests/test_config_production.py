@@ -22,7 +22,7 @@ def _prod(**overrides) -> Settings:
         "app_env": "production",
         "app_secret_key": _SAFE_KEY,
         "app_debug": False,
-        "cors_origins": "https://documedic.aiknol.com",
+        "cors_origins": "https://documedic.doaide.com",
         "field_encryption_key": "k" * 44,
         "llm_demo_fallback": False,
         "database_url": _SAFE_DATABASE_URL,
@@ -78,19 +78,19 @@ def test_null_cors_origin_is_rejected():
     Allowing it is close to a wildcard for the attacker who can get the clinician to open
     one local HTML file, and it reads as an innocuous-looking entry in an env var.
     """
-    problems = production_config_errors(_prod(cors_origins="https://documedic.aiknol.com,null"))
+    problems = production_config_errors(_prod(cors_origins="https://documedic.doaide.com,null"))
     assert any("`null` origin" in p for p in problems)
 
 
 @pytest.mark.parametrize(
     "origin",
     [
-        "https://documedic.aiknol.com/",  # trailing slash
-        "https://documedic.aiknol.com/app",  # path
-        "https://documedic.aiknol.com?x=1",  # query
-        "documedic.aiknol.com",  # no scheme
-        "HTTPS://documedic.aiknol.com",  # uppercase scheme
-        "ftp://documedic.aiknol.com",  # not an http(s) origin
+        "https://documedic.doaide.com/",  # trailing slash
+        "https://documedic.doaide.com/app",  # path
+        "https://documedic.doaide.com?x=1",  # query
+        "documedic.doaide.com",  # no scheme
+        "HTTPS://documedic.doaide.com",  # uppercase scheme
+        "ftp://documedic.doaide.com",  # not an http(s) origin
         "https://",  # no host
     ],
 )
@@ -109,8 +109,8 @@ def test_cors_origins_that_can_never_match_a_browser_origin_are_rejected(origin)
 @pytest.mark.parametrize(
     "origin",
     [
-        "https://documedic.aiknol.com",
-        "https://documedic.aiknol.com:8443",
+        "https://documedic.doaide.com",
+        "https://documedic.doaide.com:8443",
         "http://localhost:3000",
         "https://a.example.com,https://b.example.com",
     ],

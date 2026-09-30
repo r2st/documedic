@@ -27,7 +27,7 @@ function directives(policy: string): Record<string, string[]> {
 }
 
 const prod = () =>
-  directives(contentSecurityPolicy({ dev: false, apiUrl: 'https://api.documedic.aiknol.com' }));
+  directives(contentSecurityPolicy({ dev: false, apiUrl: 'https://api.documedic.doaide.com' }));
 
 describe('Content-Security-Policy', () => {
   it('is served at all', () => {
@@ -44,8 +44,8 @@ describe('Content-Security-Policy', () => {
     it('names the API origin explicitly, not a wildcard', () => {
       expect(prod()['connect-src']).toEqual([
         "'self'",
-        'https://api.documedic.aiknol.com',
-        'wss://api.documedic.aiknol.com',
+        'https://api.documedic.doaide.com',
+        'wss://api.documedic.doaide.com',
       ]);
     });
 
@@ -73,7 +73,7 @@ describe('Content-Security-Policy', () => {
     it('refuses to build a policy from a malformed API URL', () => {
       // Silently producing a policy that blocks the API would take the whole app down at runtime
       // with a console error no clinician will read. This fails the build instead.
-      expect(() => contentSecurityPolicy({ dev: false, apiUrl: 'api.documedic.aiknol.com' })).toThrow(
+      expect(() => contentSecurityPolicy({ dev: false, apiUrl: 'api.documedic.doaide.com' })).toThrow(
         /not a valid absolute URL/,
       );
     });

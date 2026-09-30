@@ -1,5 +1,7 @@
 # Documedic / Aether Clinician — PROJECT_INFO
 
+A [DoAide](https://doaide.com) product.
+
 **Clinician-facing diagnostic and management decision-support system (CDSS) for primary care in India — turns fragmented histories into a structured longitudinal record, runs offline-capable drug-safety checks, and keeps a hash-chained audit trail.**
 
 > Demo build — decision-support only, not for real patient care. The clinician always decides.
@@ -30,7 +32,7 @@
 |---|---|
 | Host | Hetzner `89.167.8.178` — shared with Herald, GoSumo, TalentPing, HomeNex, Knol |
 | Ports on the box | `3003` / `3004` (per Herald's port map for the shared host) |
-| Public URL | `documedic.aiknol.com` |
+| Public URL | `documedic.doaide.com` (legacy: `documedic.aiknol.com`) |
 | Local compose ports | `8000` api · `3000` web · `5432` postgres · `6379` redis · `6333` qdrant · `9000`/`9001` minio |
 | Ingress | The box's shared Caddy container |
 
