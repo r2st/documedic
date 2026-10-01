@@ -49,7 +49,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <h1 className="auth-title">
           DoAide <span className="auth-title-product">Clinician</span>
         </h1>
-        <p className="auth-subtitle">AI clinical decision support for modern healthcare</p>
+        <p className="auth-subtitle">Your digital robot for clinical decisions</p>
 
         <ErrorBoundary section="The sign-in form">{children}</ErrorBoundary>
 

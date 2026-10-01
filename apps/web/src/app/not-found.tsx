@@ -17,8 +17,7 @@ export default function NotFound() {
       <div className="w-full rounded-xl border border-[#2A2A2D] bg-[#1A1A1D] p-6 text-sm text-[#E5E7EB]">
         <h1 className="text-base font-semibold text-[#E5E7EB]">This page does not exist</h1>
         <p className="mt-2">
-          The address could not be matched to a screen in DoAide Clinician. This is a broken link,
-          not a statement about any patient&rsquo;s record.
+          Broken link — not a clinical finding.
         </p>
         <Link
           href="/patients"

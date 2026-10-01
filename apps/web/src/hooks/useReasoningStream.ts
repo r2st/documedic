@@ -160,7 +160,7 @@ function reduce(s: StreamState, event: string, data: Record<string, unknown>): S
   if (event === 'reasoning_start' && Array.isArray(data.sequence)) {
     lanes = (data.sequence as string[]).map((agent) => ({
       agent,
-      label: agent.replace(/_/g, ' '),
+      label: agent.replace(/_/g, ' ').replace(/\bagents?\b/gi, (m) => m.length > 5 ? 'digital robots' : 'digital robot'),
       status: 'idle' as const,
     }));
   }

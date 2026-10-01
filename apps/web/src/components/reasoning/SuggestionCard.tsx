@@ -388,7 +388,7 @@ export function SuggestionCard({
 
       {/* Engagement gate for flag-for-review: clinician must actively click through. */}
       {!acknowledged ? (
-        <div className="rounded-xl border-2 border-dashed border-amber-700 bg-amber-50 p-5 text-center">
+        <div className="rounded-xl border-2 border-dashed border-amber-700 bg-amber-950/30 p-5 text-center">
           <svg
             aria-hidden="true"
             className="mx-auto mb-2 h-8 w-8 text-amber-400"
@@ -404,7 +404,7 @@ export function SuggestionCard({
             />
           </svg>
           <p className="mb-3 text-sm font-medium text-amber-300">
-            This output is flagged for review. Engage to see the evidence and assessment.
+            Flagged for review — tap to see evidence.
           </p>
           <Button
             onClick={() => {

@@ -77,8 +77,7 @@ export function ReauthPrompt({
         Confirm your password to {action}
       </h2>
       <p className="mt-1 text-sm text-amber-400">
-        You are still signed in. This step is asked for because of what the action does to the
-        record, and because it has been a while since your password was entered on this device.
+        Still signed in — confirm because this action modifies the record.
       </p>
       <div className="mt-3 flex flex-wrap items-start gap-2">
         <label className="sr-only" htmlFor="reauth-password">

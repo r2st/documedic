@@ -59,12 +59,7 @@ export default function GlobalError({
               DoAide Clinician could not start
             </h1>
             <p style={{ marginTop: '0.5rem' }}>
-              The application failed to load. Nothing on this page is a clinical finding, and no
-              part of the record has been shown — do not treat this as an absence of findings for
-              any patient.
-            </p>
-            <p style={{ marginTop: '0.5rem' }}>
-              The patient record is unaffected and nothing was changed.
+              Not a clinical finding. The record is unaffected.
             </p>
             <button
               type="button"

@@ -23,7 +23,7 @@ export function DemoBanner() {
             d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
           />
         </svg>
-        <span>Demo build — decision-support only, not for real patient care.</span>
+        <span>Demo — not for real patient care</span>
       </div>
     </div>
   );
@@ -72,7 +72,7 @@ export function OfflineBanner() {
               />
             </svg>
             <span>
-              Offline Mode — patient records and drug-safety checks available. AI features paused.
+              Offline — records &amp; safety checks available. Digital robots paused.
             </span>
           </div>
         </div>
@@ -115,8 +115,7 @@ export function SessionExpiryBanner() {
     <div role="alert" className="bg-amber-950/50 px-4 py-2.5 text-sm text-amber-300 shadow-sm">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-2 sm:flex-row">
         <span className="text-center font-medium">
-          Signing out in {remaining} — you have been inactive. Anything you have typed but not yet
-          submitted is kept on this tab.
+          Signing out in {remaining} — inactive. Drafts kept on this tab.
         </span>
         {/* Any activity at all cancels the timeout, so this button's own click already does the
             job; it calls refresh so the clinician gets an explicit confirmation rather than

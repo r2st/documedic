@@ -91,13 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold">{this.props.section} could not be displayed</h2>
             <p className="mt-1 text-red-400">
-              Something on this screen failed to render. Nothing here is a clinical finding — treat
-              this section as missing, not as empty, and do not read it as &ldquo;nothing to
-              report&rdquo;.
-            </p>
-            <p className="mt-1 text-red-400">
-              The record itself is unaffected and nothing was changed. Try again, or reload the
-              page.
+              Not a clinical finding. The record is unaffected.
             </p>
             <Button variant="secondary" size="sm" className="mt-3" onClick={this.reset}>
               Try again

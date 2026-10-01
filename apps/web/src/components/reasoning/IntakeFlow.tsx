@@ -83,8 +83,7 @@ export function IntakeFlow({
         <h2 className="text-lg font-semibold text-[#E5E7EB]">Clarifying questions</h2>
       </div>
       <p className="mb-5 text-sm text-[#9CA3AF]">
-        The triage agent asks the questions that most change the differential. Answer what you can —
-        relevant negatives are valuable.
+        Answer what you can — relevant negatives are valuable.
       </p>
       <div className="space-y-5" role="group" aria-label="Clarifying questions">
         {questions.map((q, index) => (

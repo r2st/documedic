@@ -232,7 +232,7 @@ export function ReasoningTheatre({
                 aria-hidden="true"
                 className="inline-block h-3 w-3 animate-pulse rounded-full bg-[#2A2A2D]"
               />
-              Waiting for the orchestrator…
+              Initializing…
             </li>
           )}
         </ol>
@@ -268,14 +268,10 @@ export function ReasoningTheatre({
               <p className="font-bold uppercase tracking-wide">AI reasoning paused</p>
             </div>
             <p>
-              The reasoning engine could not reach its model for this run, so what follows was
-              assembled from the deterministic rules alone — no specialist panel, no independent
-              cross-check of the wording, and no counter-argument beyond the standard one. Read it
-              as a starting checklist rather than as a considered differential.
+              Deterministic rules only — no digital robot panel ran. Treat as a checklist, not a differential.
             </p>
             <p className="mt-1.5">
-              The drug-safety checks on this chart are unaffected: allergy, contraindication and
-              interaction screening are deterministic and do not use the model.
+              Drug-safety checks are unaffected.
             </p>
           </div>
         )}
@@ -286,17 +282,11 @@ export function ReasoningTheatre({
             className="rounded-xl border-2 border-[#2A2A2D] bg-[#1A1A1D] p-5 text-sm text-[#E5E7EB]"
           >
             <p className="font-semibold text-[#E5E7EB]">
-              This run stopped before the Verifier checked it.
+              Unverified — output withheld.
             </p>
             <p className="mt-1.5">
-              Whatever the agents had produced when it stopped is being held back rather than
-              shown: nothing has cross-checked it, and a partial differential or an interrupted
-              can&apos;t-miss scan is not safe to read as either. Reconnect above to pick the run
-              back up, or start a new one.
-            </p>
-            <p className="mt-1.5">
-              The deterministic drug-safety checks on this chart are unaffected — they do not
-              depend on the reasoning engine and are on the Safety screen.
+              This run stopped before verification. Reconnect or start a new run.
+              Drug-safety checks are unaffected.
             </p>
           </div>
         )}

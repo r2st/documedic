@@ -5,7 +5,7 @@ import { DemoBanner, OfflineBanner } from '@/components/Banners';
 
 export const metadata: Metadata = {
   title: 'DoAide Clinician',
-  description: 'Clinician-facing diagnostic & management decision-support system',
+  description: 'Your digital robot for clinical decisions',
   icons: {
     icon: [
       { url: '/favicon.svg', type: 'image/svg+xml' },

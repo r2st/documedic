@@ -39,15 +39,11 @@ export default function RouteError({
     <main className="mx-auto grid min-h-screen max-w-2xl place-items-center px-4">
       <div
         role="alert"
-        className="w-full rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-900"
+        className="w-full rounded-xl border border-red-800/50 bg-red-950/30 p-6 text-sm text-red-300"
       >
         <h1 className="text-base font-semibold">This screen could not be displayed</h1>
         <p className="mt-2 text-red-400">
-          Something on this screen failed to load. Nothing here is a clinical finding — treat this
-          screen as missing, not as empty, and do not read it as &ldquo;nothing to report&rdquo;.
-        </p>
-        <p className="mt-2 text-red-400">
-          The patient record is unaffected and nothing was changed.
+          This is not a clinical finding. The record is unaffected.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button onClick={reset}>Try again</Button>
