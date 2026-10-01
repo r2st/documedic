@@ -1,0 +1,43 @@
+@import url('https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800;900&display=swap');
+:root {
+  --doaide-bg: #0A0A0B; --doaide-bg-alt: #111113; --doaide-surface: #1A1A1D;
+  --doaide-surface-hover: #222225; --doaide-border: #2A2A2D; --doaide-border-light: #333336;
+  --doaide-gold: #F0B429; --doaide-gold-hover: #D4A017; --doaide-gold-light: #F7CC5F;
+  --doaide-gold-dim: #8B6914; --doaide-gold-bg: rgba(240,180,41,0.1);
+  --doaide-text: #E5E7EB; --doaide-text-secondary: #9CA3AF; --doaide-text-muted: #6B7280;
+  --doaide-text-on-gold: #0A0A0B;
+  --doaide-success: #34D399; --doaide-error: #F87171; --doaide-warning: #FBBF24; --doaide-info: #60A5FA;
+  --doaide-font: 'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
+  --doaide-shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --doaide-shadow-md: 0 4px 6px rgba(0,0,0,0.4);
+  --doaide-shadow-lg: 0 10px 15px rgba(0,0,0,0.5); --doaide-shadow-gold: 0 0 20px rgba(240,180,41,0.15);
+  --doaide-radius-sm: 6px; --doaide-radius-md: 8px; --doaide-radius-lg: 12px; --doaide-radius-xl: 16px;
+  --doaide-transition: 150ms ease;
+}
+html { color-scheme: dark !important; }
+body { background-color: var(--doaide-bg) !important; color: var(--doaide-text) !important; font-family: var(--doaide-font) !important; -webkit-font-smoothing: antialiased; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--doaide-bg); }
+::-webkit-scrollbar-thumb { background: var(--doaide-border); border-radius: 4px; }
+a { color: var(--doaide-gold) !important; } a:hover { color: var(--doaide-gold-light) !important; }
+button[class*="primary"], .btn-primary, [class*="bg-indigo"], [class*="bg-blue-6"], [class*="bg-purple"], [class*="bg-brand"] { background-color: var(--doaide-gold) !important; color: var(--doaide-text-on-gold) !important; border-color: var(--doaide-gold) !important; }
+[class*="bg-white"], [class*="bg-gray-50"], [class*="bg-gray-100"], [class*="bg-slate-50"], [class*="bg-slate-100"] { background-color: var(--doaide-surface) !important; }
+[class*="bg-gray-200"], [class*="bg-slate-200"] { background-color: var(--doaide-surface-hover) !important; }
+[class*="border-gray"], [class*="border-slate"], [class*="divide-gray"], [class*="divide-slate"] { border-color: var(--doaide-border) !important; }
+[class*="text-gray-900"], [class*="text-gray-800"], [class*="text-slate-900"], [class*="text-slate-800"], [class*="text-black"] { color: var(--doaide-text) !important; }
+[class*="text-gray-700"], [class*="text-gray-600"], [class*="text-slate-700"], [class*="text-slate-600"] { color: var(--doaide-text) !important; }
+[class*="text-gray-500"], [class*="text-gray-400"], [class*="text-slate-500"], [class*="text-slate-400"] { color: var(--doaide-text-secondary) !important; }
+[class*="text-indigo"], [class*="text-blue-6"], [class*="text-purple"], [class*="text-brand"] { color: var(--doaide-gold) !important; }
+input, textarea, select { background-color: var(--doaide-bg-alt) !important; border-color: var(--doaide-border) !important; color: var(--doaide-text) !important; }
+input:focus, textarea:focus, select:focus { border-color: var(--doaide-gold) !important; box-shadow: 0 0 0 2px var(--doaide-gold-bg) !important; }
+input::placeholder, textarea::placeholder { color: var(--doaide-text-muted) !important; }
+table { border-color: var(--doaide-border) !important; }
+thead, th { background-color: var(--doaide-surface) !important; color: var(--doaide-text-secondary) !important; }
+td { border-color: var(--doaide-border) !important; }
+tbody tr:hover { background-color: var(--doaide-surface) !important; }
+[class*="dropdown"], [class*="popover"], [role="menu"], [role="listbox"] { background-color: var(--doaide-surface) !important; border-color: var(--doaide-border) !important; }
+[class*="modal"], [class*="dialog"], [role="dialog"] { background-color: var(--doaide-bg-alt) !important; border-color: var(--doaide-border) !important; }
+nav, [class*="sidebar"], [class*="nav-"] { background-color: var(--doaide-bg) !important; border-color: var(--doaide-border) !important; }
+[class*="tooltip"] { background-color: var(--doaide-surface) !important; color: var(--doaide-text) !important; }
+[class*="badge"] { background-color: var(--doaide-gold-bg) !important; color: var(--doaide-gold) !important; }
+::selection { background-color: var(--doaide-gold) !important; color: var(--doaide-text-on-gold) !important; }
+[class*="backdrop"], [class*="overlay"] { background-color: rgba(0,0,0,0.7) !important; }
