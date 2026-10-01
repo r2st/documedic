@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://med.doaide.com/sitemap.xml

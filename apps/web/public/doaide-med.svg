@@ -1,0 +1,38 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F0B429"/><stop offset="100%" stop-color="#D4A017"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <!-- Antenna -->
+  <line x1="100" y1="42" x2="100" y2="27" stroke="#F0B429" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="100" cy="24" r="5" fill="#F0B429" filter="url(#glow)"><animate attributeName="opacity" values="1;0.5;1" dur="2s" repeatCount="indefinite"/></circle>
+  <circle cx="100" cy="24" r="2.5" fill="#F7CC5F"/>
+  <!-- Head -->
+  <rect x="55" y="45" width="90" height="75" rx="18" fill="url(#bg)"/>
+  <rect x="65" y="54" width="70" height="58" rx="13" fill="#D4A017" opacity="0.4"/>
+  <!-- Eyes -->
+  <ellipse cx="82" cy="78" rx="9" ry="10" fill="#0A0A0B"/><ellipse cx="118" cy="78" rx="9" ry="10" fill="#0A0A0B"/>
+  <circle cx="85" cy="76" r="4" fill="#F7CC5F"/><circle cx="121" cy="76" r="4" fill="#F7CC5F"/>
+  <circle cx="87" cy="74" r="1.5" fill="white" opacity="0.7"/><circle cx="123" cy="74" r="1.5" fill="white" opacity="0.7"/>
+  <!-- Smile -->
+  <path d="M85 98Q100 112 115 98" stroke="#0A0A0B" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Ears -->
+  <rect x="46" y="68" width="11" height="23" rx="4" fill="#D4A017"/><rect x="143" y="68" width="11" height="23" rx="4" fill="#D4A017"/>
+  <!-- Neck -->
+  <rect x="88" y="120" width="25" height="8" rx="3" fill="#D4A017"/>
+  <!-- Body -->
+  <rect x="70" y="128" width="60" height="30" rx="10" fill="url(#bg)"/>
+  <!-- Medical cross on chest -->
+  <rect x="96" y="134" width="8" height="14" rx="1" fill="#0A0A0B"/><rect x="93" y="138" width="14" height="6" rx="1" fill="#0A0A0B"/>
+  <!-- Arms -->
+  <path d="M70 136Q55 139 52 148Q49 157 57 160" stroke="#D4A017" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="57" cy="162" r="4" fill="#D4A017"/>
+  <path d="M130 136Q145 139 148 148Q151 157 143 160" stroke="#D4A017" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="143" cy="162" r="4" fill="#D4A017"/>
+  <!-- Stethoscope prop -->
+  <path d="M43 155Q35 155 30 165Q25 178 35 182Q45 185 48 175" stroke="#0A0A0B" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <circle cx="48" cy="173" r="5" fill="#F0B429" stroke="#0A0A0B" stroke-width="1.5"/>
+  <circle cx="48" cy="173" r="2" fill="#0A0A0B"/>
+  <!-- Earpieces -->
+  <circle cx="30" cy="153" r="3" fill="#D4A017" stroke="#0A0A0B" stroke-width="1"/>
+  <circle cx="43" cy="153" r="3" fill="#D4A017" stroke="#0A0A0B" stroke-width="1"/>
+  <path d="M30 153Q33 145 36 148Q39 151 43 153" stroke="#0A0A0B" stroke-width="1.5" fill="none"/>
+</svg>
