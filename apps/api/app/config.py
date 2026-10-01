@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     app_env: Literal["development", "staging", "production", "test"] = "development"
     app_secret_key: str = "dev-insecure-secret-change-me"
     app_debug: bool = True
-    demo_mode: bool = True
+    demo_mode: bool = False
 
     # --- Logging ---
     # Applied to the root logger by app.core.logging_config, which is the only thing in this

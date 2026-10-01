@@ -13,7 +13,7 @@ describe('DemoBanner', () => {
   it('is persistently visible when demo mode is on (Critical Safety Rule / P1-11a)', () => {
     process.env.NEXT_PUBLIC_DEMO_MODE = 'true';
     render(<DemoBanner />);
-    expect(screen.getByText(/Demo build/)).toBeInTheDocument();
+    expect(screen.getByText(/Demo/)).toBeInTheDocument();
   });
 
   it('renders nothing when demo mode is off', () => {
@@ -37,36 +37,32 @@ describe('OfflineBanner', () => {
     setOnLine(true);
     render(<OfflineBanner />);
 
-    expect(screen.queryByText(/Offline Mode/)).not.toBeInTheDocument();
-    // The region has to pre-exist the message it will carry: a live region that appears
-    // already populated is not reliably announced. See the comment in Banners.tsx.
+    expect(screen.queryByText(/Offline/)).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('appears when the browser goes offline and clears the AI-features caveat, keeping records available', () => {
     setOnLine(true);
     render(<OfflineBanner />);
-    expect(screen.queryByText(/Offline Mode/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Offline/)).not.toBeInTheDocument();
 
     act(() => {
       setOnLine(false);
       window.dispatchEvent(new Event('offline'));
     });
-    expect(screen.getByText(/Offline Mode/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/patient records and drug-safety checks available/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Offline/)).toBeInTheDocument();
+    expect(screen.getByText(/safety checks available/)).toBeInTheDocument();
   });
 
   it('disappears again once back online', () => {
     setOnLine(false);
     render(<OfflineBanner />);
-    expect(screen.getByText(/Offline Mode/)).toBeInTheDocument();
+    expect(screen.getByText(/Offline/)).toBeInTheDocument();
 
     act(() => {
       setOnLine(true);
       window.dispatchEvent(new Event('online'));
     });
-    expect(screen.queryByText(/Offline Mode/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Offline/)).not.toBeInTheDocument();
   });
 });

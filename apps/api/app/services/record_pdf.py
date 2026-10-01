@@ -188,7 +188,7 @@ def build_record_pdf(
     patient = sections.patient
     pdf = PdfBuilder(title=f"Patient record — {patient.full_name}", created_at=stamp)
 
-    pdf.text("Aether Clinician — patient record", size=15, bold=True, leading=19)
+    pdf.text("DoAide Med — patient record", size=15, bold=True, leading=19)
     pdf.text(
         "Clinical decision support record export. This is a copy of what was recorded, not a "
         "clinical opinion: it carries no differential diagnoses, no management suggestions and "

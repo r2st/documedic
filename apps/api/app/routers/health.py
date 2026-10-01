@@ -50,7 +50,7 @@ async def health() -> dict:
     mode = _llm_mode()
     return {
         "status": "ok",
-        "product": "Aether Clinician",
+        "product": "DoAide Med",
         "brand": "DoAide",
         "brand_url": "https://doaide.com",
         "env": settings.app_env,

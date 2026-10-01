@@ -176,7 +176,7 @@ def create_app() -> FastAPI:
     # and no correlation id. See app.core.logging_config.
     configure_logging()
     app = FastAPI(
-        title="Aether Clinician API",
+        title="DoAide Med API",
         version="0.4.0",
         description=(
             "Clinician-facing diagnostic & management decision-support: patient graph + "

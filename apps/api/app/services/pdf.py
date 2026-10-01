@@ -284,7 +284,7 @@ class PdfBuilder:
         lossy = lossy or title_lossy
         stamp = self.created_at.astimezone(UTC).strftime("D:%Y%m%d%H%M%SZ")
         info_id = add(
-            b"<< /Title (" + title + b") /Producer (Aether Clinician) "
+            b"<< /Title (" + title + b") /Producer (DoAide Med) "
             b"/CreationDate (" + stamp.encode("ascii") + b") >>"
         )
 

@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/lib/auth';
-import { DemoBanner, OfflineBanner } from '@/components/Banners';
+import { OfflineBanner } from '@/components/Banners';
 
 export const metadata: Metadata = {
-  title: 'DoAide Clinician',
+  title: 'DoAide Med',
   description: 'Your digital robot for clinical decisions',
   icons: {
     icon: [
@@ -24,6 +24,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 5,
   themeColor: '#0A0A0B',
+  colorScheme: 'dark',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -49,7 +50,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
       <body>
-        <DemoBanner />
         <OfflineBanner />
         <AuthProvider>{children}</AuthProvider>
       </body>

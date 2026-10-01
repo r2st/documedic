@@ -58,7 +58,7 @@ def test_the_schema_generates(schema):
     """A response model FastAPI cannot serialise raises here and nowhere else — `/docs` is not
     exercised by any other test, so a broken schema would ship silently."""
     assert schema["openapi"].startswith("3.")
-    assert schema["info"]["title"] == "Aether Clinician API"
+    assert schema["info"]["title"] == "DoAide Med API"
     assert list(schema["paths"])
 
 
@@ -236,5 +236,5 @@ async def test_docs_and_schema_are_actually_served(client):
 @pytest.mark.asyncio
 async def test_the_served_schema_matches_the_generated_one(client):
     served = (await client.get("/openapi.json")).json()
-    assert served["info"]["title"] == "Aether Clinician API"
+    assert served["info"]["title"] == "DoAide Med API"
     assert served["paths"].keys() == create_app().openapi()["paths"].keys()

@@ -40,7 +40,7 @@ describe('DashboardLayout', () => {
       </DashboardLayout>,
     );
 
-    expect(screen.getByText('Loading Aether Clinician…')).toBeInTheDocument();
+    expect(screen.getByText('Loading DoAide Med…')).toBeInTheDocument();
     expect(screen.queryByText('child')).not.toBeInTheDocument();
   });
 

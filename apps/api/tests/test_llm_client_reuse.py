@@ -111,7 +111,7 @@ def test_openrouter_and_openai_do_not_share_a_client(fake_openai, monkeypatch):
     assert by_url == {None, "https://openrouter.ai/api/v1"}
     # The OpenRouter client is the one carrying the identifying headers.
     router = next(c for c in fake_openai.instances if c.kwargs.get("base_url"))
-    assert router.kwargs["default_headers"]["X-Title"] == "Documedic (Aether Clinician)"
+    assert router.kwargs["default_headers"]["X-Title"] == "Documedic (DoAide Med) — A DoAide Product"
 
 
 def test_a_rotated_key_is_not_served_the_old_client(fake_openai, monkeypatch):

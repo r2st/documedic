@@ -166,7 +166,7 @@ def test_latin_1_punctuation_is_not_treated_as_a_loss():
     dropped would put the "could not print" warning on every export this system produces, and a
     warning that is always on is a warning nobody reads."""
     pdf = _builder()
-    pdf.text("Aether Clinician — patient record; café; ±5%")
+    pdf.text("DoAide Med — patient record; café; ±5%")
 
     _, lossy = pdf.render()
 

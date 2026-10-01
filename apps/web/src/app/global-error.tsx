@@ -56,7 +56,7 @@ export default function GlobalError({
             }}
           >
             <h1 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>
-              DoAide Clinician could not start
+              DoAide Med could not start
             </h1>
             <p style={{ marginTop: '0.5rem' }}>
               Not a clinical finding. The record is unaffected.

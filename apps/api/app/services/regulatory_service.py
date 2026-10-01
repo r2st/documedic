@@ -84,7 +84,7 @@ class RegulatoryService:
             "document": "CDSCO SaMD Technical Dossier (auto-generated)",
             "generated_at": datetime.now(UTC).isoformat(),
             "product": {
-                "name": "Aether Clinician",
+                "name": "DoAide Med",
                 "intended_use": (
                     "Clinician-facing diagnostic and management decision-support for primary "
                     "care in India. Supports, never replaces, clinician judgement; issues no "

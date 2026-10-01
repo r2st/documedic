@@ -356,7 +356,7 @@ def _complete_openrouter(system: str, user: str, model: str, max_tokens: int) ->
         settings.llm_request_timeout_seconds,
         {
             "HTTP-Referer": "https://documedic.doaide.com",
-            "X-Title": "Documedic (Aether Clinician) — A DoAide Product",
+            "X-Title": "Documedic (DoAide Med) — A DoAide Product",
         },
     )
     completion = client.chat.completions.create(

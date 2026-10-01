@@ -47,7 +47,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="auth-container">
         <RobotLogo />
         <h1 className="auth-title">
-          DoAide <span className="auth-title-product">Clinician</span>
+          DoAide <span className="auth-title-product">Med</span>
         </h1>
         <p className="auth-subtitle">Your digital robot for clinical decisions</p>
 

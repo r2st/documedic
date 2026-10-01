@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Aether Clinician drug seed data",
+  "title": "DoAide Med drug seed data",
   "definitions": {
     "drug_vocabulary_entry": {
       "type": "object",

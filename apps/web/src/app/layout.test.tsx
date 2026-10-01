@@ -51,9 +51,9 @@ describe('RootLayout', () => {
   });
 
   it('declares the PWA metadata the installable app depends on', () => {
-    expect(metadata.title).toBe('Aether Clinician');
+    expect(metadata.title).toBe('DoAide Med');
     expect(metadata.manifest).toBe('/manifest.json');
-    expect(viewport.themeColor).toBe('#0d9488');
+    expect(viewport.themeColor).toBe('#0A0A0B');
     // Pinch-zoom must stay available for accessibility.
     expect(viewport.maximumScale).toBeGreaterThan(1);
   });

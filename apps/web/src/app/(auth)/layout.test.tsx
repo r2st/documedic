@@ -10,8 +10,8 @@ describe('AuthLayout', () => {
       </AuthLayout>,
     );
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('DoAide Clinician');
-    expect(screen.getByText('AI clinical decision support for modern healthcare')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('DoAide Med');
+    expect(screen.getByText('Your digital robot for clinical decisions')).toBeInTheDocument();
     expect(screen.getByText('form')).toBeInTheDocument();
   });
 

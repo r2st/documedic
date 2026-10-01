@@ -75,7 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <main className="grid min-h-screen place-items-center">
         <div className="text-center" role="status">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px] border-[#2A2A2D] border-t-[#F0B429]" />
-          <p className="text-sm font-medium text-[#9CA3AF]">Loading DoAide Clinician…</p>
+          <p className="text-sm font-medium text-[#9CA3AF]">Loading DoAide Med…</p>
         </div>
       </main>
     );
@@ -97,11 +97,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/logo.svg"
-              alt="DoAide Clinician"
+              alt="DoAide Med"
               className="h-8 w-8 transition-transform group-hover:scale-105"
             />
             <span className="text-lg font-bold tracking-tight text-[#E5E7EB]">
-              DoAide <span className="text-[#F0B429]">Clinician</span>
+              DoAide <span className="text-[#F0B429]">Med</span>
             </span>
           </Link>
 

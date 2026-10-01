@@ -1,3 +1,3 @@
-"""Aether Clinician FastAPI backend."""
+"""DoAide Med FastAPI backend."""
 
 __version__ = "0.1.0"
