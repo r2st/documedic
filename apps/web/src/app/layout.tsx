@@ -17,6 +17,19 @@ export const metadata: Metadata = {
     apple: '/apple-touch-icon.png',
   },
   manifest: '/manifest.json',
+  openGraph: {
+    title: 'DoAide Med — AI Clinical Decision Support',
+    description:
+      'AI-powered clinical decision support system for healthcare professionals.',
+    url: 'https://med.doaide.com',
+    siteName: 'DoAide',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'DoAide Med — AI Clinical Decision Support',
+    description: 'AI-powered clinical decision support for healthcare.',
+  },
 };
 
 export const viewport: Viewport = {
