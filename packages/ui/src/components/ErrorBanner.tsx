@@ -30,7 +30,7 @@ export function ErrorBanner({
   return (
     <div
       role="alert"
-      className={`flex flex-col gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200 sm:flex-row sm:items-start ${className}`}
+      className={`flex flex-col gap-2 rounded-lg bg-red-950/50 p-3 text-sm text-red-400 ring-1 ring-red-800/50 sm:flex-row sm:items-start ${className}`}
     >
       <div className="flex flex-1 items-start gap-2">
         <svg

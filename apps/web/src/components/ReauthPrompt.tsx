@@ -71,12 +71,12 @@ export function ReauthPrompt({
     <form
       onSubmit={confirm}
       aria-labelledby="reauth-heading"
-      className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4"
+      className="mb-6 rounded-xl border border-amber-800/50 bg-amber-950/30 p-4"
     >
-      <h2 id="reauth-heading" className="text-sm font-semibold text-amber-900">
+      <h2 id="reauth-heading" className="text-sm font-semibold text-amber-300">
         Confirm your password to {action}
       </h2>
-      <p className="mt-1 text-sm text-amber-800">
+      <p className="mt-1 text-sm text-amber-400">
         You are still signed in. This step is asked for because of what the action does to the
         record, and because it has been a while since your password was entered on this device.
       </p>
@@ -91,7 +91,7 @@ export function ReauthPrompt({
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="min-w-[14rem] flex-1 rounded-lg border border-amber-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+          className="min-w-[14rem] flex-1 rounded-lg border border-[#2A2A2D] bg-[#111113] px-3 py-2 text-sm text-[#E5E7EB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F0B429]"
           aria-describedby={error ? 'reauth-error' : undefined}
           aria-invalid={error ? true : undefined}
         />
@@ -103,7 +103,7 @@ export function ReauthPrompt({
         </Button>
       </div>
       {error && (
-        <p id="reauth-error" role="alert" className="mt-2 text-sm font-medium text-red-700">
+        <p id="reauth-error" role="alert" className="mt-2 text-sm font-medium text-red-400">
           {error}
         </p>
       )}

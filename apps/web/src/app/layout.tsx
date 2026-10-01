@@ -4,7 +4,7 @@ import { AuthProvider } from '@/lib/auth';
 import { DemoBanner, OfflineBanner } from '@/components/Banners';
 
 export const metadata: Metadata = {
-  title: 'Aether Clinician',
+  title: 'DoAide Clinician',
   description: 'Clinician-facing diagnostic & management decision-support system',
   icons: {
     icon: [

@@ -7,11 +7,11 @@ import type { IntakeQuestion } from '@/lib/types';
 import { Button, Card, ErrorBanner } from '@aether/ui';
 
 const TYPE_STYLE: Record<string, string> = {
-  red_flag: 'bg-red-50 text-red-700 ring-1 ring-red-200',
-  relevant_negative: 'bg-blue-50 text-blue-700 ring-1 ring-blue-200',
-  clarifying: 'bg-slate-50 text-slate-600 ring-1 ring-slate-200',
-  history: 'bg-slate-50 text-slate-600 ring-1 ring-slate-200',
-  exam: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
+  red_flag: 'bg-red-950/30 text-red-400 ring-1 ring-red-800/50',
+  relevant_negative: 'bg-blue-950/30 text-blue-400 ring-1 ring-blue-800/50',
+  clarifying: 'bg-[#1A1A1D] text-[#9CA3AF] ring-1 ring-[#2A2A2D]',
+  history: 'bg-[#1A1A1D] text-[#9CA3AF] ring-1 ring-[#2A2A2D]',
+  exam: 'bg-emerald-950/30 text-emerald-400 ring-1 ring-emerald-800/50',
 };
 
 /**
@@ -68,7 +68,7 @@ export function IntakeFlow({
       <div className="mb-4 flex items-center gap-2">
         <svg
           aria-hidden="true"
-          className="h-5 w-5 text-brand-600"
+          className="h-5 w-5 text-[#F0B429]"
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={1.5}
@@ -80,26 +80,26 @@ export function IntakeFlow({
             d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"
           />
         </svg>
-        <h2 className="text-lg font-semibold text-slate-900">Clarifying questions</h2>
+        <h2 className="text-lg font-semibold text-[#E5E7EB]">Clarifying questions</h2>
       </div>
-      <p className="mb-5 text-sm text-slate-500">
+      <p className="mb-5 text-sm text-[#9CA3AF]">
         The triage agent asks the questions that most change the differential. Answer what you can —
         relevant negatives are valuable.
       </p>
       <div className="space-y-5" role="group" aria-label="Clarifying questions">
         {questions.map((q, index) => (
-          <div key={q.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+          <div key={q.id} className="rounded-xl border border-[#2A2A2D] bg-[#111113] p-4">
             <div className="mb-2 flex flex-wrap items-start gap-2">
               {/* Decorative ordinal: the questions are already a numbered visual list. */}
               <span
                 aria-hidden="true"
-                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-bold text-brand-700"
+                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-[#F0B429]/15 text-xs font-bold text-[#F0B429]"
               >
                 {index + 1}
               </span>
               <span
                 className={`flex-shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${
-                  TYPE_STYLE[q.question_type] ?? 'bg-slate-50 text-slate-600 ring-1 ring-slate-200'
+                  TYPE_STYLE[q.question_type] ?? 'bg-[#1A1A1D] text-[#9CA3AF] ring-1 ring-[#2A2A2D]'
                 }`}
               >
                 {q.question_type.replace(/_/g, ' ')}
@@ -108,11 +108,11 @@ export function IntakeFlow({
             {/* The question is the field's label and the rationale is its description, so
                 they are wired up as such — the placeholder is an example, not a label, and
                 disappears the moment the clinician starts typing. */}
-            <p id={`intake-q-${q.id}`} className="mb-2 text-sm font-medium text-slate-800">
+            <p id={`intake-q-${q.id}`} className="mb-2 text-sm font-medium text-[#E5E7EB]">
               {q.question_text}
             </p>
             {q.rationale && (
-              <p id={`intake-why-${q.id}`} className="mb-2 text-xs italic text-slate-400">
+              <p id={`intake-why-${q.id}`} className="mb-2 text-xs italic text-[#6B7280]">
                 {q.rationale}
               </p>
             )}
@@ -140,7 +140,7 @@ export function IntakeFlow({
         />
       )}
 
-      <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
+      <div className="mt-5 flex flex-col gap-2 border-t border-[#2A2A2D] pt-4 sm:flex-row">
         <Button
           className="w-full sm:w-auto"
           onClick={() => void submit()}

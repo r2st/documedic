@@ -4,15 +4,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* --- Import Inter font --- */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply bg-[#0A0A0B] text-[#E5E7EB] antialiased;
   font-feature-settings: 'cv11', 'ss01';
 }
 
@@ -25,7 +22,7 @@ body {
 
 /* --- Focus ring utility --- */
 *:focus-visible {
-  @apply outline-none ring-2 ring-brand-500 ring-offset-2;
+  @apply outline-none ring-2 ring-[#F0B429] ring-offset-2 ring-offset-[#0A0A0B];
 }
 
 /* --- Form inputs global styling --- */
@@ -38,11 +35,11 @@ input[type='number'],
 input[type='search'],
 select,
 textarea {
-  @apply rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900
-    placeholder:text-slate-400
+  @apply rounded-lg border border-[#2A2A2D] bg-[#111113] px-3.5 py-2.5 text-sm text-[#E5E7EB]
+    placeholder:text-[#6B7280]
     transition-colors duration-150
-    hover:border-slate-400
-    focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none;
+    hover:border-[#333336]
+    focus:border-[#F0B429] focus:ring-2 focus:ring-[#F0B429]/20 focus:outline-none;
 }
 
 /* --- Scrollbar styling --- */
@@ -52,20 +49,20 @@ textarea {
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: #0A0A0B;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-slate-300;
+  @apply rounded-full bg-[#2A2A2D];
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-slate-400;
+  @apply bg-[#333336];
 }
 
 /* --- Selection color --- */
 ::selection {
-  @apply bg-brand-100 text-brand-900;
+  @apply bg-[#F0B429] text-[#0A0A0B];
 }
 
 /* --- Smooth transitions for interactive elements --- */
@@ -84,12 +81,12 @@ button {
   }
 
   select {
-    font-size: 16px; /* Prevents iOS zoom on focus */
+    font-size: 16px;
   }
 
   input,
   textarea {
-    font-size: 16px; /* Prevents iOS zoom on focus */
+    font-size: 16px;
   }
 }
 

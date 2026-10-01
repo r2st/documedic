@@ -40,10 +40,10 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                 <span
                   className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors sm:h-7 sm:w-7 ${
                     isComplete
-                      ? 'bg-brand-600 text-white'
+                      ? 'bg-[#F0B429] text-[#0A0A0B]'
                       : isCurrent
-                        ? 'bg-brand-100 text-brand-700 ring-2 ring-brand-600'
-                        : 'bg-slate-100 text-slate-400'
+                        ? 'bg-[#F0B429]/15 text-[#F0B429] ring-2 ring-[#F0B429]'
+                        : 'bg-slate-100 text-[#6B7280]'
                   }`}
                 >
                   {isComplete ? (
@@ -68,7 +68,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                 {/* On the smallest screens only the active step's label shows, to avoid overflow. */}
                 <span
                   className={`whitespace-nowrap text-[11px] font-medium sm:text-xs ${isCurrent ? 'inline' : 'hidden sm:inline'} ${
-                    isCurrent ? 'text-brand-700' : isComplete ? 'text-slate-700' : 'text-slate-400'
+                    isCurrent ? 'text-[#F0B429]' : isComplete ? 'text-[#E5E7EB]' : 'text-[#6B7280]'
                   }`}
                 >
                   {p.label}
@@ -76,7 +76,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
               </div>
               {i < PHASES.length - 1 && (
                 <div
-                  className={`mx-2 h-px flex-1 ${isComplete ? 'bg-brand-500' : 'bg-slate-200'}`}
+                  className={`mx-2 h-px flex-1 ${isComplete ? 'bg-[#F0B429]' : 'bg-[#2A2A2D]'}`}
                 />
               )}
             </li>
@@ -152,7 +152,7 @@ export default function EncounterPage() {
     <div className="space-y-5">
       <Link
         href={`/patients/${id}`}
-        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
+        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
       >
         <svg
           aria-hidden="true"
@@ -167,7 +167,7 @@ export default function EncounterPage() {
         Back to patient
       </Link>
 
-      <h1 className="text-2xl font-bold tracking-tight text-slate-900">Diagnostic reasoning</h1>
+      <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">Diagnostic reasoning</h1>
 
       <StepIndicator currentPhase={phase} />
 
@@ -191,10 +191,10 @@ export default function EncounterPage() {
       {phase === 'complaint' && (
         <Card className="animate-fade-in">
           <div className="mb-4">
-            <label htmlFor="complaint" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="complaint" className="block text-sm font-medium text-[#E5E7EB]">
               Presenting complaint
             </label>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="mt-0.5 text-xs text-[#9CA3AF]">
               Describe the patient&apos;s chief complaint and relevant context.
             </p>
           </div>
@@ -246,7 +246,7 @@ export default function EncounterPage() {
                 <SkeletonCards count={2} className="space-y-3" />
               </LoadingBlock>
             )}
-            <p className="mt-3 text-center text-xs text-slate-400">
+            <p className="mt-3 text-center text-xs text-[#6B7280]">
               Evidence and dissent are shown before conclusions to counter automation bias.
             </p>
           </div>
@@ -263,8 +263,8 @@ export default function EncounterPage() {
         <ErrorBoundary section="The reasoning results" onReset={() => void loadResults(sessionId)}>
           <div className="animate-fade-in space-y-3">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">Results</h2>
-              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+              <h2 className="text-lg font-semibold text-[#E5E7EB]">Results</h2>
+              <span className="rounded-full bg-amber-950/30 px-3 py-1 text-xs font-medium text-amber-400 ring-1 ring-inset ring-amber-800/50">
                 The clinician is the decision-maker. These are decision-support outputs only.
               </span>
             </div>

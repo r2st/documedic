@@ -31,7 +31,7 @@ const KIND_META: Record<TimelineKind, { label: string; dot: string; icon: JSX.El
   },
   medication_stop: {
     label: 'Medication stopped',
-    dot: 'bg-slate-400',
+    dot: 'bg-[#6B7280]',
     icon: (
       <svg
         className="h-4 w-4"
@@ -194,13 +194,13 @@ export function Timeline({ record }: { record: LongitudinalRecord | null | undef
   const undatedAllergies = (record?.allergies ?? []).filter((a) => a);
 
   if (entries.length === 0 && undatedAllergies.length === 0) {
-    return <p className="text-sm text-slate-400 italic">No timeline events yet.</p>;
+    return <p className="text-sm text-[#6B7280] italic">No timeline events yet.</p>;
   }
 
   return (
     <div className="space-y-4">
       {entries.length > 0 && (
-        <ol className="relative space-y-4 border-l border-slate-200 pl-5">
+        <ol className="relative space-y-4 border-l border-[#2A2A2D] pl-5">
           {entries.map((entry) => {
             const meta = KIND_META[entry.kind];
             return (
@@ -212,15 +212,15 @@ export function Timeline({ record }: { record: LongitudinalRecord | null | undef
                   <span className="h-1.5 w-1.5 rounded-full bg-white" />
                 </span>
                 <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between">
-                  <div className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
-                    <span aria-hidden="true" className="text-slate-400">
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-[#E5E7EB]">
+                    <span aria-hidden="true" className="text-[#6B7280]">
                       {meta.icon}
                     </span>
                     {entry.title}
                   </div>
-                  <span className="text-xs text-slate-400">{formatDate(entry.date)}</span>
+                  <span className="text-xs text-[#6B7280]">{formatDate(entry.date)}</span>
                 </div>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-[#9CA3AF]">
                   {meta.label}
                   {entry.detail ? ` · ${entry.detail}` : ''}
                 </p>
@@ -232,12 +232,12 @@ export function Timeline({ record }: { record: LongitudinalRecord | null | undef
 
       {undatedAllergies.length > 0 && (
         <div>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#6B7280]">
             Allergies (no onset date recorded)
           </h3>
           <ul className="space-y-1.5">
             {undatedAllergies.map((allergy, i) => (
-              <li key={i} className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+              <li key={i} className="rounded-md bg-red-950/30 px-3 py-2 text-sm text-red-400">
                 {[str(allergy.allergen_name), str(allergy.severity), str(allergy.status)]
                   .filter(Boolean)
                   .join(' · ')}

@@ -14,11 +14,6 @@ export default function PatientsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // The failure this catches used to be silent, and silence was the wrong answer twice over.
-  // A rejected fetch left `patients` at [] with `loading` false, so the page rendered its
-  // empty state: "No patients yet. Create your first patient to get started." A clinician
-  // whose panel had failed to load was told, in as many words, that they had no patients —
-  // and the obvious next action was to re-register someone who was already in the system.
   async function load(q?: string) {
     setError(null);
     setLoading(true);
@@ -26,8 +21,6 @@ export default function PatientsPage() {
       const res = await api.listPatients(q);
       setPatients(res.items);
     } catch (err) {
-      // The stale list stays on screen behind the banner rather than being cleared: it is
-      // still the last thing the server actually said, and it is more use than nothing.
       setError(requestErrorMessage(err, 'the patient list'));
     } finally {
       setLoading(false);
@@ -40,14 +33,11 @@ export default function PatientsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Patients</h1>
-          {/* Suppressed while an error is up: the count would be of a list we know is stale,
-              and "0 patients registered" is the exact claim the banner is there to deny. */}
+          <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">Patients</h1>
           {!loading && !error && (
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-[#9CA3AF]">
               {patients.length} patient{patients.length !== 1 ? 's' : ''} registered
             </p>
           )}
@@ -87,7 +77,6 @@ export default function PatientsPage() {
         />
       )}
 
-      {/* Search bar */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -102,7 +91,7 @@ export default function PatientsPage() {
           </label>
           <svg
             aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B7280]"
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}
@@ -132,21 +121,18 @@ export default function PatientsPage() {
         <ErrorBanner message={error} onRetry={() => void load(search)} retrying={loading} />
       )}
 
-      {/* Patient list */}
       {loading ? (
         <LoadingBlock label="Loading patients">
           <SkeletonList rows={3} />
         </LoadingBlock>
       ) : error ? (
-        // Deliberately no empty state under an error. "No patients yet" is a statement about
-        // the panel; all we know is that we could not read it.
         patients.length > 0 && <PatientList patients={patients} />
       ) : patients.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white py-16 text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand-50">
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#2A2A2D] bg-[#1A1A1D] py-16 text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#F0B429]/10">
             <svg
               aria-hidden="true"
-              className="h-7 w-7 text-brand-500"
+              className="h-7 w-7 text-[#F0B429]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
@@ -159,8 +145,8 @@ export default function PatientsPage() {
               />
             </svg>
           </div>
-          <h3 className="text-base font-semibold text-slate-900">No patients yet</h3>
-          <p className="mt-1 text-sm text-slate-500">Create your first patient to get started.</p>
+          <h3 className="text-base font-semibold text-[#E5E7EB]">No patients yet</h3>
+          <p className="mt-1 text-sm text-[#9CA3AF]">Create your first patient to get started.</p>
         </div>
       ) : (
         <PatientList patients={patients} />
@@ -169,34 +155,32 @@ export default function PatientsPage() {
   );
 }
 
-/** The roster itself. Extracted so the error branch can keep showing the last good list. */
 function PatientList({ patients }: { patients: PatientSummary[] }) {
   return (
     <ul className="space-y-3">
       {patients.map((p) => (
         <li key={p.id} className="animate-fade-in">
           <Link href={`/patients/${p.id}`} className="block group">
-            <Card className="transition-all duration-200 group-hover:border-brand-300 group-hover:shadow-card-hover">
+            <Card className="transition-all duration-200 group-hover:border-[#F0B429]/30 group-hover:shadow-card-hover">
               <div className="flex items-center gap-4">
-                {/* Decorative: the initial is the patient's own name, read out below. */}
                 <div
                   aria-hidden="true"
-                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-brand-50 text-sm font-semibold text-brand-700 group-hover:bg-brand-100 transition-colors"
+                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#F0B429]/10 text-sm font-semibold text-[#F0B429] group-hover:bg-[#F0B429]/15 transition-colors"
                 >
                   {p.full_name?.[0]?.toUpperCase() ?? '?'}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-900 group-hover:text-brand-700 transition-colors">
+                  <p className="font-semibold text-[#E5E7EB] group-hover:text-[#F0B429] transition-colors">
                     {p.full_name}
                   </p>
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-[#9CA3AF]">
                     {p.sex ?? 'unknown'} · {p.date_of_birth ?? 'DOB unknown'} ·{' '}
                     {p.phone ?? 'no phone'}
                   </p>
                 </div>
                 <svg
                   aria-hidden="true"
-                  className="h-5 w-5 flex-shrink-0 text-slate-300 group-hover:text-brand-500 transition-colors"
+                  className="h-5 w-5 flex-shrink-0 text-[#6B7280] group-hover:text-[#F0B429] transition-colors"
                   fill="none"
                   viewBox="0 0 24 24"
                   strokeWidth={2}
@@ -244,7 +228,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <Card className="animate-slide-up">
-      <h3 id="new-patient-heading" className="mb-4 text-base font-semibold text-slate-900">
+      <h3 id="new-patient-heading" className="mb-4 text-base font-semibold text-[#E5E7EB]">
         Register new patient
       </h3>
       <form
@@ -257,7 +241,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
         <div>
           <label
             htmlFor="new-patient-full-name"
-            className="mb-1.5 block text-sm font-medium text-slate-700"
+            className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
           >
             Full name
           </label>
@@ -274,7 +258,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
           <div>
             <label
               htmlFor="new-patient-sex"
-              className="mb-1.5 block text-sm font-medium text-slate-700"
+              className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
             >
               Sex
             </label>
@@ -293,7 +277,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
           <div>
             <label
               htmlFor="new-patient-dob"
-              className="mb-1.5 block text-sm font-medium text-slate-700"
+              className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
             >
               Date of birth
             </label>
@@ -308,7 +292,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
           <div>
             <label
               htmlFor="new-patient-phone"
-              className="mb-1.5 block text-sm font-medium text-slate-700"
+              className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
             >
               Phone
             </label>
@@ -321,20 +305,18 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             />
           </div>
         </div>
-        <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm cursor-pointer hover:bg-slate-100 transition-colors">
+        <label className="flex items-center gap-3 rounded-lg border border-[#2A2A2D] bg-[#111113] p-3 text-sm cursor-pointer hover:bg-[#1A1A1D] transition-colors">
           <input
             type="checkbox"
             checked={consent}
             onChange={(e) => setConsent(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+            className="h-4 w-4 rounded border-[#2A2A2D] text-[#F0B429] focus:ring-[#F0B429]"
           />
-          <span className="text-slate-700">
+          <span className="text-[#9CA3AF]">
             Patient consent obtained for data processing (required — DPDP Act)
           </span>
         </label>
-        {/* A disabled control announces only "dimmed"; without this the reason is invisible
-            to anyone not seeing the unticked box above it. */}
-        <p id="consent-required-hint" className="text-xs text-slate-500">
+        <p id="consent-required-hint" className="text-xs text-[#9CA3AF]">
           {consent ? 'Consent recorded.' : 'Confirm patient consent above to enable registration.'}
         </p>
         <Button type="submit" disabled={!consent} aria-describedby="consent-required-hint">

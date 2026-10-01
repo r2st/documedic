@@ -71,7 +71,7 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       <div
         role="alert"
-        className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-900"
+        className="rounded-xl border border-red-800/50 bg-red-950/30 p-5 text-sm text-red-300"
       >
         <div className="flex items-start gap-3">
           <svg
@@ -90,12 +90,12 @@ export class ErrorBoundary extends Component<Props, State> {
           </svg>
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold">{this.props.section} could not be displayed</h2>
-            <p className="mt-1 text-red-800">
+            <p className="mt-1 text-red-400">
               Something on this screen failed to render. Nothing here is a clinical finding — treat
               this section as missing, not as empty, and do not read it as &ldquo;nothing to
               report&rdquo;.
             </p>
-            <p className="mt-1 text-red-800">
+            <p className="mt-1 text-red-400">
               The record itself is unaffected and nothing was changed. Try again, or reload the
               page.
             </p>

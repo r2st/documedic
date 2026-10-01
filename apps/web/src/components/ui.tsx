@@ -10,9 +10,9 @@
 import { checkTypeLabel } from '@/lib/safety';
 
 const CONFIDENCE_STYLES: Record<string, string> = {
-  high: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
-  medium: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
-  low: 'bg-red-50 text-red-700 ring-1 ring-red-200',
+  high: 'bg-emerald-950/30 text-emerald-400 ring-1 ring-emerald-800/50',
+  medium: 'bg-amber-950/30 text-amber-400 ring-1 ring-amber-800/50',
+  low: 'bg-red-950/30 text-red-400 ring-1 ring-red-800/50',
 };
 
 export function ConfidenceBadge({ band, value }: { band: string; value: number }) {
@@ -22,7 +22,7 @@ export function ConfidenceBadge({ band, value }: { band: string; value: number }
     <span
       aria-label={`Extraction confidence ${band}, ${(value * 100).toFixed(0)} percent`}
       className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${
-        CONFIDENCE_STYLES[band] ?? 'bg-slate-50 text-slate-600 ring-1 ring-slate-200'
+        CONFIDENCE_STYLES[band] ?? 'bg-[#1A1A1D] text-[#9CA3AF] ring-1 ring-[#2A2A2D]'
       }`}
     >
       {(value * 100).toFixed(0)}%
@@ -31,10 +31,10 @@ export function ConfidenceBadge({ band, value }: { band: string; value: number }
 }
 
 const SEVERITY_STYLES: Record<string, string> = {
-  hard_block: 'border-red-600 bg-red-50 text-red-900',
-  critical: 'border-red-500 bg-red-50 text-red-800',
-  warning: 'border-amber-500 bg-amber-50 text-amber-900',
-  info: 'border-brand-500 bg-brand-50 text-brand-900',
+  hard_block: 'border-red-600 bg-red-950/30 text-red-300',
+  critical: 'border-red-500 bg-red-950/30 text-red-300',
+  warning: 'border-amber-500 bg-amber-950/30 text-amber-300',
+  info: 'border-[#F0B429] bg-[#F0B429]/10 text-[#F0B429]',
 };
 
 /**
@@ -95,7 +95,7 @@ export function SafetyFlagCard({
         {checkType ? (
           // Not colour-coded. The severity carries the colour, and giving the label its own
           // would compete with it for the same glance.
-          <span className="rounded bg-white/60 px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset ring-black/10">
+          <span className="rounded bg-[#0A0A0B]/60 px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset ring-white/10">
             {checkTypeLabel(checkType)}
           </span>
         ) : null}

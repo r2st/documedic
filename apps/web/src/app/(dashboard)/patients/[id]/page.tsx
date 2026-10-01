@@ -100,12 +100,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [chainValid, setChainValid] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
-  // Which format is in flight, not a bare boolean: both buttons would otherwise show
-  // "Exporting…" for whichever one was pressed, and a clinician who meant to hand the patient a
-  // PDF has no way to tell which file the browser is about to save.
   const [exporting, setExporting] = useState<'fhir' | 'pdf' | null>(null);
-  // The export the API refused for want of a recent password, held so it can be retried the
-  // moment the clinician confirms. Null when nothing is waiting on a password.
   const [exportNeedingPassword, setExportNeedingPassword] = useState<'fhir' | 'pdf' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -142,26 +137,14 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
     void load();
   }, [load]);
 
-  // One reference shared by the retry button and both section boundaries: they all mean the
-  // same thing ("go and read the chart again"), and `load` puts the page back into its
-  // loading state, which unmounts every boundary and remounts it clean. So a retry from any
-  // one of them recovers all of them, and there is no per-section variant to keep in step.
   const reloadChart = () => void load();
 
-  // Export failures surface in the same alert region the chart's load errors use, rather than
-  // silently: an export that did nothing and an export the browser saved elsewhere look
-  // identical from the button, and the clinician may be relying on the file existing.
   const exportRecord = async (format: 'fhir' | 'pdf') => {
     setExporting(format);
     try {
       await api.exportPatientRecord(id, format);
       setExportNeedingPassword(null);
     } catch (err) {
-      // `reauthentication_required` is not a failure to report — it is the API asking a
-      // question. Rendering it in the error banner beside "check the connection" would leave
-      // the clinician with a message they cannot act on for a request that is one password
-      // away from succeeding. Note this is a 403 and not a 401 precisely so that neither this
-      // handler nor the client's refresh path treats it as a broken sign-in.
       if (err instanceof ApiError && err.code === 'reauthentication_required') {
         setExportNeedingPassword(format);
       } else {
@@ -178,9 +161,8 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
 
   if (error)
     return (
-      // Replaces the chart that was being loaded, with focus still on whatever link opened it.
       <div role="alert" className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-red-50">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-red-950/30">
           <svg
             aria-hidden="true"
             className="h-7 w-7 text-red-500"
@@ -196,17 +178,9 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
             />
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-slate-900">Unable to load patient</h2>
-        <p className="mt-1 max-w-md text-sm text-slate-500">{error}</p>
+        <h2 className="text-lg font-semibold text-[#E5E7EB]">Unable to load patient</h2>
+        <p className="mt-1 max-w-md text-sm text-[#9CA3AF]">{error}</p>
         <div className="mt-6 flex flex-col gap-2 sm:flex-row">
-          {/* Four reads make up this chart and any one of them can be the one that failed, so a
-            retry is usually all it needs — and it beats a browser reload, which throws the whole
-            page away to re-ask for the same four. Offered even on a 404, where it will fail
-            again: the alternative is deciding for the clinician that the chart is gone, and a
-            record that is briefly unreachable and one that was deleted look identical here. */}
-          {/* No in-flight label on this one: `load` clears the error as it starts, so this whole
-            view unmounts on the click and the chart skeleton — which already announces itself
-            as busy — is what the clinician sees while the retry runs. */}
           <Button variant="secondary" size="sm" onClick={reloadChart}>
             Try again
           </Button>
@@ -233,15 +207,12 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
       </div>
     );
 
-  // The skeleton is a set of empty grey boxes: it says "loading" to the eye and nothing at all
-  // to a screen reader, which would sit in silence and then find a chart that appeared without
-  // comment. LoadingBlock is what names the wait; the boxes themselves stay aria-hidden.
   if (loading)
     return (
       <LoadingBlock label="Loading patient record" className="space-y-6">
         <div>
           <Skeleton className="mb-2 h-4 w-20" />
-          <Skeleton className="mb-1 h-7 w-52 bg-slate-200" />
+          <Skeleton className="mb-1 h-7 w-52 bg-[#2A2A2D]" />
           <Skeleton className="h-4 w-36" />
         </div>
         <SkeletonCards count={4} />
@@ -252,12 +223,11 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
 
   return (
     <div className="space-y-6">
-      {/* Patient header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <Link
             href="/patients"
-            className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
+            className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
           >
             <svg
               aria-hidden="true"
@@ -272,14 +242,14 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
             All patients
           </Link>
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-100 text-lg font-bold text-brand-700">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#F0B429]/15 text-lg font-bold text-[#F0B429]">
               {patient.full_name?.[0]?.toUpperCase() ?? '?'}
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+              <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">
                 {patient.full_name}
               </h1>
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-[#9CA3AF]">
                 {patient.sex ?? 'unknown'} · {patient.date_of_birth ?? 'DOB unknown'}
               </p>
             </div>
@@ -288,109 +258,36 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <Link href={`/patients/${id}/upload`} className="w-full sm:w-auto">
             <Button className="w-full sm:w-auto" variant="secondary" size="sm">
-              <svg
-                aria-hidden="true"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"
-                />
+              <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
               </svg>
               Upload document
             </Button>
           </Link>
           <Link href={`/patients/${id}/safety`} className="w-full sm:w-auto">
             <Button className="w-full sm:w-auto" variant="secondary" size="sm">
-              <svg
-                aria-hidden="true"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"
-                />
+              <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
               </svg>
               Drug safety
             </Button>
           </Link>
-          {/* Not a <Link>: the file arrives from an authenticated fetch, so it cannot be a
-              plain href. The busy label matters here because a long chart takes a moment and
-              a silent button invites a second click, which is a second audited disclosure. */}
-          <Button
-            className="w-full sm:w-auto"
-            variant="secondary"
-            size="sm"
-            disabled={exporting !== null}
-            onClick={() => void exportRecord('fhir')}
-          >
-            <svg
-              aria-hidden="true"
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
+          <Button className="w-full sm:w-auto" variant="secondary" size="sm" disabled={exporting !== null} onClick={() => void exportRecord('fhir')}>
+            <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
             </svg>
             {exporting === 'fhir' ? 'Exporting…' : 'Export record (FHIR)'}
           </Button>
-          {/* The same disclosure in the format a person reads. Both draw on one export rate
-              limit, so this is not a way around that ceiling — it is the file you hand to the
-              patient or staple to a referral. */}
-          <Button
-            className="w-full sm:w-auto"
-            variant="secondary"
-            size="sm"
-            disabled={exporting !== null}
-            onClick={() => void exportRecord('pdf')}
-          >
-            <svg
-              aria-hidden="true"
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0 1 10.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 0 1-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0 0 21 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 0 0-1.913-.247M6.34 18H5.25A2.25 2.25 0 0 1 3 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 0 1 1.913-.247m10.5 0a48.536 48.536 0 0 0-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5Zm-3 0h.008v.008H15V10.5Z"
-              />
+          <Button className="w-full sm:w-auto" variant="secondary" size="sm" disabled={exporting !== null} onClick={() => void exportRecord('pdf')}>
+            <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0 1 10.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 0 1-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0 0 21 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 0 0-1.913-.247M6.34 18H5.25A2.25 2.25 0 0 1 3 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 0 1 1.913-.247m10.5 0a48.536 48.536 0 0 0-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5Zm-3 0h.008v.008H15V10.5Z" />
             </svg>
             {exporting === 'pdf' ? 'Exporting…' : 'Export record (PDF)'}
           </Button>
           <Link href={`/patients/${id}/encounter`} className="col-span-2 w-full sm:w-auto">
             <Button className="w-full sm:w-auto" size="sm">
-              <svg
-                aria-hidden="true"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
-                />
+              <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
               </svg>
               Start reasoning
             </Button>
@@ -398,9 +295,6 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
         </div>
       </div>
 
-      {/* Sits directly under the buttons it is about — a password prompt that appears somewhere
-          else on the page is one a clinician reads as an unrelated interruption. It replaces
-          nothing and signs nobody out; the export runs the moment it is answered. */}
       {exportNeedingPassword && (
         <ReauthPrompt
           action={`export this record as ${exportNeedingPassword === 'pdf' ? 'a PDF' : 'FHIR'}`}
@@ -413,18 +307,13 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
         />
       )}
 
-      {/* Chronological timeline (anti-automation-bias: raw history before any interpretation) */}
-      {/* One boundary per section rather than one around the chart: a Timeline that cannot
-          render a single malformed event should not take the allergy list down with it.
-          `onReset` re-fetches, because re-rendering the payload that just crashed only
-          crashes again. */}
       {record && (
         <ErrorBoundary section="The timeline" onReset={reloadChart}>
           <Card>
             <div className="mb-3 flex items-center gap-2">
               <svg
                 aria-hidden="true"
-                className="h-5 w-5 text-slate-400"
+                className="h-5 w-5 text-[#6B7280]"
                 fill="none"
                 viewBox="0 0 24 24"
                 strokeWidth={1.5}
@@ -436,14 +325,13 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
                   d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
                 />
               </svg>
-              <h2 className="font-semibold text-slate-900">Timeline</h2>
+              <h2 className="font-semibold text-[#E5E7EB]">Timeline</h2>
             </div>
             <Timeline record={record} />
           </Card>
         </ErrorBoundary>
       )}
 
-      {/* Clinical record sections */}
       {record && (
         <ErrorBoundary section="The record sections" onReset={reloadChart}>
           <div className="grid gap-4 md:grid-cols-2">
@@ -454,25 +342,13 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
               fields={['allergen_name', 'severity', 'status']}
               empty="No allergies recorded"
             />
-            {/* "Medications", not "Active medications". The list is every medication event on
-                the chart, and once a discontinuation could actually land (a `stop` line used to
-                be dropped at merge, so nothing here was ever anything but current) the old
-                heading was asserting something about rows it did not check. The API orders
-                current first; each stopped row says so on its face. */}
             <RecordSection
               title="Medications"
               icon={SECTION_ICONS['Medications']}
               rows={record.medications}
               fields={['generic_name', 'dose', 'frequency']}
               empty="No medications"
-              // A drug the patient was taken off must not read as one they are on. Shown rather
-              // than filtered out: "stopped in March" is what makes the record longitudinal, and
-              // a silently shortened list is how a clinician concludes a drug was never given.
               badge={(row) => (row.is_current === false ? 'Stopped' : null)}
-              // Nothing in this system ages a medication out, so a 2019 prescription is still on
-              // this list in 2026 — and the list showed name, dose and frequency with no date at
-              // all, which made an old line and this morning's line indistinguishable. The
-              // clinical caution is raised on the Safety screen; this is the fact behind it.
               meta={(row) => {
                 const { text, stale } = medicationDocumentedLabel(row);
                 return { text, caution: stale };
@@ -503,13 +379,12 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
         </ErrorBoundary>
       )}
 
-      {/* Audit trail */}
       <Card>
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <svg
               aria-hidden="true"
-              className="h-5 w-5 text-slate-400"
+              className="h-5 w-5 text-[#6B7280]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
@@ -521,14 +396,14 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
                 d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
               />
             </svg>
-            <h2 className="font-semibold text-slate-900">Audit trail</h2>
+            <h2 className="font-semibold text-[#E5E7EB]">Audit trail</h2>
           </div>
           {chainValid !== null && (
             <span
               className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
                 chainValid
-                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                  : 'bg-red-50 text-red-700 ring-1 ring-red-200'
+                  ? 'bg-emerald-950/30 text-emerald-400 ring-1 ring-emerald-800/50'
+                  : 'bg-red-950/30 text-red-400 ring-1 ring-red-800/50'
               }`}
             >
               {chainValid ? (
@@ -551,16 +426,16 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
             </span>
           )}
         </div>
-        <ul className="divide-y divide-slate-100 text-sm">
+        <ul className="divide-y divide-[#2A2A2D] text-sm">
           {audit.map((e) => (
             <li
               key={e.id}
               className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:items-center sm:justify-between"
             >
-              <span className="min-w-0 break-all font-mono text-xs text-slate-600">
-                <span className="mr-1 text-slate-400">#{e.sequence}</span> {e.action}
+              <span className="min-w-0 break-all font-mono text-xs text-[#9CA3AF]">
+                <span className="mr-1 text-[#6B7280]">#{e.sequence}</span> {e.action}
               </span>
-              <span className="flex-shrink-0 text-xs text-slate-400">
+              <span className="flex-shrink-0 text-xs text-[#6B7280]">
                 {new Date(e.created_at).toLocaleString()}
               </span>
             </li>
@@ -585,27 +460,23 @@ function RecordSection({
   rows: Array<Record<string, unknown>>;
   fields: string[];
   empty: string;
-  /** Optional short qualifier for a row — returns null for rows that need none. */
   badge?: (row: Record<string, unknown>) => string | null;
-  /** Optional second line under a row: when it was documented, and whether that is a caution. */
   meta?: (row: Record<string, unknown>) => { text: string; caution: boolean } | null;
 }) {
   return (
     <Card>
       <div className="mb-3 flex items-center gap-2">
         {icon}
-        <h2 className="font-semibold text-slate-900">{title}</h2>
-        {/* Visually this bare number reads as a count of the section it sits beside; announced
-            on its own after the heading it is just "Allergies, 3". */}
+        <h2 className="font-semibold text-[#E5E7EB]">{title}</h2>
         <span
           aria-label={`${rows.length} recorded`}
-          className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500"
+          className="rounded-full bg-[#2A2A2D] px-2 py-0.5 text-xs font-medium text-[#9CA3AF]"
         >
           {rows.length}
         </span>
       </div>
       {rows.length === 0 ? (
-        <p className="text-sm text-slate-400 italic">{empty}</p>
+        <p className="text-sm text-[#6B7280] italic">{empty}</p>
       ) : (
         <ul className="space-y-1.5">
           {rows.map((row, i) => {
@@ -615,7 +486,7 @@ function RecordSection({
               <li
                 key={i}
                 className={`flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm ${
-                  label ? 'bg-slate-50/60 text-slate-500' : 'bg-slate-50 text-slate-700'
+                  label ? 'bg-[#111113]/60 text-[#9CA3AF]' : 'bg-[#111113] text-[#E5E7EB]'
                 }`}
               >
                 <span className="min-w-0">
@@ -625,23 +496,18 @@ function RecordSection({
                       .filter((v) => v !== null && v !== undefined && v !== '')
                       .join(' · ')}
                   </span>
-                  {/* Under the drug, not beside it: it qualifies the whole row, and a clinician
-                      reading down a medication list should meet the name first. Amber carries no
-                      meaning on its own — the phrase says how long ago in words. */}
                   {line && (
                     <span
                       className={`block text-xs ${
-                        line.caution ? 'text-amber-700' : 'text-slate-400'
+                        line.caution ? 'text-amber-400' : 'text-[#6B7280]'
                       }`}
                     >
                       {line.text}
                     </span>
                   )}
                 </span>
-                {/* Text, not colour alone: the distinction between a drug the patient is on and
-                    one they were taken off cannot rest on a shade of grey. */}
                 {label && (
-                  <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
+                  <span className="shrink-0 rounded-full bg-[#2A2A2D] px-2 py-0.5 text-xs font-medium text-[#9CA3AF]">
                     {label}
                   </span>
                 )}

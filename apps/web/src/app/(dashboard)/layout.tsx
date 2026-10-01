@@ -18,8 +18,8 @@ function NavLink({ href, children }: { href: string; children: React.ReactNode }
       aria-current={isActive ? 'page' : undefined}
       className={`relative rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
         isActive
-          ? 'text-brand-700 bg-brand-50'
-          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+          ? 'text-[#F0B429] bg-[#F0B429]/10'
+          : 'text-[#9CA3AF] hover:text-[#E5E7EB] hover:bg-[#1A1A1D]'
       }`}
     >
       {children}
@@ -45,8 +45,8 @@ function MobileNavLink({
       aria-current={isActive ? 'page' : undefined}
       className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
         isActive
-          ? 'text-brand-700 bg-brand-50'
-          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          ? 'text-[#F0B429] bg-[#F0B429]/10'
+          : 'text-[#9CA3AF] hover:bg-[#1A1A1D] hover:text-[#E5E7EB]'
       }`}
       onClick={onClick}
     >
@@ -59,14 +59,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { account, loading } = useRequireAuth();
   const { logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // Keys the error boundary below, so moving to another screen clears a caught error. React
-  // never resets a boundary on its own; without this, one page crashing would leave the
-  // fallback in place for every page after it and the header would be the only thing working.
   const pathname = usePathname();
 
-  // Escape is how every other expanded menu on the web closes. Without it the only way out of
-  // this one is to find the toggle again, which on a phone means tabbing back up through the
-  // whole panel.
   useEffect(() => {
     if (!mobileMenuOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -80,8 +74,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return (
       <main className="grid min-h-screen place-items-center">
         <div className="text-center" role="status">
-          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px] border-slate-200 border-t-brand-600" />
-          <p className="text-sm font-medium text-slate-500">Loading Aether Clinician…</p>
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-[3px] border-[#2A2A2D] border-t-[#F0B429]" />
+          <p className="text-sm font-medium text-[#9CA3AF]">Loading DoAide Clinician…</p>
         </div>
       </main>
     );
@@ -90,45 +84,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const closeMobileMenu = () => setMobileMenuOpen(false);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Every screen puts the same header — logo, three nav links, account, sign out — ahead of
-          its content, so a keyboard user pays for it on every page load. This is the standard
-          escape: off-screen until focused, first in the tab order, jumps past the header. */}
+    <div className="min-h-screen bg-[#0A0A0B]">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-brand-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-[#F0B429] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-[#0A0A0B]"
       >
         Skip to main content
       </a>
-      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-sm shadow-nav">
+      <header className="sticky top-0 z-30 border-b border-[#2A2A2D] bg-[#0A0A0B]/95 backdrop-blur-sm shadow-nav">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-6">
-          {/* Logo + Brand */}
           <Link href="/patients" className="flex items-center gap-2.5 group">
-            {/* Static SVG logo — next/image does not optimize SVG, so <img> is correct here. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/logo.svg"
-              alt="Aether Clinician"
+              alt="DoAide Clinician"
               className="h-8 w-8 transition-transform group-hover:scale-105"
             />
-            <span className="text-lg font-bold tracking-tight text-slate-900">
-              Aether <span className="text-brand-600">Clinician</span>
+            <span className="text-lg font-bold tracking-tight text-[#E5E7EB]">
+              DoAide <span className="text-[#F0B429]">Clinician</span>
             </span>
           </Link>
 
-          {/* Desktop navigation */}
           <div className="hidden items-center gap-1 md:flex">
             <nav className="flex items-center gap-1 mr-4">
               <NavLink href="/patients">Patients</NavLink>
               <NavLink href="/guidelines">Guidelines</NavLink>
               <NavLink href="/metrics">Metrics</NavLink>
             </nav>
-            <div className="flex items-center gap-3 border-l border-slate-200 pl-4">
+            <div className="flex items-center gap-3 border-l border-[#2A2A2D] pl-4">
               <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#F0B429]/15 text-sm font-semibold text-[#F0B429]">
                   {(account.display_name ?? account.email)?.[0]?.toUpperCase() ?? '?'}
                 </div>
-                <span className="text-sm font-medium text-slate-700 max-w-[140px] truncate">
+                <span className="text-sm font-medium text-[#E5E7EB] max-w-[140px] truncate">
                   {account.display_name ?? account.email}
                 </span>
               </div>
@@ -138,10 +126,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </div>
 
-          {/* Mobile hamburger button */}
           <button
             type="button"
-            className="inline-flex items-center justify-center rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 md:hidden"
+            className="inline-flex items-center justify-center rounded-lg p-2 text-[#9CA3AF] hover:bg-[#1A1A1D] hover:text-[#E5E7EB] md:hidden"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
             aria-expanded={mobileMenuOpen}
             aria-controls="mobile-menu"
@@ -177,11 +164,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </button>
         </div>
 
-        {/* Mobile menu panel */}
         {mobileMenuOpen && (
           <div
             id="mobile-menu"
-            className="animate-slide-down border-t border-slate-100 bg-white shadow-elevated md:hidden"
+            className="animate-slide-down border-t border-[#2A2A2D] bg-[#1A1A1D] shadow-elevated md:hidden"
           >
             <nav className="flex flex-col gap-1 px-4 py-3">
               <MobileNavLink href="/patients" onClick={closeMobileMenu}>
@@ -194,12 +180,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 Metrics
               </MobileNavLink>
             </nav>
-            <div className="border-t border-slate-100 px-4 py-3">
+            <div className="border-t border-[#2A2A2D] px-4 py-3">
               <div className="mb-3 flex items-center gap-2 px-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#F0B429]/15 text-sm font-semibold text-[#F0B429]">
                   {(account.display_name ?? account.email)?.[0]?.toUpperCase() ?? '?'}
                 </div>
-                <span className="text-sm font-medium text-slate-700">
+                <span className="text-sm font-medium text-[#E5E7EB]">
                   {account.display_name ?? account.email}
                 </span>
               </div>
@@ -218,28 +204,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         )}
       </header>
-      {/* Below the sticky header rather than above it, so it never covers the sign-out control
-          it is warning about — and inside the dashboard shell because there is nothing to time
-          out on the login screen. */}
       <SessionExpiryBanner />
       <main
         id="main-content"
-        // Focusable so the skip link actually moves focus here rather than only moving the
-        // viewport; -1 keeps it out of the normal tab order.
         tabIndex={-1}
         className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8 animate-fade-in focus:outline-none"
       >
-        {/* Inside <main>, so a crashed screen keeps the header: the clinician can still reach
-            another chart, or sign out, instead of being stranded on a white page. */}
         <ErrorBoundary key={pathname} section="This screen">
           {children}
         </ErrorBoundary>
       </main>
-      <footer className="border-t border-slate-200/60 bg-white/80 py-3 text-center text-xs text-slate-400">
+      <footer className="border-t border-[#2A2A2D] bg-[#0A0A0B]/80 py-3 text-center text-xs text-[#6B7280]">
         A{' '}
         <a
           href="https://doaide.com"
-          className="font-medium text-slate-500 hover:text-slate-600 hover:underline"
+          className="font-medium text-[#9CA3AF] hover:text-[#E5E7EB] hover:underline"
           target="_blank"
           rel="noopener noreferrer"
         >

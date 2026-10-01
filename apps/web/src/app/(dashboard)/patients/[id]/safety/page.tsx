@@ -64,7 +64,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
     <div className="space-y-5">
       <Link
         href={`/patients/${id}`}
-        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
+        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
       >
         <svg
           aria-hidden="true"
@@ -80,8 +80,8 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
       </Link>
 
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Drug safety check</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">Drug safety check</h1>
+        <p className="mt-1 text-sm text-[#9CA3AF]">
           Deterministic, offline-capable checks against this patient&apos;s allergies, current
           medications, conditions, and renal function. Hard blocks cannot be overridden.
         </p>
@@ -95,7 +95,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
             </label>
             <svg
               aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B7280]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={2}
@@ -139,7 +139,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
           <Card>
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <Skeleton className="mb-2 h-6 w-40 bg-slate-200" />
+                <Skeleton className="mb-2 h-6 w-40 bg-[#2A2A2D]" />
                 <Skeleton className="h-3 w-28" />
               </div>
               <Skeleton className="h-7 w-32 rounded-full" />
@@ -156,10 +156,10 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
           <Card className="animate-fade-in">
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">
+                <h2 className="text-lg font-semibold text-[#E5E7EB]">
                   {result.proposed_drug_name}
                 </h2>
-                <p className="text-xs font-mono text-slate-400">
+                <p className="text-xs font-mono text-[#6B7280]">
                   {result.proposed_drug_reference_id}
                 </p>
               </div>
@@ -182,7 +182,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
                   BLOCKED
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800 ring-1 ring-inset ring-green-200">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-950/30 px-3 py-1 text-xs font-semibold text-green-400 ring-1 ring-inset ring-green-800/50">
                   <svg
                     aria-hidden="true"
                     className="h-3.5 w-3.5"
@@ -203,7 +203,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
             </div>
 
             {result.flags.length === 0 ? (
-              <div className="rounded-lg bg-green-50 p-4 text-sm text-green-700 ring-1 ring-green-200">
+              <div className="rounded-lg bg-green-950/30 p-4 text-sm text-green-400 ring-1 ring-green-800/50">
                 No interactions, contraindications, or allergy conflicts detected.
               </div>
             ) : (
@@ -237,7 +237,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
               thing this screen must never imply is that a check it could not complete came back
               clean. The API reports each gap explicitly for the same reason.
             */}
-            <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 ring-1 ring-slate-100">
+            <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-[#9CA3AF] ring-1 ring-slate-100">
               Checked against {String(result.checked_against.current_medications ?? 0)} current
               medication(s), {String(result.checked_against.allergies ?? 0)} allergy(ies),{' '}
               {String(result.checked_against.conditions ?? 0)} condition(s).{' '}
@@ -248,7 +248,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
                 ? 'Liver panel available.'
                 : 'No liver function tests on this chart, so hepatic thresholds were not applied.'}
               {count(result.checked_against.unresolved_medications) > 0 ? (
-                <span className="mt-1 block font-medium text-amber-700">
+                <span className="mt-1 block font-medium text-amber-400">
                   {count(result.checked_against.unresolved_medications)} further medication(s) on
                   this chart could not be matched to a known drug and were not checked against.
                 </span>
@@ -257,7 +257,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
                   cannot name is cross-checked against nothing but an exact generic-name match, so
                   the headline "N allergy(ies)" overstates how much of the hard-block rule ran. */}
               {count(result.checked_against.unresolved_allergies) > 0 ? (
-                <span className="mt-1 block font-medium text-amber-700">
+                <span className="mt-1 block font-medium text-amber-400">
                   {count(result.checked_against.unresolved_allergies)} of those allergy(ies) could
                   not be matched to a known drug, so this drug was not cross-checked against them.
                 </span>

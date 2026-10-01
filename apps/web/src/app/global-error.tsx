@@ -32,7 +32,7 @@ export default function GlobalError({
 
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: 'system-ui, sans-serif', background: '#f8fafc' }}>
+      <body style={{ margin: 0, fontFamily: 'system-ui, sans-serif', background: '#0A0A0B' }}>
         <main
           style={{
             minHeight: '100vh',
@@ -46,17 +46,17 @@ export default function GlobalError({
             style={{
               maxWidth: '32rem',
               width: '100%',
-              border: '1px solid #fecaca',
-              background: '#fef2f2',
+              border: '1px solid rgba(127, 29, 29, 0.5)',
+              background: 'rgba(69, 10, 10, 0.5)',
               borderRadius: '0.75rem',
               padding: '1.5rem',
-              color: '#7f1d1d',
+              color: '#fca5a5',
               fontSize: '0.875rem',
               lineHeight: 1.5,
             }}
           >
             <h1 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>
-              Aether Clinician could not start
+              DoAide Clinician could not start
             </h1>
             <p style={{ marginTop: '0.5rem' }}>
               The application failed to load. Nothing on this page is a clinical finding, and no
@@ -73,9 +73,9 @@ export default function GlobalError({
                 marginTop: '1rem',
                 padding: '0.5rem 1rem',
                 borderRadius: '0.5rem',
-                border: '1px solid #b91c1c',
-                background: '#b91c1c',
-                color: '#fff',
+                border: '1px solid #F0B429',
+                background: '#F0B429',
+                color: '#0A0A0B',
                 fontSize: '0.875rem',
                 cursor: 'pointer',
               }}

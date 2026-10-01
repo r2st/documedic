@@ -115,22 +115,22 @@ function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'a
   const styles =
     kind === 'for'
       ? {
-          text: 'text-emerald-800',
-          bg: 'bg-emerald-50',
-          icon: 'text-emerald-500',
+          text: 'text-emerald-300',
+          bg: 'bg-emerald-950/30',
+          icon: 'text-emerald-400',
           marker: '✓',
           label: 'supporting',
         }
       : {
-          text: 'text-red-800',
-          bg: 'bg-red-50',
-          icon: 'text-red-500',
+          text: 'text-red-300',
+          bg: 'bg-red-950/30',
+          icon: 'text-red-400',
           marker: '✗',
           label: 'against',
         };
   return (
     <div className={`rounded-lg ${styles.bg} p-3`}>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
         Evidence {styles.label}
       </p>
       <ul className="space-y-1.5">
@@ -144,7 +144,7 @@ function EvidenceList({ items, kind }: { items: EvidenceItem[]; kind: 'for' | 'a
             <span>
               {asText(e.text)}
               {e.source_ref ? (
-                <span className="ml-1 text-xs text-slate-400">({asText(e.source_ref)})</span>
+                <span className="ml-1 text-xs text-[#6B7280]">({asText(e.source_ref)})</span>
               ) : null}
             </span>
           </li>
@@ -161,11 +161,11 @@ function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
   const baseRate = asText(critique.base_rate_caveat);
   const summary = asText(critique.summary);
   return (
-    <div className="mt-4 rounded-xl border-l-4 border-purple-500 bg-purple-50 p-4">
+    <div className="mt-4 rounded-xl border-l-4 border-purple-500 bg-purple-950/30 p-4">
       <div className="mb-2 flex items-center gap-2">
         <svg
           aria-hidden="true"
-          className="h-4 w-4 text-purple-600"
+          className="h-4 w-4 text-purple-400"
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={1.5}
@@ -177,13 +177,13 @@ function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
             d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18"
           />
         </svg>
-        <p className="text-xs font-bold uppercase tracking-wider text-purple-800">
+        <p className="text-xs font-bold uppercase tracking-wider text-purple-400">
           Devil&apos;s advocate — counter-argument
         </p>
       </div>
-      {summary && <p className="text-sm text-purple-900">{summary}</p>}
+      {summary && <p className="text-sm text-purple-300">{summary}</p>}
       {disconfirming.length > 0 && (
-        <ul className="mt-2 space-y-1 pl-6 text-sm text-purple-900">
+        <ul className="mt-2 space-y-1 pl-6 text-sm text-purple-300">
           {disconfirming.map((d, i) => (
             <li key={i} className="list-disc">
               {d}
@@ -192,12 +192,12 @@ function DevilsAdvocate({ critique }: { critique: Record<string, unknown> }) {
         </ul>
       )}
       {alternatives.length > 0 && (
-        <p className="mt-2 text-sm text-purple-900">
+        <p className="mt-2 text-sm text-purple-300">
           <span className="font-medium">Alternatives to consider: </span>
           {alternatives.join(', ')}
         </p>
       )}
-      {baseRate && <p className="mt-2 text-xs italic text-purple-700">{baseRate}</p>}
+      {baseRate && <p className="mt-2 text-xs italic text-purple-400">{baseRate}</p>}
     </div>
   );
 }
@@ -281,7 +281,7 @@ export function SuggestionCard({
       // by wandering the page, so it is announced the moment it renders.
       <div
         role="alert"
-        className="animate-slide-up rounded-xl border-2 border-red-600 bg-red-50 p-5 shadow-sm"
+        className="animate-slide-up rounded-xl border-2 border-red-600 bg-red-950/30 p-5 shadow-sm"
       >
         <div className="mb-2 flex items-center gap-2">
           <svg
@@ -298,24 +298,24 @@ export function SuggestionCard({
               d="M18.364 18.364A9 9 0 0 0 5.636 5.636m12.728 12.728A9 9 0 0 1 5.636 5.636m12.728 12.728L5.636 5.636"
             />
           </svg>
-          <p className="text-sm font-bold uppercase tracking-wide text-red-800">
+          <p className="text-sm font-bold uppercase tracking-wide text-red-300">
             Hard block — cannot proceed
           </p>
         </div>
-        <p className="text-sm text-red-900">{asText(s.body)}</p>
+        <p className="text-sm text-red-300">{asText(s.body)}</p>
         {decided ? (
           <p
             role="status"
-            className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-xs font-medium text-red-800"
+            className="mt-3 rounded-lg bg-red-950/50 px-3 py-2 text-xs font-medium text-red-300"
           >
             Recorded decision: {decided}
           </p>
         ) : (
-          <div className="mt-4 space-y-3 border-t border-red-200 pt-4">
+          <div className="mt-4 space-y-3 border-t border-red-800/50 pt-4">
             {/* This field had a placeholder and no label. A placeholder is not an accessible
                 name — it vanishes on the first keystroke, and it left the one control that
                 documents an override of a clinical hard block announced as "edit text, blank". */}
-            <label htmlFor={reasonId} className="block text-sm font-medium text-red-900">
+            <label htmlFor={reasonId} className="block text-sm font-medium text-red-300">
               Reason for overriding this hard block
             </label>
             <textarea
@@ -323,7 +323,7 @@ export function SuggestionCard({
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
               placeholder="Documented clinical reasoning is required to override a hard block."
-              className="w-full rounded-lg border-red-300 bg-white"
+              className="w-full rounded-lg border-red-700 bg-[#111113] text-[#E5E7EB]"
               rows={2}
             />
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -362,14 +362,14 @@ export function SuggestionCard({
   }
 
   const tierBorder: Record<AutonomyTier, string> = {
-    informational: 'border-blue-200',
-    suggestive: 'border-emerald-200',
-    flag_for_review: 'border-amber-300',
+    informational: 'border-blue-800/50',
+    suggestive: 'border-emerald-800/50',
+    flag_for_review: 'border-amber-700',
   };
 
   return (
     <div
-      className={`animate-slide-up rounded-xl border bg-white p-5 shadow-card ${tierBorder[tier]}`}
+      className={`animate-slide-up rounded-xl border bg-[#1A1A1D] p-5 shadow-card ${tierBorder[tier]}`}
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <AutonomyBadge tier={s.autonomy_tier} />
@@ -380,7 +380,7 @@ export function SuggestionCard({
             made this `undefined.replace(...)`, which throws and takes the card down over a
             decorative label. */}
         {asText(s.output_type) && (
-          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
+          <span className="rounded-full bg-[#2A2A2D] px-2.5 py-0.5 text-xs font-medium text-[#9CA3AF]">
             {asText(s.output_type).replace(/_/g, ' ')}
           </span>
         )}
@@ -388,10 +388,10 @@ export function SuggestionCard({
 
       {/* Engagement gate for flag-for-review: clinician must actively click through. */}
       {!acknowledged ? (
-        <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-5 text-center">
+        <div className="rounded-xl border-2 border-dashed border-amber-700 bg-amber-50 p-5 text-center">
           <svg
             aria-hidden="true"
-            className="mx-auto mb-2 h-8 w-8 text-amber-500"
+            className="mx-auto mb-2 h-8 w-8 text-amber-400"
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={1.5}
@@ -403,7 +403,7 @@ export function SuggestionCard({
               d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
             />
           </svg>
-          <p className="mb-3 text-sm font-medium text-amber-900">
+          <p className="mb-3 text-sm font-medium text-amber-300">
             This output is flagged for review. Engage to see the evidence and assessment.
           </p>
           <Button
@@ -426,40 +426,40 @@ export function SuggestionCard({
           )}
 
           {/* Conclusion comes after the evidence. */}
-          <div className="mt-4 border-t border-slate-100 pt-3">
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="mt-4 border-t border-[#2A2A2D] pt-3">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">
               Assessment to consider
             </p>
-            <p className="text-base font-semibold text-slate-900">{asText(s.title)}</p>
+            <p className="text-base font-semibold text-[#E5E7EB]">{asText(s.title)}</p>
             {asText(s.body) && (
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{asText(s.body)}</p>
+              <p className="mt-1.5 text-sm leading-relaxed text-[#9CA3AF]">{asText(s.body)}</p>
             )}
           </div>
 
           {hasDevil && <DevilsAdvocate critique={s.devils_advocate} />}
 
           {citations.length > 0 && (
-            <div className="mt-4 rounded-xl bg-slate-50 p-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <div className="mt-4 rounded-xl bg-[#111113] p-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
                 Guideline citations (grounding)
               </p>
               <div className="space-y-2">
                 {citations.map((c, i) => (
-                  <div key={i} className="border-l-2 border-slate-300 pl-3">
-                    <p className="text-xs font-medium text-slate-700">
+                  <div key={i} className="border-l-2 border-[#2A2A2D] pl-3">
+                    <p className="text-xs font-medium text-[#E5E7EB]">
                       {c.source && (
                         <>
-                          <span className="rounded bg-brand-50 px-1.5 py-0.5 text-brand-700 ring-1 ring-brand-200">
+                          <span className="rounded bg-[#F0B429]/10 px-1.5 py-0.5 text-[#F0B429] ring-1 ring-[#F0B429]/30">
                             {c.source.toUpperCase()}
                           </span>{' '}
                         </>
                       )}
                       {c.document_title}
                       {c.heading ? ` — ${c.heading}` : ''}{' '}
-                      {c.section_id && <span className="text-slate-400">[{c.section_id}]</span>}
+                      {c.section_id && <span className="text-[#6B7280]">[{c.section_id}]</span>}
                     </p>
                     {c.snippet && (
-                      <p className="mt-1 text-xs italic text-slate-500">
+                      <p className="mt-1 text-xs italic text-[#9CA3AF]">
                         &ldquo;{c.snippet}&rdquo;
                       </p>
                     )}
@@ -474,7 +474,7 @@ export function SuggestionCard({
             // moving focus off the button that was just pressed.
             <p
               role="status"
-              className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500"
+              className="mt-3 rounded-lg bg-[#111113] px-3 py-2 text-xs font-medium text-[#9CA3AF]"
             >
               Recorded decision: {decided}
             </p>

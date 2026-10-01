@@ -42,11 +42,11 @@ export default function RouteError({
         className="w-full rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-900"
       >
         <h1 className="text-base font-semibold">This screen could not be displayed</h1>
-        <p className="mt-2 text-red-800">
+        <p className="mt-2 text-red-400">
           Something on this screen failed to load. Nothing here is a clinical finding — treat this
           screen as missing, not as empty, and do not read it as &ldquo;nothing to report&rdquo;.
         </p>
-        <p className="mt-2 text-red-800">
+        <p className="mt-2 text-red-400">
           The patient record is unaffected and nothing was changed.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -59,7 +59,7 @@ export default function RouteError({
           </Button>
         </div>
         {error.digest && (
-          <p className="mt-4 font-mono text-xs text-red-700">Reference: {error.digest}</p>
+          <p className="mt-4 font-mono text-xs text-red-400">Reference: {error.digest}</p>
         )}
       </div>
     </main>

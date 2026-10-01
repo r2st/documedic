@@ -3,7 +3,6 @@ import type { Config } from 'tailwindcss';
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
-    // Add an `xs` breakpoint for fine-grained small-phone (≈360–480px) layout control.
     screens: {
       xs: '400px',
       sm: '640px',
@@ -14,21 +13,19 @@ const config: Config = {
     },
     extend: {
       colors: {
-        // Brand palette — medical teal
         brand: {
-          50: '#f0fdfa',
-          100: '#ccfbf1',
-          200: '#99f6e4',
-          300: '#5eead4',
-          400: '#2dd4bf',
-          500: '#14b8a6',
-          600: '#0d9488',
-          700: '#0f766e',
-          800: '#115e59',
-          900: '#134e4a',
-          950: '#042f2e',
+          50: 'rgba(240,180,41,0.1)',
+          100: 'rgba(240,180,41,0.15)',
+          200: 'rgba(240,180,41,0.25)',
+          300: '#F7CC5F',
+          400: '#F0B429',
+          500: '#F0B429',
+          600: '#F0B429',
+          700: '#D4A017',
+          800: '#8B6914',
+          900: '#5C4510',
+          950: '#2E220A',
         },
-        // Clinical severity / confidence palette.
         severity: {
           hard: '#b91c1c',
           critical: '#dc2626',
@@ -43,7 +40,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: [
-          'Inter',
+          'Schibsted Grotesk',
           'system-ui',
           '-apple-system',
           'BlinkMacSystemFont',
@@ -51,12 +48,15 @@ const config: Config = {
           'Roboto',
           'sans-serif',
         ],
+        display: ['Instrument Serif', 'Georgia', 'serif'],
+        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       boxShadow: {
-        card: '0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06)',
-        'card-hover': '0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.07)',
-        elevated: '0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.08)',
-        nav: '0 1px 3px 0 rgb(0 0 0 / 0.05)',
+        card: '0 1px 3px 0 rgb(0 0 0 / 0.2), 0 1px 2px -1px rgb(0 0 0 / 0.2)',
+        'card-hover': '0 4px 6px -1px rgb(0 0 0 / 0.25), 0 2px 4px -2px rgb(0 0 0 / 0.25)',
+        elevated: '0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.3)',
+        nav: '0 1px 3px 0 rgb(0 0 0 / 0.2)',
+        gold: '0 0 20px rgba(240,180,41,0.15)',
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',

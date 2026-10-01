@@ -176,7 +176,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
     <div className="space-y-5">
       <Link
         href={`/patients/${id}`}
-        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
+        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
       >
         <svg
           aria-hidden="true"
@@ -191,13 +191,13 @@ export default function UploadPage({ params }: { params: { id: string } }) {
         Back to patient
       </Link>
 
-      <h1 className="text-2xl font-bold tracking-tight text-slate-900">Upload document</h1>
+      <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">Upload document</h1>
 
       {error && <ErrorBanner message={error} onRetry={retry ?? undefined} retrying={busy} />}
 
       {!reviewed && (
         <Card>
-          <p className="mb-4 text-sm text-slate-600">
+          <p className="mb-4 text-sm text-[#9CA3AF]">
             Upload a prescription, lab report, or discharge summary (PDF / JPEG / PNG). Extraction
             runs automatically; you review and confirm before anything enters the record.
           </p>
@@ -208,15 +208,15 @@ export default function UploadPage({ params }: { params: { id: string } }) {
             onDrop={handleDrop}
             className={`relative rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
               isDragging
-                ? 'border-brand-400 bg-brand-50'
-                : 'border-slate-300 bg-slate-50 hover:border-brand-300 hover:bg-brand-50/50'
-            } ${inputFocused ? 'ring-2 ring-brand-500 ring-offset-2' : ''}`}
+                ? 'border-[#F0B429] bg-[#F0B429]/10'
+                : 'border-[#2A2A2D] bg-[#111113] hover:border-[#F0B429]/30 hover:bg-[#F0B429]/5'
+            } ${inputFocused ? 'ring-2 ring-[#F0B429] ring-offset-2 ring-offset-[#0A0A0B]' : ''}`}
           >
             {busy ? (
               <div className="flex flex-col items-center" role="status">
                 <svg
                   aria-hidden="true"
-                  className="h-8 w-8 animate-spin text-brand-600"
+                  className="h-8 w-8 animate-spin text-[#F0B429]"
                   viewBox="0 0 24 24"
                   fill="none"
                 >
@@ -234,16 +234,16 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                <p className="mt-3 text-sm font-medium text-slate-700">
+                <p className="mt-3 text-sm font-medium text-[#E5E7EB]">
                   Extracting document data...
                 </p>
-                <p className="mt-1 text-xs text-slate-500">This may take a moment</p>
+                <p className="mt-1 text-xs text-[#9CA3AF]">This may take a moment</p>
               </div>
             ) : (
               <>
                 <svg
                   aria-hidden="true"
-                  className="mx-auto h-10 w-10 text-slate-400"
+                  className="mx-auto h-10 w-10 text-[#6B7280]"
                   fill="none"
                   viewBox="0 0 24 24"
                   strokeWidth={1.5}
@@ -257,11 +257,11 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                 </svg>
                 <label
                   htmlFor="document-file"
-                  className="mt-3 block text-sm font-medium text-slate-700"
+                  className="mt-3 block text-sm font-medium text-[#E5E7EB]"
                 >
                   Drag and drop a file here, or click to browse
                 </label>
-                <p id="document-file-hint" className="mt-1 text-xs text-slate-500">
+                <p id="document-file-hint" className="mt-1 text-xs text-[#9CA3AF]">
                   PDF, JPEG, or PNG up to 10 MB
                 </p>
                 <input
@@ -285,19 +285,19 @@ export default function UploadPage({ params }: { params: { id: string } }) {
         <Card className="animate-fade-in">
           <div className="mb-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">Review extraction</h2>
+              <h2 className="text-lg font-semibold text-[#E5E7EB]">Review extraction</h2>
               <div className="flex items-center gap-2">
                 {reviewed.extraction.ocr_fallback_used && (
-                  <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+                  <span className="inline-flex items-center rounded-full bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-400 ring-1 ring-inset ring-amber-800/50">
                     OCR fallback
                   </span>
                 )}
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-[#9CA3AF] ring-1 ring-inset ring-slate-200">
                   {reviewed.extraction.document_type ?? 'unknown'}
                 </span>
               </div>
             </div>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-[#9CA3AF]">
               {reviewed.extraction.confirmation_required_count} field(s) need confirmation. Uncheck
               any entity to exclude it.
             </p>
@@ -312,7 +312,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
             {reviewed.extraction.entities.length === 0 && (
               <div
                 role="alert"
-                className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-200"
+                className="mt-2 rounded-lg bg-amber-950/30 px-3 py-2 text-sm text-amber-400 ring-1 ring-inset ring-amber-800/50"
               >
                 <p>
                   Nothing could be read from this document, so there is nothing to approve into
@@ -339,7 +339,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
             {(reviewed.extraction.unreadable_line_count ?? 0) > 0 && (
               <p
                 role="alert"
-                className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 ring-1 ring-inset ring-amber-200"
+                className="mt-2 rounded-lg bg-amber-950/30 px-3 py-2 text-sm text-amber-400 ring-1 ring-inset ring-amber-800/50"
               >
                 {reviewed.extraction.unreadable_line_count} line(s) in a clinical section could not
                 be read and are not listed below. Compare against the original before approving —
@@ -354,23 +354,23 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                 key={i}
                 className={`rounded-xl border p-4 transition-all ${
                   rejected.has(i)
-                    ? 'border-slate-200 bg-slate-50/80 opacity-50'
-                    : 'border-slate-200 bg-white shadow-sm'
+                    ? 'border-[#2A2A2D] bg-[#111113]/80 opacity-50'
+                    : 'border-[#2A2A2D] bg-[#1A1A1D] shadow-sm'
                 }`}
               >
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="inline-flex items-center rounded-md bg-brand-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-700 ring-1 ring-inset ring-brand-200">
+                  <span className="inline-flex items-center rounded-md bg-[#F0B429]/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-[#F0B429] ring-1 ring-inset ring-[#F0B429]/20">
                     {ent.entity_type}
                   </span>
                   {/* Every row's visible label reads "Include", so the accessible name has to
                       say which entity — otherwise the list is N identical checkboxes. */}
-                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700">
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[#9CA3AF] hover:text-[#E5E7EB]">
                     <input
                       type="checkbox"
                       checked={!rejected.has(i)}
                       onChange={() => toggleReject(i)}
                       aria-label={`Include ${ent.entity_type} ${i + 1} in the record`}
-                      className="rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                      className="rounded border-slate-300 text-[#F0B429] focus:ring-brand-500"
                     />
                     Include
                   </label>
@@ -378,8 +378,8 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                 <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
                   {ent.fields.map((f) => (
                     <span key={f.name} className="flex items-center gap-1">
-                      <span className="text-slate-500">{f.name}:</span>
-                      <span className="font-medium text-slate-900">{String(f.value)}</span>
+                      <span className="text-[#9CA3AF]">{f.name}:</span>
+                      <span className="font-medium text-[#E5E7EB]">{String(f.value)}</span>
                       <ConfidenceBadge band={f.confidence_band} value={f.confidence} />
                     </span>
                   ))}
@@ -388,7 +388,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
             ))}
           </ul>
 
-          <div className="mt-5 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row">
+          <div className="mt-5 flex flex-col gap-2 border-t border-[#2A2A2D] pt-4 sm:flex-row">
             {/* Not rendered at all when there is nothing to merge: the server refuses that
                 approval, and offering a button whose only outcome is an error reads as the
                 system being broken rather than as the scan not having been read. */}

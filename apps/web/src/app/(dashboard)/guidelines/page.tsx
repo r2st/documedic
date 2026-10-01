@@ -59,17 +59,17 @@ export default function GuidelinesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+        <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">
           Clinical guideline corpus
         </h1>
         {info && (
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-[#9CA3AF]">
             {info.chunk_count} chunks · corpus {info.corpus_version} · ICMR Standard Treatment
             Workflows + WHO/NICE
           </p>
         )}
         {infoFailed && (
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-[#9CA3AF]">
             Corpus details are unavailable — searching still works, and every result carries its own
             citation.
           </p>
@@ -83,7 +83,7 @@ export default function GuidelinesPage() {
           </label>
           <svg
             aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B7280]"
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}
@@ -131,26 +131,26 @@ export default function GuidelinesPage() {
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center rounded-md bg-brand-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-700 ring-1 ring-inset ring-brand-200">
+                      <span className="inline-flex items-center rounded-md bg-[#F0B429]/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-[#F0B429] ring-1 ring-inset ring-[#F0B429]/20">
                         {c.source}
                       </span>
-                      <span className="text-sm font-semibold text-slate-900">
+                      <span className="text-sm font-semibold text-[#E5E7EB]">
                         {c.document_title}
                       </span>
                     </div>
                     {c.heading && (
-                      <p className="mt-1.5 text-sm font-medium text-slate-700">{c.heading}</p>
+                      <p className="mt-1.5 text-sm font-medium text-[#E5E7EB]">{c.heading}</p>
                     )}
                     {c.snippet && (
-                      <p className="mt-1 text-sm leading-relaxed text-slate-600">{c.snippet}</p>
+                      <p className="mt-1 text-sm leading-relaxed text-[#9CA3AF]">{c.snippet}</p>
                     )}
-                    <p className="mt-2 text-xs text-slate-400">
+                    <p className="mt-2 text-xs text-[#6B7280]">
                       {c.section_id}
                       {c.page_range ? ` · pp. ${c.page_range}` : ''}
                     </p>
                   </div>
                   {c.score != null && (
-                    <span className="flex-shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                    <span className="flex-shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-[#9CA3AF]">
                       {(c.score * 100).toFixed(0)}% match
                     </span>
                   )}
@@ -165,10 +165,10 @@ export default function GuidelinesPage() {
             such claim — on a guideline corpus that is the difference between "no guidance
             exists for this" and "we could not look". */}
         {!searching && !error && hasSearched && results.length === 0 && (
-          <div className="animate-fade-in rounded-2xl border-2 border-dashed border-slate-200 px-6 py-12 text-center">
+          <div className="animate-fade-in rounded-2xl border-2 border-dashed border-[#2A2A2D] px-6 py-12 text-center">
             <svg
               aria-hidden="true"
-              className="mx-auto h-10 w-10 text-slate-300"
+              className="mx-auto h-10 w-10 text-[#6B7280]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
@@ -180,18 +180,18 @@ export default function GuidelinesPage() {
                 d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"
               />
             </svg>
-            <h3 className="mt-3 text-sm font-semibold text-slate-900">No results found</h3>
-            <p className="mt-1 text-sm text-slate-500">
+            <h3 className="mt-3 text-sm font-semibold text-[#E5E7EB]">No results found</h3>
+            <p className="mt-1 text-sm text-[#9CA3AF]">
               Try a different search term or broaden your query.
             </p>
           </div>
         )}
 
         {!searching && !error && !hasSearched && results.length === 0 && (
-          <div className="rounded-2xl border-2 border-dashed border-slate-200 px-6 py-12 text-center">
+          <div className="rounded-2xl border-2 border-dashed border-[#2A2A2D] px-6 py-12 text-center">
             <svg
               aria-hidden="true"
-              className="mx-auto h-10 w-10 text-slate-300"
+              className="mx-auto h-10 w-10 text-[#6B7280]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
@@ -203,10 +203,10 @@ export default function GuidelinesPage() {
                 d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"
               />
             </svg>
-            <h3 className="mt-3 text-sm font-semibold text-slate-900">
+            <h3 className="mt-3 text-sm font-semibold text-[#E5E7EB]">
               Search the guideline corpus
             </h3>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-[#9CA3AF]">
               Enter a clinical query to retrieve grounded, citable guidance from ICMR, WHO, and NICE
               sources.
             </p>

@@ -10,12 +10,12 @@ import { Button, Card, ErrorBanner, LoadingBlock, Skeleton } from '@aether/ui';
 // TypeScript rejects an unknown metric label at the call site instead of silently
 // falling back to a default colour at runtime.
 const METRIC_COLORS = {
-  Sessions: 'border-t-brand-500',
+  Sessions: 'border-t-[#F0B429]',
   'Hard blocks': 'border-t-red-500',
   "Can't-miss flags": 'border-t-amber-500',
   'Awaiting review': 'border-t-purple-500',
   'Verifier disagreement': 'border-t-orange-500',
-  'Degraded rate': 'border-t-slate-400',
+  'Degraded rate': 'border-t-[#6B7280]',
   'Citation faithfulness': 'border-t-emerald-500',
   'Open safety reports': 'border-t-rose-500',
 } as const;
@@ -23,18 +23,18 @@ const METRIC_COLORS = {
 function Metric({ label, value }: { label: keyof typeof METRIC_COLORS; value: string | number }) {
   return (
     <Card className={`border-t-4 ${METRIC_COLORS[label]} text-center`}>
-      <p className="text-3xl font-bold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-3xl font-bold tracking-tight text-[#E5E7EB]">{value}</p>
+      <p className="mt-1 text-xs uppercase tracking-wide text-[#9CA3AF]">{label}</p>
     </Card>
   );
 }
 
 function SeverityBadge({ severity }: { severity: string }) {
   const styles: Record<string, string> = {
-    sentinel_event: 'bg-red-100 text-red-800 ring-1 ring-inset ring-red-200',
-    serious: 'bg-orange-100 text-orange-800 ring-1 ring-inset ring-orange-200',
-    non_serious: 'bg-yellow-100 text-yellow-800 ring-1 ring-inset ring-yellow-200',
-    near_miss: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200',
+    sentinel_event: 'bg-red-950/30 text-red-400 ring-1 ring-inset ring-red-800/50',
+    serious: 'bg-orange-950/30 text-orange-400 ring-1 ring-inset ring-orange-800/50',
+    non_serious: 'bg-yellow-950/30 text-yellow-400 ring-1 ring-inset ring-yellow-800/50',
+    near_miss: 'bg-slate-100 text-[#E5E7EB] ring-1 ring-inset ring-slate-200',
   };
   return (
     <span
@@ -47,10 +47,10 @@ function SeverityBadge({ severity }: { severity: string }) {
 
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
-    open: 'bg-blue-100 text-blue-700 ring-1 ring-inset ring-blue-200',
-    investigating: 'bg-amber-100 text-amber-700 ring-1 ring-inset ring-amber-200',
-    resolved: 'bg-green-100 text-green-700 ring-1 ring-inset ring-green-200',
-    closed: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200',
+    open: 'bg-blue-950/30 text-blue-400 ring-1 ring-inset ring-blue-800/50',
+    investigating: 'bg-amber-950/30 text-amber-400 ring-1 ring-inset ring-amber-800/50',
+    resolved: 'bg-green-950/30 text-green-400 ring-1 ring-inset ring-green-800/50',
+    closed: 'bg-slate-100 text-[#9CA3AF] ring-1 ring-inset ring-slate-200',
   };
   return (
     <span
@@ -139,7 +139,7 @@ export default function MetricsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+        <h1 className="text-2xl font-bold tracking-tight text-[#E5E7EB]">
           Performance & validation
         </h1>
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -171,7 +171,7 @@ export default function MetricsPage() {
       {actionError && <ErrorBanner message={actionError} />}
 
       {actionSuccess && (
-        <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
+        <div className="flex items-start gap-2 rounded-lg bg-green-950/30 p-3 text-sm text-green-400 ring-1 ring-green-800/50">
           <svg
             aria-hidden="true"
             className="mt-0.5 h-4 w-4 flex-shrink-0"
@@ -191,7 +191,7 @@ export default function MetricsPage() {
       )}
 
       {pilot?.pilot_mode && (
-        <div className="flex items-start gap-2 rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-900">
+        <div className="flex items-start gap-2 rounded-lg border border-purple-800/50 bg-purple-950/30 p-3 text-sm text-purple-300">
           <svg
             aria-hidden="true"
             className="mt-0.5 h-4 w-4 flex-shrink-0"
@@ -216,8 +216,8 @@ export default function MetricsPage() {
           className="grid grid-cols-2 gap-3 sm:grid-cols-4"
         >
           {Array.from({ length: 8 }).map((_, i) => (
-            <Card key={i} className="border-t-4 border-t-slate-200 text-center">
-              <Skeleton className="mx-auto mb-2 h-8 w-20 bg-slate-200" />
+            <Card key={i} className="border-t-4 border-t-[#2A2A2D] text-center">
+              <Skeleton className="mx-auto mb-2 h-8 w-20 bg-[#2A2A2D]" />
               <Skeleton className="mx-auto h-3 w-24" />
             </Card>
           ))}
@@ -238,18 +238,18 @@ export default function MetricsPage() {
           </div>
 
           <Card className="mt-4">
-            <p className="mb-2 text-sm font-semibold text-slate-900">Autonomy tier distribution</p>
+            <p className="mb-2 text-sm font-semibold text-[#E5E7EB]">Autonomy tier distribution</p>
             <div className="flex flex-wrap gap-2 text-sm">
               {Object.entries(metrics.autonomy_tier_distribution).map(([tier, n]) => (
                 <span
                   key={tier}
-                  className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
+                  className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-[#E5E7EB] ring-1 ring-inset ring-slate-200"
                 >
                   {tier.replace(/_/g, ' ')}: <b className="ml-1">{n}</b>
                 </span>
               ))}
               {Object.keys(metrics.autonomy_tier_distribution).length === 0 && (
-                <span className="text-sm text-slate-400">No completed sessions yet.</span>
+                <span className="text-sm text-[#6B7280]">No completed sessions yet.</span>
               )}
             </div>
           </Card>
@@ -258,16 +258,16 @@ export default function MetricsPage() {
 
       {run && (
         <Card className="animate-slide-up">
-          <p className="mb-3 text-sm font-semibold text-slate-900">
+          <p className="mb-3 text-sm font-semibold text-[#E5E7EB]">
             Latest validation run — {run.vignette_count} vignettes
           </p>
           <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
             {Object.entries(run.metrics)
               .filter(([, v]) => typeof v === 'number')
               .map(([k, v]) => (
-                <div key={k} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
-                  <p className="text-xs font-medium text-slate-500">{k.replace(/_/g, ' ')}</p>
-                  <p className="mt-0.5 text-lg font-semibold text-slate-900">
+                <div key={k} className="rounded-lg bg-[#111113] p-3 ring-1 ring-[#2A2A2D]">
+                  <p className="text-xs font-medium text-[#9CA3AF]">{k.replace(/_/g, ' ')}</p>
+                  <p className="mt-0.5 text-lg font-semibold text-[#E5E7EB]">
                     {typeof v === 'number' && v <= 1 ? pct(v as number) : String(v)}
                   </p>
                 </div>
@@ -280,8 +280,8 @@ export default function MetricsPage() {
 
       {reports.length > 0 && (
         <Card>
-          <p className="mb-3 text-sm font-semibold text-slate-900">Safety reports</p>
-          <ul className="divide-y divide-slate-100 text-sm">
+          <p className="mb-3 text-sm font-semibold text-[#E5E7EB]">Safety reports</p>
+          <ul className="divide-y divide-[#2A2A2D] text-sm">
             {reports.map((r) => (
               <li
                 key={r.id}
@@ -289,10 +289,10 @@ export default function MetricsPage() {
               >
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <SeverityBadge severity={r.severity} />
-                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-[#9CA3AF]">
                     {r.category.replace(/_/g, ' ')}
                   </span>
-                  <span className="min-w-0 break-words text-slate-700">{r.description}</span>
+                  <span className="min-w-0 break-words text-[#E5E7EB]">{r.description}</span>
                 </div>
                 <StatusBadge status={r.status} />
               </li>
@@ -332,13 +332,13 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
 
   return (
     <Card>
-      <p className="mb-4 text-sm font-semibold text-slate-900">File a safety report</p>
+      <p className="mb-4 text-sm font-semibold text-[#E5E7EB]">File a safety report</p>
       <form onSubmit={submit} className="space-y-4">
         {/* No retry: this is a write, and resubmitting a safety report on one button press is
             how a single incident becomes two rows in the register. */}
         {error && <ErrorBanner message={error} />}
         {success && (
-          <div className="flex items-start gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 ring-1 ring-green-200">
+          <div className="flex items-start gap-2 rounded-lg bg-green-950/30 p-3 text-sm text-green-400 ring-1 ring-green-800/50">
             <svg
               aria-hidden="true"
               className="mt-0.5 h-4 w-4 flex-shrink-0"
@@ -360,7 +360,7 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
           <div>
             <label
               htmlFor="report-category"
-              className="mb-1.5 block text-sm font-medium text-slate-700"
+              className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
             >
               Category
             </label>
@@ -380,7 +380,7 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
           <div>
             <label
               htmlFor="report-severity"
-              className="mb-1.5 block text-sm font-medium text-slate-700"
+              className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
             >
               Severity
             </label>
@@ -400,7 +400,7 @@ function SafetyReportForm({ onFiled }: { onFiled: () => void }) {
         <div>
           <label
             htmlFor="report-description"
-            className="mb-1.5 block text-sm font-medium text-slate-700"
+            className="mb-1.5 block text-sm font-medium text-[#E5E7EB]"
           >
             Description
           </label>

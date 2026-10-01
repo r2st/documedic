@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth';
 export function DemoBanner() {
   if (process.env.NEXT_PUBLIC_DEMO_MODE !== 'true') return null;
   return (
-    <div className="bg-gradient-to-r from-amber-500 to-amber-400 px-4 py-2 text-center text-sm font-medium text-amber-950 shadow-sm">
+    <div className="bg-gradient-to-r from-amber-600 to-amber-500 px-4 py-2 text-center text-sm font-medium text-amber-950 shadow-sm">
       <div className="mx-auto flex max-w-5xl items-center justify-center gap-2">
         <svg
           aria-hidden="true"
@@ -112,7 +112,7 @@ export function SessionExpiryBanner() {
   const remaining = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
   return (
-    <div role="alert" className="bg-amber-100 px-4 py-2.5 text-sm text-amber-900 shadow-sm">
+    <div role="alert" className="bg-amber-950/50 px-4 py-2.5 text-sm text-amber-300 shadow-sm">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-center gap-2 sm:flex-row">
         <span className="text-center font-medium">
           Signing out in {remaining} — you have been inactive. Anything you have typed but not yet
@@ -124,7 +124,7 @@ export function SessionExpiryBanner() {
         <button
           type="button"
           onClick={() => void refresh()}
-          className="rounded-lg bg-amber-900 px-3 py-1 text-xs font-semibold text-amber-50 hover:bg-amber-800"
+          className="rounded-lg bg-[#F0B429] px-3 py-1 text-xs font-semibold text-[#0A0A0B] hover:bg-[#F7D070]"
         >
           Stay signed in
         </button>

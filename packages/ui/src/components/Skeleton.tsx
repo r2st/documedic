@@ -16,7 +16,7 @@ import { Card } from './Card';
  */
 export function Skeleton({ className = '' }: { className?: string }) {
   return (
-    <div aria-hidden="true" className={`animate-pulse rounded-md bg-slate-100 ${className}`} />
+    <div aria-hidden="true" className={`animate-pulse rounded-md bg-[#2A2A2D] ${className}`} />
   );
 }
 
@@ -50,12 +50,12 @@ export function SkeletonList({ rows = 3 }: { rows?: number }) {
   return (
     <div className="space-y-3">
       {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-card">
+        <div key={i} className="rounded-xl border border-[#2A2A2D] bg-[#1A1A1D] p-5 shadow-card">
           <div className="flex items-center gap-4">
             <Skeleton className="h-10 w-10 rounded-full" />
             <div className="flex-1">
               <Skeleton className="mb-2 h-5 w-36" />
-              <Skeleton className="h-4 w-52 bg-slate-50" />
+              <Skeleton className="h-4 w-52 bg-[#222225]" />
             </div>
           </div>
         </div>
@@ -79,7 +79,7 @@ export function SkeletonCards({
       {Array.from({ length: count }).map((_, i) => (
         <Card key={i} className={cardClassName}>
           <Skeleton className="mb-3 h-5 w-28" />
-          <Skeleton className="h-4 w-full bg-slate-50" />
+          <Skeleton className="h-4 w-full bg-[#222225]" />
         </Card>
       ))}
     </div>

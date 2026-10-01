@@ -4,15 +4,15 @@ const TIER: Record<AutonomyTier, { label: string; cls: string }> = {
   // Blue = informational, green = suggestive, amber = flag-for-review (architecture §8.2).
   informational: {
     label: 'Informational',
-    cls: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200',
+    cls: 'bg-blue-950/30 text-blue-400 ring-1 ring-inset ring-blue-800/50',
   },
   suggestive: {
     label: 'Suggestive',
-    cls: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200',
+    cls: 'bg-emerald-950/30 text-emerald-400 ring-1 ring-inset ring-emerald-800/50',
   },
   flag_for_review: {
     label: 'Flag for review',
-    cls: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-300',
+    cls: 'bg-amber-950/30 text-amber-400 ring-1 ring-inset ring-amber-800/50',
   },
 };
 
@@ -88,9 +88,9 @@ export function AutonomyBadge({ tier: raw }: { tier: AutonomyTier }) {
 const BAND: Record<ProbabilityBand, string> = {
   high: 'bg-slate-800 text-white',
   moderate: 'bg-slate-600 text-white',
-  low: 'bg-slate-300 text-slate-800',
-  very_low: 'bg-slate-200 text-slate-600',
-  insufficient_data: 'bg-slate-100 text-slate-500',
+  low: 'bg-[#2A2A2D] text-[#E5E7EB]',
+  very_low: 'bg-[#2A2A2D] text-[#9CA3AF]',
+  insufficient_data: 'bg-[#1A1A1D] text-[#9CA3AF]',
 };
 
 // Qualitative bands only — never numeric percentages (anti-automation-bias).
@@ -110,7 +110,7 @@ export function ProbabilityBandBadge({ band }: { band: ProbabilityBand }) {
   return (
     <span
       className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${
-        known ? BAND[band] : 'bg-slate-100 text-slate-500'
+        known ? BAND[band] : 'bg-[#1A1A1D] text-[#9CA3AF]'
       }`}
     >
       {label.replaceAll('_', ' ').toUpperCase()}
@@ -120,7 +120,7 @@ export function ProbabilityBandBadge({ band }: { band: ProbabilityBand }) {
 
 export function CantMissBadge() {
   return (
-    <span className="inline-flex animate-pulse items-center gap-1.5 rounded-full bg-orange-100 px-2.5 py-1 text-xs font-bold uppercase text-orange-900 ring-1 ring-inset ring-orange-300">
+    <span className="inline-flex animate-pulse items-center gap-1.5 rounded-full bg-orange-950/30 px-2.5 py-1 text-xs font-bold uppercase text-orange-400 ring-1 ring-inset ring-orange-800/50">
       <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-orange-500" />
       Can&apos;t miss
     </span>
