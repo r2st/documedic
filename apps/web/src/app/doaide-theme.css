@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Schibsted+Grotesk:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 :root {
   --doaide-bg: #0A0A0B; --doaide-bg-alt: #111113; --doaide-surface: #1A1A1D;
   --doaide-surface-hover: #222225; --doaide-border: #2A2A2D; --doaide-border-light: #333336;
@@ -8,6 +8,8 @@
   --doaide-text-on-gold: #0A0A0B;
   --doaide-success: #34D399; --doaide-error: #F87171; --doaide-warning: #FBBF24; --doaide-info: #60A5FA;
   --doaide-font: 'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
+  --doaide-font-display: 'Instrument Serif', Georgia, serif;
+  --doaide-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   --doaide-shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --doaide-shadow-md: 0 4px 6px rgba(0,0,0,0.4);
   --doaide-shadow-lg: 0 10px 15px rgba(0,0,0,0.5); --doaide-shadow-gold: 0 0 20px rgba(240,180,41,0.15);
   --doaide-radius-sm: 6px; --doaide-radius-md: 8px; --doaide-radius-lg: 12px; --doaide-radius-xl: 16px;

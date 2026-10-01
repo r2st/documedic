@@ -10,9 +10,8 @@ describe('AuthLayout', () => {
       </AuthLayout>,
     );
 
-    expect(screen.getByRole('img', { name: 'Aether Clinician' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Aether Clinician');
-    expect(screen.getByText('Diagnostic & management decision support')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('DoAide Clinician');
+    expect(screen.getByText('AI clinical decision support for modern healthcare')).toBeInTheDocument();
     expect(screen.getByText('form')).toBeInTheDocument();
   });
 
