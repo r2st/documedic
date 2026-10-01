@@ -20,7 +20,7 @@ body { background-color: var(--doaide-bg) !important; color: var(--doaide-text) 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--doaide-bg); }
 ::-webkit-scrollbar-thumb { background: var(--doaide-border); border-radius: 4px; }
-a { color: var(--doaide-gold) !important; } a:hover { color: var(--doaide-gold-light) !important; }
+a:not([class*="text-"]) { color: var(--doaide-gold); } a:not([class*="text-"]):hover { color: var(--doaide-gold-light); }
 button[class*="primary"], .btn-primary, [class*="bg-indigo"], [class*="bg-blue-6"], [class*="bg-purple"], [class*="bg-brand"] { background-color: var(--doaide-gold) !important; color: var(--doaide-text-on-gold) !important; border-color: var(--doaide-gold) !important; }
 [class*="bg-white"], [class*="bg-gray-50"], [class*="bg-gray-100"], [class*="bg-slate-50"], [class*="bg-slate-100"] { background-color: var(--doaide-surface) !important; }
 [class*="bg-gray-200"], [class*="bg-slate-200"] { background-color: var(--doaide-surface-hover) !important; }

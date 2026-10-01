@@ -55,7 +55,7 @@ export function OfflineBanner() {
   return (
     <div role="status" aria-live="polite">
       {!online && (
-        <div className="bg-slate-800 px-4 py-2 text-center text-sm font-medium text-slate-200 shadow-sm">
+        <div className="bg-[#1A1A1D] px-4 py-2 text-center text-sm font-medium text-[#E5E7EB] shadow-sm">
           <div className="mx-auto flex max-w-5xl items-center justify-center gap-2">
             <svg
               aria-hidden="true"

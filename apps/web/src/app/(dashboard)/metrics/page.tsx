@@ -34,7 +34,7 @@ function SeverityBadge({ severity }: { severity: string }) {
     sentinel_event: 'bg-red-950/30 text-red-400 ring-1 ring-inset ring-red-800/50',
     serious: 'bg-orange-950/30 text-orange-400 ring-1 ring-inset ring-orange-800/50',
     non_serious: 'bg-yellow-950/30 text-yellow-400 ring-1 ring-inset ring-yellow-800/50',
-    near_miss: 'bg-slate-100 text-[#E5E7EB] ring-1 ring-inset ring-slate-200',
+    near_miss: 'bg-[#2A2A2D] text-[#E5E7EB] ring-1 ring-inset ring-[#2A2A2D]',
   };
   return (
     <span
@@ -50,7 +50,7 @@ function StatusBadge({ status }: { status: string }) {
     open: 'bg-blue-950/30 text-blue-400 ring-1 ring-inset ring-blue-800/50',
     investigating: 'bg-amber-950/30 text-amber-400 ring-1 ring-inset ring-amber-800/50',
     resolved: 'bg-green-950/30 text-green-400 ring-1 ring-inset ring-green-800/50',
-    closed: 'bg-slate-100 text-[#9CA3AF] ring-1 ring-inset ring-slate-200',
+    closed: 'bg-[#2A2A2D] text-[#9CA3AF] ring-1 ring-inset ring-[#2A2A2D]',
   };
   return (
     <span
@@ -243,7 +243,7 @@ export default function MetricsPage() {
               {Object.entries(metrics.autonomy_tier_distribution).map(([tier, n]) => (
                 <span
                   key={tier}
-                  className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-[#E5E7EB] ring-1 ring-inset ring-slate-200"
+                  className="inline-flex items-center rounded-full bg-[#2A2A2D] px-3 py-1 text-xs font-medium text-[#E5E7EB] ring-1 ring-inset ring-[#2A2A2D]"
                 >
                   {tier.replace(/_/g, ' ')}: <b className="ml-1">{n}</b>
                 </span>
@@ -289,7 +289,7 @@ export default function MetricsPage() {
               >
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <SeverityBadge severity={r.severity} />
-                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-[#9CA3AF]">
+                  <span className="inline-flex items-center rounded-full bg-[#2A2A2D] px-2 py-0.5 text-xs font-medium text-[#9CA3AF]">
                     {r.category.replace(/_/g, ' ')}
                   </span>
                   <span className="min-w-0 break-words text-[#E5E7EB]">{r.description}</span>

@@ -43,7 +43,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                       ? 'bg-[#F0B429] text-[#0A0A0B]'
                       : isCurrent
                         ? 'bg-[#F0B429]/15 text-[#F0B429] ring-2 ring-[#F0B429]'
-                        : 'bg-slate-100 text-[#6B7280]'
+                        : 'bg-[#2A2A2D] text-[#6B7280]'
                   }`}
                 >
                   {isComplete ? (

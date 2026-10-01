@@ -292,7 +292,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                     OCR fallback
                   </span>
                 )}
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-[#9CA3AF] ring-1 ring-inset ring-slate-200">
+                <span className="inline-flex items-center rounded-full bg-[#2A2A2D] px-2 py-0.5 text-xs font-medium text-[#9CA3AF] ring-1 ring-inset ring-[#2A2A2D]">
                   {reviewed.extraction.document_type ?? 'unknown'}
                 </span>
               </div>
@@ -370,7 +370,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                       checked={!rejected.has(i)}
                       onChange={() => toggleReject(i)}
                       aria-label={`Include ${ent.entity_type} ${i + 1} in the record`}
-                      className="rounded border-slate-300 text-[#F0B429] focus:ring-brand-500"
+                      className="rounded border-[#2A2A2D] text-[#F0B429] focus:ring-[#F0B429]"
                     />
                     Include
                   </label>

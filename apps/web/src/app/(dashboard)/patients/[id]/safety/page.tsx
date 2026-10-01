@@ -237,7 +237,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
               thing this screen must never imply is that a check it could not complete came back
               clean. The API reports each gap explicitly for the same reason.
             */}
-            <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-[#9CA3AF] ring-1 ring-slate-100">
+            <div className="mt-4 rounded-lg bg-[#111113] p-3 text-xs text-[#9CA3AF] ring-1 ring-[#2A2A2D]">
               Checked against {String(result.checked_against.current_medications ?? 0)} current
               medication(s), {String(result.checked_against.allergies ?? 0)} allergy(ies),{' '}
               {String(result.checked_against.conditions ?? 0)} condition(s).{' '}

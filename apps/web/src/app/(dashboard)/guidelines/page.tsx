@@ -150,7 +150,7 @@ export default function GuidelinesPage() {
                     </p>
                   </div>
                   {c.score != null && (
-                    <span className="flex-shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-[#9CA3AF]">
+                    <span className="flex-shrink-0 rounded-full bg-[#2A2A2D] px-2.5 py-1 text-xs font-medium text-[#9CA3AF]">
                       {(c.score * 100).toFixed(0)}% match
                     </span>
                   )}
