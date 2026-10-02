@@ -70,7 +70,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         )}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-              <Script
+        <Script
           defer
           src="https://analytics.doaide.com/script.js"
           data-website-id="a5ae8d1f-1100-447f-bdf9-dd7497c4d1a0"
