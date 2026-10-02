@@ -57,10 +57,10 @@ function apiOrigins(apiUrl) {
  * code. Production never gets it, and `security-headers.test.ts` pins that.
  */
 function contentSecurityPolicy({ dev = process.env.NODE_ENV !== 'production', apiUrl } = {}) {
-  const connect = ["'self'", ...apiOrigins(apiUrl)];
+  const connect = ["'self'", 'https://analytics.doaide.com', ...apiOrigins(apiUrl)];
   return [
     "default-src 'self'",
-    `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ''}`,
+    `script-src 'self' 'unsafe-inline' https://analytics.doaide.com${dev ? " 'unsafe-eval'" : ''}`,
     // Google Fonts is imported from globals.css, so the stylesheet host must be allowed here and
     // the font host in font-src below. Both are exact origins, not a wildcard.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
