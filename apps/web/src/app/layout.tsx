@@ -68,6 +68,27 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           data-website-id="a5ae8d1f-1100-447f-bdf9-dd7497c4d1a0"
           strategy="afterInteractive"
         />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'SoftwareApplication',
+              name: 'DoAide Med',
+              description:
+                'AI-powered clinical decision support system for healthcare professionals.',
+              url: 'https://med.doaide.com',
+              applicationCategory: 'HealthApplication',
+              operatingSystem: 'Web',
+              offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+              author: {
+                '@type': 'Organization',
+                name: 'Apprend Technologies',
+                url: 'https://doaide.com',
+              },
+            }),
+          }}
+        />
       </head>
       <body>
         <OfflineBanner />
