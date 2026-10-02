@@ -25,6 +25,14 @@ export const metadata: Metadata = {
     url: 'https://med.doaide.com',
     siteName: 'DoAide',
     type: 'website',
+    images: [
+      {
+        url: 'https://med.doaide.com/og-image.png',
+        width: 1200,
+        height: 630,
+        alt: 'DoAide Med — AI Clinical Decision Support',
+      },
+    ],
   },
   twitter: {
     card: 'summary',
