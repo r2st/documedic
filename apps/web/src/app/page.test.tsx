@@ -7,8 +7,14 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace, push: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
 }));
 
-let authState: { account: Account | null; loading: boolean } = { account: null, loading: true };
+let authState: { account: Account | null; loading: boolean; refresh: () => Promise<void> } = {
+  account: null,
+  loading: true,
+  refresh: vi.fn(),
+};
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
+vi.mock('@/lib/api', () => ({ api: { login: vi.fn(), signup: vi.fn() } }));
+vi.mock('@/lib/errors', () => ({ requestErrorMessage: (_e: unknown, ctx: string) => `Error in ${ctx}` }));
 
 import Home from './page';
 
@@ -19,27 +25,40 @@ const ACCOUNT: Account = {
   created_at: '2026-01-01T00:00:00Z',
 };
 
-describe('Home (route gate)', () => {
+describe('Home (split landing)', () => {
   beforeEach(() => {
     replace.mockReset();
   });
 
-  it('waits for the session check instead of bouncing to /login prematurely', () => {
-    authState = { account: null, loading: true };
+  it('shows a loading state while the session check runs', () => {
+    authState = { account: null, loading: true, refresh: vi.fn() };
     render(<Home />);
     expect(replace).not.toHaveBeenCalled();
     expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
 
   it('sends an authenticated clinician to the patient list', () => {
-    authState = { account: ACCOUNT, loading: false };
+    authState = { account: ACCOUNT, loading: false, refresh: vi.fn() };
     render(<Home />);
     expect(replace).toHaveBeenCalledWith('/patients');
   });
 
-  it('sends an unauthenticated visitor to the login page', () => {
-    authState = { account: null, loading: false };
+  it('shows the sign-in form for unauthenticated visitors', () => {
+    authState = { account: null, loading: false, refresh: vi.fn() };
     render(<Home />);
-    expect(replace).toHaveBeenCalledWith('/login');
+    expect(replace).not.toHaveBeenCalled();
+    const signInButtons = screen.getAllByRole('button', { name: 'Sign in' });
+    expect(signInButtons.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Email')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+  });
+
+  it('shows the headline and subtitle', () => {
+    authState = { account: null, loading: false, refresh: vi.fn() };
+    render(<Home />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Clinical decisions, supported.',
+    );
   });
 });
