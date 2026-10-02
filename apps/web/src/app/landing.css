@@ -47,7 +47,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 32px;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px 24px;
   opacity: 0;
   transform: translateY(-8px);
   transition: opacity 0.6s ease, transform 0.6s ease;
@@ -62,9 +65,9 @@
 }
 
 .landing-brand-text {
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
-  font-size: 20px;
-  font-weight: 700;
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 24px;
+  font-weight: 400;
   letter-spacing: -0.3px;
 }
 
