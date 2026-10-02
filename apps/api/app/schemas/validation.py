@@ -5,7 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.text_sanitize import clean_free_text, clean_identifier
 
 
 class ValidationRunOut(BaseModel):
@@ -36,6 +38,22 @@ class SafetyReportIn(BaseModel):
     patient_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
     detail: dict | None = None
+
+    @field_validator("category")
+    @classmethod
+    def _clean_category(cls, value: str) -> str:
+        cleaned = clean_identifier(value)
+        if len(cleaned) < 2:
+            raise ValueError("category must be at least 2 characters")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def _clean_description(cls, value: str) -> str:
+        cleaned = clean_free_text(value).strip()
+        if len(cleaned) < 3:
+            raise ValueError("description must be at least 3 characters")
+        return cleaned
 
 
 class SafetyReportOut(BaseModel):

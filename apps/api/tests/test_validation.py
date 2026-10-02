@@ -161,3 +161,48 @@ async def test_validation_run_missing_id_is_404(auth_client):
 
     resp = await auth_client.get(f"/api/v1/validation/runs/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+# --- SafetyReportIn sanitization ---
+
+
+@pytest.mark.asyncio
+async def test_safety_report_sanitizes_control_characters(auth_client):
+    """Control characters in category and description are stripped, not stored."""
+    resp = await auth_client.post(
+        "/api/v1/safety-reports",
+        json={
+            "category": "wrong\x00_output",
+            "severity": "near_miss",
+            "description": "NUL \x00 in the \x01 description field",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    report = resp.json()
+    assert "\x00" not in report["category"]
+    assert "\x00" not in report["description"]
+    assert "\x01" not in report["description"]
+
+
+@pytest.mark.asyncio
+async def test_safety_report_rejects_blank_after_cleaning(auth_client):
+    """A category or description made only of control characters is rejected."""
+    resp = await auth_client.post(
+        "/api/v1/safety-reports",
+        json={
+            "category": "\x00\x01",
+            "severity": "near_miss",
+            "description": "Some valid description here",
+        },
+    )
+    assert resp.status_code == 422
+
+    resp = await auth_client.post(
+        "/api/v1/safety-reports",
+        json={
+            "category": "valid_category",
+            "severity": "near_miss",
+            "description": "\x00\x01",
+        },
+    )
+    assert resp.status_code == 422

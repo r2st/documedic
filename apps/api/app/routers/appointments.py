@@ -473,6 +473,7 @@ async def add_availability(
 @diary_router.delete(
     "/availability/{window_id}",
     status_code=204,
+    response_model=None,
     summary="Remove a recorded availability window",
     responses=AUTH_ERRORS | errors(404),
 )
