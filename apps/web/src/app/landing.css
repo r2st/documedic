@@ -1,0 +1,394 @@
+/* DoAide Standard Landing Page Styles
+ * Accent color is set via CSS variable --accent on .landing-root
+ */
+
+.landing-root {
+  --accent: #34D399;
+  --accent-dark: #059669;
+  --bg: #0A0A0B;
+  --bg-card: #141416;
+  --text: #E4E4E7;
+  --text-muted: #71717A;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* ── Animated Background ── */
+.landing-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.landing-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.15;
+}
+
+.landing-orb-1 {
+  width: 400px;
+  height: 400px;
+  background: var(--accent);
+  top: -100px;
+  left: -100px;
+  animation: landing-drift-1 20s ease-in-out infinite;
+}
+
+.landing-orb-2 {
+  width: 300px;
+  height: 300px;
+  background: var(--accent);
+  bottom: -50px;
+  right: -50px;
+  animation: landing-drift-2 25s ease-in-out infinite;
+}
+
+.landing-orb-3 {
+  width: 200px;
+  height: 200px;
+  background: var(--accent);
+  top: 40%;
+  left: 50%;
+  animation: landing-drift-3 18s ease-in-out infinite;
+}
+
+@keyframes landing-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(80px, 60px) scale(1.1); }
+  66% { transform: translate(-40px, 100px) scale(0.9); }
+}
+
+@keyframes landing-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-60px, -80px) scale(1.15); }
+  66% { transform: translate(40px, -40px) scale(0.85); }
+}
+
+@keyframes landing-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.1; }
+  50% { transform: translate(-100px, 50px) scale(1.2); opacity: 0.2; }
+}
+
+/* ── Fade In Animations ── */
+@keyframes landing-fade-up {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes landing-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes landing-scale-in {
+  from { opacity: 0; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes landing-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+@keyframes landing-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes landing-card-pop {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Header ── */
+.landing-header {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  opacity: 0;
+  animation: landing-fade-in 0.6s ease forwards;
+}
+
+.landing-header.landing-visible {
+  opacity: 0;
+  animation: landing-fade-in 0.6s ease 0.1s forwards;
+}
+
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none !important;
+  color: var(--text) !important;
+}
+
+.landing-brand-text {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.landing-brand-text em {
+  color: var(--accent);
+  font-style: italic;
+}
+
+.landing-header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ── Buttons ── */
+.landing-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 20px;
+  background: var(--accent);
+  color: #0A0A0B !important;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none !important;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+}
+
+.landing-btn-primary:hover {
+  background: var(--accent-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(52, 211, 153, 0.3);
+}
+
+.landing-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--text) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 14px;
+  text-decoration: none !important;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.landing-btn-ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent) !important;
+  transform: translateY(-1px);
+}
+
+.landing-btn-lg {
+  padding: 14px 32px;
+  font-size: 16px;
+  border-radius: 12px;
+}
+
+/* ── Hero ── */
+.landing-hero {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 80px 24px 40px;
+  opacity: 0;
+}
+
+.landing-hero.landing-visible {
+  opacity: 0;
+  animation: landing-fade-up 0.8s ease 0.2s forwards;
+}
+
+.landing-hero-robot-wrap {
+  margin-bottom: 24px;
+  animation: landing-float 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 30px rgba(52, 211, 153, 0.3));
+}
+
+.landing-hero-robot .landing-antenna-glow {
+  animation: landing-pulse 2s ease-in-out infinite;
+}
+
+.landing-title {
+  font-size: clamp(28px, 6vw, 52px);
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  line-height: 1.15;
+  max-width: 600px;
+  margin: 0 0 32px;
+  background: linear-gradient(to right, var(--text), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.landing-cta-group {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ── Features ── */
+.landing-features {
+  position: relative;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+  max-width: 640px;
+  margin: 40px auto;
+  padding: 0 24px;
+  opacity: 0;
+}
+
+.landing-features.landing-visible {
+  opacity: 1;
+}
+
+.landing-feature-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 12px;
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  opacity: 0;
+  animation: landing-card-pop 0.5s ease forwards;
+  transition: all 0.3s ease;
+  cursor: default;
+}
+
+.landing-feature-card:hover {
+  border-color: rgba(52, 211, 153, 0.3);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(52, 211, 153, 0.1);
+}
+
+.landing-feature-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.landing-feature-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ── Footer ── */
+.landing-footer {
+  position: relative;
+  z-index: 5;
+  margin-top: auto;
+  padding: 40px 24px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.landing-footer-products {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 16px;
+  margin-bottom: 20px;
+}
+
+.landing-footer-link {
+  color: var(--text-muted) !important;
+  font-size: 12px;
+  text-decoration: none !important;
+  transition: color 0.2s;
+}
+
+.landing-footer-link:hover {
+  color: var(--accent) !important;
+}
+
+.landing-footer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.landing-footer-home {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted) !important;
+  font-size: 12px;
+  text-decoration: none !important;
+  transition: color 0.2s;
+}
+
+.landing-footer-home:hover {
+  color: var(--accent) !important;
+}
+
+.landing-footer-copy {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .landing-header {
+    padding: 12px 16px;
+  }
+  .landing-hero {
+    padding: 50px 16px 30px;
+  }
+  .landing-features {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    padding: 0 16px;
+  }
+  .landing-cta-group {
+    flex-direction: column;
+    width: 100%;
+    max-width: 280px;
+  }
+  .landing-btn-lg {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+/* ── Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .landing-orb,
+  .landing-hero-robot-wrap,
+  .landing-hero-robot .landing-antenna-glow {
+    animation: none !important;
+  }
+  .landing-hero,
+  .landing-header,
+  .landing-feature-card {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
