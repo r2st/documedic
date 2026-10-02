@@ -81,6 +81,116 @@ function HeroRobot() {
   );
 }
 
+function Pipeline() {
+  return (
+    <div className="landing-pipeline" aria-hidden="true">
+      <svg viewBox="0 0 520 72" xmlns="http://www.w3.org/2000/svg" className="landing-pipeline-svg">
+        <defs>
+          <filter id="pip-glow">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <linearGradient id="pip-line-grad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={GOLD} stopOpacity="0.25" />
+            <stop offset="50%" stopColor={GOLD} stopOpacity="0.5" />
+            <stop offset="100%" stopColor={GOLD} stopOpacity="0.25" />
+          </linearGradient>
+        </defs>
+
+        {/* Connecting lines */}
+        <line x1="96" y1="36" x2="148" y2="36" stroke="url(#pip-line-grad)" strokeWidth="1.5" />
+        <line x1="228" y1="36" x2="280" y2="36" stroke="url(#pip-line-grad)" strokeWidth="1.5" />
+        <line x1="360" y1="36" x2="412" y2="36" stroke="url(#pip-line-grad)" strokeWidth="1.5" />
+
+        {/* Flowing dots — 3 per connector, staggered */}
+        {[0, 1, 2].map((seg) => (
+          <g key={seg}>
+            <circle r="2.5" fill={GOLD} filter="url(#pip-glow)" opacity="0.9">
+              <animateMotion
+                dur="2.4s"
+                repeatCount="indefinite"
+                begin={`${seg * 0.5}s`}
+                path={`M${96 + seg * 132},36 L${148 + seg * 132},36`}
+              />
+              <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5}s`} />
+            </circle>
+            <circle r="2.5" fill={GOLD} filter="url(#pip-glow)" opacity="0.9">
+              <animateMotion
+                dur="2.4s"
+                repeatCount="indefinite"
+                begin={`${seg * 0.5 + 0.8}s`}
+                path={`M${96 + seg * 132},36 L${148 + seg * 132},36`}
+              />
+              <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5 + 0.8}s`} />
+            </circle>
+            <circle r="2.5" fill={GOLD} filter="url(#pip-glow)" opacity="0.9">
+              <animateMotion
+                dur="2.4s"
+                repeatCount="indefinite"
+                begin={`${seg * 0.5 + 1.6}s`}
+                path={`M${96 + seg * 132},36 L${148 + seg * 132},36`}
+              />
+              <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5 + 1.6}s`} />
+            </circle>
+          </g>
+        ))}
+
+        {/* Stage 1: Symptoms (stethoscope) */}
+        <g className="landing-pipeline-node">
+          <rect x="8" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
+          <circle cx="48" cy="26" r="8" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
+          <path d="M43 32 L43 38 Q43 42 47 42 L49 42 Q53 42 53 38 L53 32" stroke={GOLD} strokeWidth="1.5" fill="none" strokeLinecap="round" opacity="0.8" />
+          <circle cx="48" cy="26" r="2" fill={GOLD} opacity="0.5" />
+          <text x="48" y="58" textAnchor="middle" fill={GOLD} fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Symptoms</text>
+        </g>
+
+        {/* Stage 2: Analyze (brain/AI) */}
+        <g className="landing-pipeline-node">
+          <rect x="148" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
+          <ellipse cx="188" cy="25" rx="9" ry="10" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
+          <path d="M183 20 Q188 15 193 20" stroke={GOLD} strokeWidth="1" fill="none" strokeLinecap="round" opacity="0.6" />
+          <path d="M181 25 Q188 30 195 25" stroke={GOLD} strokeWidth="1" fill="none" strokeLinecap="round" opacity="0.6" />
+          <line x1="188" y1="15" x2="188" y2="35" stroke={GOLD} strokeWidth="0.8" opacity="0.4" />
+          <circle cx="185" cy="23" r="1.5" fill={GOLD} opacity="0.5" />
+          <circle cx="191" cy="27" r="1.5" fill={GOLD} opacity="0.5" />
+          <text x="188" y="58" textAnchor="middle" fill={GOLD} fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Analyze</text>
+        </g>
+
+        {/* Stage 3: Evidence (book/database) */}
+        <g className="landing-pipeline-node">
+          <rect x="280" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
+          <rect x="311" y="17" width="18" height="22" rx="2" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
+          <line x1="320" y1="17" x2="320" y2="39" stroke={GOLD} strokeWidth="1" opacity="0.4" />
+          <line x1="314" y1="23" x2="326" y2="23" stroke={GOLD} strokeWidth="0.8" opacity="0.4" />
+          <line x1="314" y1="28" x2="326" y2="28" stroke={GOLD} strokeWidth="0.8" opacity="0.4" />
+          <line x1="314" y1="33" x2="326" y2="33" stroke={GOLD} strokeWidth="0.8" opacity="0.4" />
+          <text x="320" y="58" textAnchor="middle" fill={GOLD} fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Evidence</text>
+        </g>
+
+        {/* Stage 4: Recommend (clipboard + check) */}
+        <g className="landing-pipeline-node">
+          <rect x="412" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
+          <rect x="443" y="19" width="16" height="20" rx="2" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
+          <rect x="447" y="16" width="8" height="5" rx="1.5" stroke={GOLD} strokeWidth="1" fill="rgba(16,16,18,0.8)" opacity="0.8" />
+          <polyline points="447,29 450,32 455,26" stroke={GOLD} strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+          <text x="452" y="58" textAnchor="middle" fill={GOLD} fontSize="7.5" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Recommend</text>
+        </g>
+
+        {/* Subtle glow pulse on each node */}
+        {[48, 188, 320, 452].map((cx, i) => (
+          <circle key={cx} cx={cx} cy="36" r="28" fill="none" stroke={GOLD} strokeWidth="0.5" opacity="0">
+            <animate attributeName="opacity" values="0;0.15;0" dur="3s" repeatCount="indefinite" begin={`${i * 0.6}s`} />
+            <animate attributeName="r" values="28;34;28" dur="3s" repeatCount="indefinite" begin={`${i * 0.6}s`} />
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function useTypewriter(phrases: string[], typingMs = 80, pauseMs = 2000, deleteMs = 40) {
   const [text, setText] = useState('');
   const [phraseIdx, setPhraseIdx] = useState(0);
@@ -377,6 +487,8 @@ export default function LandingPage() {
           <p className="landing-subtitle">
             AI-powered clinical decision support for evidence-based patient care.
           </p>
+
+          <Pipeline />
 
           <div className="landing-typewriter" aria-live="polite">
             <span className="landing-typewriter-text">{typedText}</span>
