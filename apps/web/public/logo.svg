@@ -1,93 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0D9488"/>
-      <stop offset="100%" stop-color="#0F766E"/>
-    </linearGradient>
-    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#99F6E4"/>
-      <stop offset="100%" stop-color="#5EEAD4"/>
-    </linearGradient>
-  </defs>
-
-  <!-- Rounded hexagonal shield shape -->
-  <path d="
-    M256 28
-    L438 120
-    Q462 132 462 160
-    L462 320
-    Q462 360 438 388
-    L296 476
-    Q268 494 256 494
-    Q244 494 216 476
-    L74 388
-    Q50 360 50 320
-    L50 160
-    Q50 132 74 120
-    Z
-  " fill="url(#shieldGrad)" />
-
-  <!-- Inner lighter hexagonal border -->
-  <path d="
-    M256 56
-    L418 138
-    Q436 148 436 168
-    L436 312
-    Q436 346 418 368
-    L290 448
-    Q266 464 256 464
-    Q246 464 222 448
-    L94 368
-    Q76 346 76 312
-    L76 168
-    Q76 148 94 138
-    Z
-  " fill="none" stroke="#99F6E4" stroke-width="2" opacity="0.3" />
-
-  <!-- Medical cross - vertical bar -->
-  <rect x="224" y="148" width="64" height="216" rx="12" fill="white" opacity="0.95"/>
-
-  <!-- Medical cross - horizontal bar -->
-  <rect x="148" y="224" width="216" height="64" rx="12" fill="white" opacity="0.95"/>
-
-  <!-- Neural network nodes at cross endpoints -->
-  <!-- Top node -->
-  <circle cx="256" cy="140" r="16" fill="url(#accentGrad)"/>
-  <circle cx="256" cy="140" r="8" fill="white"/>
-
-  <!-- Bottom node -->
-  <circle cx="256" cy="372" r="16" fill="url(#accentGrad)"/>
-  <circle cx="256" cy="372" r="8" fill="white"/>
-
-  <!-- Left node -->
-  <circle cx="140" cy="256" r="16" fill="url(#accentGrad)"/>
-  <circle cx="140" cy="256" r="8" fill="white"/>
-
-  <!-- Right node -->
-  <circle cx="372" cy="256" r="16" fill="url(#accentGrad)"/>
-  <circle cx="372" cy="256" r="8" fill="white"/>
-
-  <!-- Subtle neural connection lines from nodes to corners -->
-  <!-- Top-left diagonal -->
-  <line x1="256" y1="140" x2="178" y2="178" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Top-right diagonal -->
-  <line x1="256" y1="140" x2="334" y2="178" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Bottom-left diagonal -->
-  <line x1="256" y1="372" x2="178" y2="334" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Bottom-right diagonal -->
-  <line x1="256" y1="372" x2="334" y2="334" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Left-top diagonal -->
-  <line x1="140" y1="256" x2="178" y2="178" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Left-bottom diagonal -->
-  <line x1="140" y1="256" x2="178" y2="334" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Right-top diagonal -->
-  <line x1="372" y1="256" x2="334" y2="178" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-  <!-- Right-bottom diagonal -->
-  <line x1="372" y1="256" x2="334" y2="334" stroke="#99F6E4" stroke-width="2" opacity="0.4"/>
-
-  <!-- Small secondary nodes at diagonal intersections -->
-  <circle cx="178" cy="178" r="8" fill="#99F6E4" opacity="0.6"/>
-  <circle cx="334" cy="178" r="8" fill="#99F6E4" opacity="0.6"/>
-  <circle cx="178" cy="334" r="8" fill="#99F6E4" opacity="0.6"/>
-  <circle cx="334" cy="334" r="8" fill="#99F6E4" opacity="0.6"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <line x1="16" y1="6" x2="16" y2="2" stroke="#F0B429" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="16" cy="1.5" r="1.5" fill="#F0B429"/>
+  <rect x="5" y="6" width="22" height="17" rx="5" fill="#F0B429"/>
+  <ellipse cx="11" cy="13" rx="2.5" ry="3" fill="#0A0A0B"/>
+  <ellipse cx="21" cy="13" rx="2.5" ry="3" fill="#0A0A0B"/>
+  <circle cx="11.5" cy="12.5" r="1" fill="#F7CC5F"/>
+  <circle cx="21.5" cy="12.5" r="1" fill="#F7CC5F"/>
+  <path d="M12 19Q16 22 20 19" stroke="#0A0A0B" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <rect x="1" y="10" width="4" height="5" rx="2" fill="#D4A017"/>
+  <rect x="27" y="10" width="4" height="5" rx="2" fill="#D4A017"/>
 </svg>

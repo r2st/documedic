@@ -467,7 +467,7 @@ export default function LandingPage() {
         <a href="https://doaide.com" className="landing-brand">
           <RobotIcon size={28} />
           <span className="landing-brand-text">
-            Do<em>Aide</em>
+            DoAide<em> Med</em>
           </span>
         </a>
       </header>

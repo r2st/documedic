@@ -94,14 +94,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <header className="sticky top-0 z-30 border-b border-[#2A2A2D] bg-[#0A0A0B]/95 backdrop-blur-sm shadow-nav">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-6">
           <Link href="/patients" className="flex items-center gap-2.5 group">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo.svg"
-              alt="DoAide Med"
-              className="h-8 w-8 transition-transform group-hover:scale-105"
-            />
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 32 32"
+              className="h-7 w-7 shrink-0 transition-transform group-hover:scale-105"
+              aria-hidden="true"
+            >
+              <line x1="16" y1="6" x2="16" y2="2" stroke="#F0B429" strokeWidth="1.5" strokeLinecap="round" />
+              <circle cx="16" cy="1.5" r="1.5" fill="#F0B429" />
+              <rect x="5" y="6" width="22" height="17" rx="5" fill="#F0B429" />
+              <ellipse cx="11" cy="13" rx="2.5" ry="3" fill="#0A0A0B" />
+              <ellipse cx="21" cy="13" rx="2.5" ry="3" fill="#0A0A0B" />
+              <circle cx="11.5" cy="12.5" r="1" fill="#F7CC5F" opacity="0.6" />
+              <circle cx="21.5" cy="12.5" r="1" fill="#F7CC5F" opacity="0.6" />
+              <path d="M12 19Q16 22 20 19" stroke="#0A0A0B" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+              <rect x="1" y="10" width="4" height="5" rx="2" fill="#D4A017" />
+              <rect x="27" y="10" width="4" height="5" rx="2" fill="#D4A017" />
+            </svg>
             <span className="text-lg font-bold tracking-tight text-[#E5E7EB]">
-              DoAide <span className="text-[#F0B429]">Med</span>
+              DoAide<span className="italic text-[#F0B429]"> Med</span>
             </span>
           </Link>
 
