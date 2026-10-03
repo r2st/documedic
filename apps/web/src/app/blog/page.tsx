@@ -1,17 +1,12 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { PublicNav, PublicFooter } from '@/components/PublicLayout';
+import { POSTS } from './data';
 
 export const metadata: Metadata = {
   title: 'Blog — DoAide Med',
   description: 'Insights on AI clinical decision support, patient safety, and healthcare technology.',
 };
-
-export const POSTS = [
-  { slug: 'ai-clinical-decision-support-reduces-diagnostic-errors', title: 'How AI Clinical Decision Support Reduces Diagnostic Errors', excerpt: 'Learn how AI-powered CDSS helps clinicians catch diagnostic errors earlier and improve patient outcomes.', date: '2026-09-15', readTime: '6 min read' },
-  { slug: '5-ways-cdss-improves-patient-safety', title: '5 Ways CDSS Improves Patient Safety', excerpt: 'From drug interaction alerts to evidence-based recommendations, discover how clinical decision support systems are saving lives.', date: '2026-09-22', readTime: '5 min read' },
-  { slug: 'future-of-ai-in-healthcare', title: 'The Future of AI in Healthcare: From Alerts to Insights', excerpt: 'The next generation of healthcare AI goes beyond simple alerts to provide contextual, actionable clinical insights.', date: '2026-09-29', readTime: '7 min read' },
-] as const;
 
 export default function BlogIndex() {
   return (
