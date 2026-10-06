@@ -81,7 +81,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               '@context': 'https://schema.org',
-              '@type': 'SoftwareApplication',
+              '@type': 'WebApplication',
               name: 'DoAide Med',
               description:
                 'AI-powered clinical decision support system for healthcare professionals.',
@@ -91,9 +91,40 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
               author: {
                 '@type': 'Organization',
-                name: 'Apprend Technologies',
+                name: 'DoAide',
                 url: 'https://doaide.com',
+                logo: 'https://doaide.com/logo.png',
               },
+            }),
+          }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'MedicalWebPage',
+              name: 'DoAide Med — AI Clinical Decision Support',
+              url: 'https://med.doaide.com',
+              description:
+                'AI-powered clinical decision support for healthcare professionals — drug interactions, dosage calculations, diagnostic assistance, and clinical guidelines.',
+              medicalAudience: {
+                '@type': 'MedicalAudience',
+                audienceType: 'Clinician',
+              },
+              lastReviewed: '2026-10-01',
+            }),
+          }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'Organization',
+              name: 'DoAide',
+              url: 'https://doaide.com',
+              logo: 'https://doaide.com/logo.png',
             }),
           }}
         />
