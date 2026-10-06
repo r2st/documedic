@@ -3,6 +3,7 @@ import Script from 'next/script';
 import './globals.css';
 import { AuthProvider } from '@/lib/auth';
 import { OfflineBanner } from '@/components/Banners';
+import { DoAideFooter } from '@/components/DoAideFooter';
 
 export const metadata: Metadata = {
   title: 'DoAide Med',
@@ -131,7 +132,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <OfflineBanner />
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          {children}
+          <DoAideFooter />
+        </AuthProvider>
       </body>
     </html>
   );
