@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { CrossProductLinks } from '@/components/CrossProductLinks';
 import { PublicNav, PublicFooter } from '@/components/PublicLayout';
 
 export const metadata: Metadata = {
@@ -31,6 +32,7 @@ export default function ToolsIndex() {
             </Link>
           ))}
         </div>
+        <CrossProductLinks page="tools" />
       </main>
       <PublicFooter />
     </div>

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
+import { CrossProductLinks } from '@/components/CrossProductLinks';
 import { PublicNav, PublicFooter } from '@/components/PublicLayout';
 import { ShareButtons } from '@/components/ShareButtons';
 import { BLOG_POSTS } from '../data';
@@ -45,6 +46,7 @@ export default async function BlogPost({ params }: Props) {
           <hr className="my-8 border-[var(--doaide-border)]" />
           <ShareButtons url={`https://med.doaide.com/blog/${slug}`} title={`${post.title} — DoAide Med`} />
         </article>
+        <CrossProductLinks page="blog" />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify({ '@context': 'https://schema.org', '@type': 'BlogPosting', headline: post.title, datePublished: post.date, author: { '@type': 'Organization', name: 'Apprend Technologies' }, publisher: { '@type': 'Organization', name: 'DoAide Med' }, url: `https://med.doaide.com/blog/${slug}` }) }} />
       </main>
       <PublicFooter />
