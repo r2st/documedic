@@ -79,7 +79,13 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
     try {
       const body = await resp.clone().json();
       code = body.code ?? code;
-      message = body.message ?? body.detail ?? message;
+      if (body.message) {
+        message = body.message;
+      } else if (typeof body.detail === 'string') {
+        message = body.detail;
+      } else if (Array.isArray(body.detail) && body.detail.length > 0) {
+        message = body.detail.map((d: { msg?: string }) => d.msg ?? '').filter(Boolean).join('; ') || message;
+      }
     } catch {
       /* non-JSON error */
     }
