@@ -49,3 +49,7 @@ keys/
 
 # Vitest / v8 coverage output
 coverage/
+
+# Environment
+.env*
+!.env.example
