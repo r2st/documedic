@@ -82,7 +82,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               '@context': 'https://schema.org',
-              '@type': 'WebApplication',
+              '@type': 'SoftwareApplication',
               name: 'DoAide Med',
               description:
                 'AI-powered clinical decision support system for healthcare professionals.',

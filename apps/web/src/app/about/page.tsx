@@ -43,6 +43,34 @@ const TESTIMONIALS = [
     role: 'General Practitioner',
     location: 'Kochi',
   },
+  {
+    quote:
+      'As a rural PHC doctor seeing 120 patients daily, I can\'t look up every drug dose. DoAide Med gives me weight-based dosing and interaction checks in seconds — it\'s my virtual clinical pharmacist.',
+    name: 'Dr. Priya Deshmukh',
+    role: 'Medical Officer, District Hospital',
+    location: 'Nashik',
+  },
+  {
+    quote:
+      'We evaluated UpToDate, DynaMed, and DoAide Med for our hospital chain. DoAide Med won because it understands Indian disease patterns and drug availability — the others recommend medications not even sold here.',
+    name: 'Dr. Suresh Raghavan',
+    role: 'Director of Medical Education',
+    location: 'Chennai',
+  },
+  {
+    quote:
+      'The symptom triage tool helped me catch a case of Addisonian crisis that I might have missed as simple fatigue. The differential diagnosis ranking is surprisingly accurate for rare conditions.',
+    name: 'Dr. Farhan Ahmed',
+    role: 'Emergency Medicine Resident',
+    location: 'Mumbai',
+  },
+  {
+    quote:
+      'I use the BMI calculator and drug interaction checker daily in my diabetes clinic. My patients trust the printed reports, and it saves me 30 minutes of manual calculations every shift.',
+    name: 'Dr. Lakshmi Iyer',
+    role: 'Diabetologist',
+    location: 'Bengaluru',
+  },
 ];
 
 const FAQ_ITEMS = [
