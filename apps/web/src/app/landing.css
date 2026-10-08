@@ -158,6 +158,55 @@
   max-width: 420px;
 }
 
+/* ── CTA Row ── */
+
+.landing-cta-row {
+  display: flex;
+  gap: 12px;
+  margin: 0 0 24px;
+  flex-wrap: wrap;
+}
+
+.landing-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+  border: 1px solid var(--gold);
+  background: transparent;
+  text-decoration: none;
+  transition: background 200ms, color 200ms;
+}
+
+.landing-cta-secondary:hover {
+  background: var(--gold);
+  color: #0A0A0B;
+}
+
+.landing-cta-tertiary {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: transparent;
+  text-decoration: none;
+  transition: color 200ms, border-color 200ms;
+}
+
+.landing-cta-tertiary:hover {
+  color: var(--gold);
+  border-color: var(--gold);
+}
+
 /* ── Pipeline ── */
 
 .landing-pipeline {

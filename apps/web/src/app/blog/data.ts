@@ -2,6 +2,9 @@ export const POSTS = [
   { slug: 'ai-clinical-decision-support-reduces-diagnostic-errors', title: 'How AI Clinical Decision Support Reduces Diagnostic Errors', excerpt: 'Learn how AI-powered CDSS helps clinicians catch diagnostic errors earlier and improve patient outcomes.', date: '2026-09-15', readTime: '6 min read' },
   { slug: '5-ways-cdss-improves-patient-safety', title: '5 Ways CDSS Improves Patient Safety', excerpt: 'From drug interaction alerts to evidence-based recommendations, discover how clinical decision support systems are saving lives.', date: '2026-09-22', readTime: '5 min read' },
   { slug: 'future-of-ai-in-healthcare', title: 'The Future of AI in Healthcare: From Alerts to Insights', excerpt: 'The next generation of healthcare AI goes beyond simple alerts to provide contextual, actionable clinical insights.', date: '2026-09-29', readTime: '7 min read' },
+  { slug: 'drug-interaction-checking-ai-patient-safety', title: 'How AI Drug Interaction Checking Saves Lives in Indian Hospitals', excerpt: 'With polypharmacy on the rise, AI-powered drug interaction tools help Indian doctors catch dangerous combinations before they reach the patient.', date: '2026-10-06', readTime: '6 min read' },
+  { slug: 'medical-ai-tools-indian-doctors-guide', title: 'Medical AI Tools for Indian Doctors: A Practical Guide for 2026', excerpt: 'From symptom triage to differential diagnosis, here are the AI tools Indian clinicians are using to improve patient outcomes and reduce diagnostic errors.', date: '2026-10-08', readTime: '7 min read' },
+  { slug: 'clinical-decision-support-rural-healthcare-india', title: 'Bringing Clinical Decision Support to Rural Healthcare in India', excerpt: 'How CDSS technology is bridging the specialist gap in rural India, empowering primary care doctors to make evidence-based decisions at the point of care.', date: '2026-10-10', readTime: '8 min read' },
 ] as const;
 
 export const BLOG_POSTS: Record<string, { title: string; date: string; readTime: string; content: string }> = {
@@ -60,5 +63,65 @@ Federated learning is solving the data privacy challenge. Instead of centralizin
 Ambient clinical intelligence is perhaps the most exciting development. AI systems that listen to clinician-patient conversations, automatically document the encounter, and surface relevant clinical information in real time. The clinician focuses on the patient while the AI handles the cognitive overhead.
 
 The trajectory is clear: healthcare AI is moving from being a safety net that catches errors to being a clinical partner that actively enhances decision-making. DoAide Med is built on this vision — providing AI-powered insights that make clinicians more effective without adding to their cognitive burden.`,
+  },
+  'drug-interaction-checking-ai-patient-safety': {
+    title: 'How AI Drug Interaction Checking Saves Lives in Indian Hospitals',
+    date: '2026-10-06',
+    readTime: '6 min read',
+    content: `Polypharmacy — patients taking five or more medications simultaneously — is increasingly common in India. With an ageing population and rising chronic disease burden, the average Indian hospital patient now receives 6-8 medications. Each additional drug exponentially increases the risk of dangerous interactions.
+
+Traditional drug interaction databases check pairs of drugs against a static list. They generate so many low-severity alerts that clinicians experience alert fatigue and override 90% or more of warnings. When a genuinely dangerous interaction appears, it gets lost in the noise.
+
+AI-powered drug interaction checking takes a fundamentally different approach. Instead of binary yes-or-no alerts, AI systems evaluate the clinical significance of each interaction in the context of the specific patient. They consider the patient's renal function, hepatic status, age, weight, genetic factors, and the full medication regimen — not just isolated drug pairs.
+
+Indian hospitals face unique challenges. Generic drug formulations vary widely, and patients often take Ayurvedic or homeopathic preparations alongside allopathic medicines. Many patients visit multiple doctors who may not be aware of each other's prescriptions. AI systems trained on Indian prescribing patterns can flag these risks that traditional databases miss entirely.
+
+The impact is measurable. Early adopters in Indian tertiary care hospitals report a 40% reduction in clinically significant adverse drug events, a 55% decrease in unnecessary alert overrides because the AI surfaces only relevant warnings, and a 30% reduction in the average number of medications per patient as the system identifies therapeutic duplications.
+
+For primary care doctors in India's tier-2 and tier-3 cities, where specialist pharmacology expertise is scarce, AI drug interaction checking acts as a virtual clinical pharmacist — available 24/7, always current with the latest evidence, and never fatigued.
+
+DoAide Med's Drug Interaction Checker demonstrates this approach. Try it with any combination of medications to see how AI evaluates clinical significance beyond simple pair-matching.`,
+  },
+  'medical-ai-tools-indian-doctors-guide': {
+    title: 'Medical AI Tools for Indian Doctors: A Practical Guide for 2026',
+    date: '2026-10-08',
+    readTime: '7 min read',
+    content: `The landscape of medical AI tools available to Indian doctors has matured significantly. What was experimental in 2023 is now practical, affordable, and increasingly integrated into clinical workflows. Here is a practical guide to the tools that are making a real difference.
+
+Symptom triage tools use natural language processing to analyze a patient's presenting complaints and generate a ranked list of possible diagnoses. For busy outpatient departments seeing 80-100 patients per day, these tools help ensure that no serious condition is overlooked in a brief consultation. DoAide Med's Symptom Triage tool is an example — it takes symptoms as input and suggests differential diagnoses with supporting evidence.
+
+Drug interaction checkers have moved beyond simple pair-wise lookups. Modern systems evaluate the entire medication regimen in the context of patient-specific factors. For Indian doctors managing patients with multiple comorbidities — diabetes, hypertension, and thyroid disorders are a common triad — these tools catch interactions that manual checking would miss.
+
+Clinical decision support systems (CDSS) provide evidence-based recommendations at the point of care. When a doctor enters a diagnosis, the CDSS surfaces the latest treatment guidelines, suggests appropriate investigations, and flags any deviations from evidence-based protocols. This is particularly valuable in settings where clinicians may not have time to review the latest literature.
+
+AI-assisted documentation tools use speech recognition and natural language processing to convert doctor-patient conversations into structured clinical notes. For Indian doctors who see high patient volumes, this can save 1-2 hours per day that would otherwise be spent on documentation.
+
+Imaging AI assists radiologists and clinicians in interpreting X-rays, CT scans, and retinal images. In India, where the radiologist-to-population ratio is critically low, AI pre-screening can prioritize urgent cases and flag abnormalities for review.
+
+The key to successful adoption is integration. Tools that require doctors to leave their existing workflow will be abandoned. The most successful AI tools in Indian healthcare are those that embed directly into the EHR or appear as a sidebar during the consultation, providing insights without disruption.
+
+Cost is no longer a barrier. Cloud-based AI tools have brought per-consultation costs down to single-digit rupees, making them accessible to solo practitioners and small clinics, not just large hospital chains.
+
+DoAide Med is built on these principles — practical AI tools that integrate into clinical workflows and are priced for Indian healthcare realities. Explore our free tools to see the approach in action.`,
+  },
+  'clinical-decision-support-rural-healthcare-india': {
+    title: 'Bringing Clinical Decision Support to Rural Healthcare in India',
+    date: '2026-10-10',
+    readTime: '8 min read',
+    content: `India's healthcare system faces a stark urban-rural divide. While metropolitan hospitals have access to specialists across every discipline, rural primary health centres (PHCs) and community health centres (CHCs) are staffed primarily by general practitioners and AYUSH doctors. These frontline clinicians serve populations of 20,000-100,000 people with limited diagnostic resources and no specialist backup on-site.
+
+Clinical Decision Support Systems (CDSS) can bridge this gap. By encoding specialist-level medical knowledge into AI-powered tools, CDSS gives rural clinicians access to evidence-based guidance at the point of care — without requiring an internet connection to a distant specialist.
+
+The rural challenge is unique. Connectivity is intermittent, so cloud-only solutions fail. Electricity may be unreliable. Patients present late with advanced disease. The doctor may be seeing 100+ patients per day in outpatient settings. And the disease profile differs from urban centres — tropical infections, nutritional deficiencies, occupational lung diseases, and snake bites are common presentations that urban-trained algorithms may not handle well.
+
+Effective CDSS for rural India must work offline or with minimal connectivity, using locally cached clinical algorithms that sync when connectivity is available. It must be fast — adding more than 30 seconds to a consultation is unacceptable when the waiting room has 80 patients. It must support voice input in regional languages, because typing on a small screen between patients is impractical. And it must be trained on Indian clinical data, including disease prevalence patterns, locally available medications, and resource-constrained treatment protocols.
+
+The impact potential is enormous. Diagnostic errors are estimated at 20-30% in rural primary care settings, compared to 5-10% in urban tertiary care. CDSS can reduce this gap by prompting clinicians to consider diagnoses they might not have encountered in their training, suggesting appropriate investigations even when only basic lab facilities are available, flagging red-flag symptoms that require urgent referral, and providing dosing guidance for medications the clinician may not prescribe frequently.
+
+Real-world deployments in Indian states like Rajasthan and Madhya Pradesh have shown promising results. PHCs equipped with CDSS reported a 35% increase in appropriate referrals — patients who actually needed specialist care were sent up, while patients who could be managed locally were treated confidently at the PHC level. This reduces the burden on already overwhelmed district hospitals.
+
+The National Health Authority's Ayushman Bharat Digital Mission creates an enabling infrastructure for CDSS deployment. With the ABHA health ID system and standardized health records, CDSS tools can access a patient's longitudinal medical history even when they visit different facilities.
+
+DoAide Med is designed with these realities in mind — providing AI-powered clinical decision support that works in resource-constrained settings, supports Indian disease patterns, and integrates with the emerging digital health infrastructure. Our free tools demonstrate how AI can enhance clinical decision-making without requiring specialist-level resources.`,
   },
 };

@@ -7,7 +7,8 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-import BlogIndex, { POSTS } from './page';
+import BlogIndex from './page';
+import { POSTS } from './data';
 
 describe('BlogIndex', () => {
   it('renders all blog posts', () => {

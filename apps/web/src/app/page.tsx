@@ -486,7 +486,17 @@ export default function LandingPage() {
 
           <p className="landing-subtitle">
             AI-powered clinical decision support for evidence-based patient care.
+            Trusted by doctors across India.
           </p>
+
+          <div className="landing-cta-row">
+            <a href="/tools" className="landing-cta-secondary">
+              Try Free Clinical Tools
+            </a>
+            <a href="/about" className="landing-cta-tertiary">
+              Learn More
+            </a>
+          </div>
 
           <Pipeline />
 

@@ -8,6 +8,7 @@ export function PublicNav() {
           DoAide Med
         </Link>
         <div className="flex items-center gap-6 text-sm">
+          <Link href="/about" className="text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] no-underline transition-colors">About</Link>
           <Link href="/tools" className="text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] no-underline transition-colors">Free Tools</Link>
           <Link href="/blog" className="text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] no-underline transition-colors">Blog</Link>
           <Link href="/embed" className="text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] no-underline transition-colors">Embed</Link>
@@ -24,6 +25,7 @@ export function PublicFooter() {
       <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--doaide-text-muted)]">
         <p>&copy; {new Date().getFullYear()} Apprend Technologies. All rights reserved.</p>
         <div className="flex items-center gap-6">
+          <Link href="/about" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">About</Link>
           <Link href="/tools" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Free Tools</Link>
           <Link href="/blog" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Blog</Link>
           <a href="https://doaide.com" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">DoAide</a>

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { BLOG_POSTS, generateStaticParams, generateMetadata } from './page';
+import { BLOG_POSTS } from '../data';
+import { generateStaticParams, generateMetadata } from './page';
 
 vi.mock('next/navigation', () => ({
   notFound: () => { throw new Error('NEXT_NOT_FOUND'); },
