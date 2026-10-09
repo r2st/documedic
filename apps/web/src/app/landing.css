@@ -531,6 +531,10 @@
     padding: 12px 16px;
   }
 
+  .landing-header-nav {
+    display: none;
+  }
+
   .landing-brand-text {
     font-size: 16px;
   }
@@ -558,7 +562,16 @@
 
   .landing-headline {
     font-size: 1.5rem;
+    margin: 0 0 12px;
+  }
+
+  .landing-cta-row {
     margin: 0 0 16px;
+  }
+
+  .landing-cta-primary {
+    font-size: 13px;
+    padding: 10px 18px;
   }
 
   .landing-right {
@@ -594,6 +607,45 @@
     font-size: 14px;
   }
 
+  .landing-trust-bar {
+    padding: 16px;
+  }
+
+  .landing-trust-bar-inner {
+    gap: 16px;
+  }
+
+  .landing-trust-value {
+    font-size: 18px;
+  }
+
+  .landing-features {
+    display: block;
+    padding: 16px 16px 0;
+  }
+
+  .landing-features-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .landing-feature-card {
+    padding: 12px;
+  }
+
+  .landing-social-proof {
+    display: block;
+    padding: 16px 16px 8px;
+  }
+
+  .landing-testimonial {
+    padding: 16px;
+  }
+
+  .landing-testimonial-text {
+    font-size: 13px;
+  }
+
   .landing-footer {
     padding: 12px 16px 12px;
     border-top: none;
@@ -611,12 +663,228 @@
 
   .landing-footer-bottom {
     gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   .landing-footer-home,
   .landing-footer-copy {
     font-size: 10px;
   }
+}
+
+/* ── Header Nav ── */
+
+.landing-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.landing-header-link {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted) !important;
+  text-decoration: none !important;
+  transition: color 150ms;
+}
+
+.landing-header-link:hover {
+  color: var(--gold) !important;
+}
+
+/* ── Primary CTA ── */
+
+.landing-cta-primary {
+  display: inline-flex;
+  align-items: center;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0A0A0B;
+  background: var(--gold);
+  border: none;
+  text-decoration: none;
+  transition: background 200ms;
+  box-shadow: 0 0 20px rgba(240, 180, 41, 0.25);
+}
+
+.landing-cta-primary:hover {
+  background: var(--gold-hover);
+  box-shadow: 0 0 30px rgba(240, 180, 41, 0.35);
+}
+
+/* ── Trust Bar ── */
+
+.landing-trust-bar {
+  position: relative;
+  z-index: 5;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 24px;
+}
+
+.landing-trust-bar-inner {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  max-width: 800px;
+  margin: 0 auto;
+  flex-wrap: wrap;
+}
+
+.landing-trust-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 70px;
+}
+
+.landing-trust-value {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--gold);
+}
+
+.landing-trust-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+/* ── Feature Cards ── */
+
+.landing-features {
+  position: relative;
+  z-index: 5;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: none;
+}
+
+.landing-features-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.landing-feature-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.landing-feature-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.landing-feature-title {
+  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+
+.landing-feature-desc {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Social Proof ── */
+
+.landing-social-proof {
+  position: relative;
+  z-index: 5;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+  display: none;
+}
+
+.landing-testimonial {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-card);
+  padding: 20px;
+  margin: 0;
+}
+
+.landing-testimonial-text {
+  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin: 0 0 12px;
+}
+
+.landing-testimonial-author {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.landing-testimonial-name {
+  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.landing-testimonial-role {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Footer Legal Links ── */
+
+.landing-footer-legal {
+  color: var(--text-muted) !important;
+  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-size: 11px;
+  text-decoration: none !important;
+  transition: color 150ms;
+}
+
+.landing-footer-legal:hover {
+  color: var(--gold) !important;
+}
+
+/* ── Fade-in for new sections ── */
+
+.landing-root.landing-visible .landing-trust-bar,
+.landing-root.landing-visible .landing-features,
+.landing-root.landing-visible .landing-social-proof {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.landing-trust-bar,
+.landing-features,
+.landing-social-proof {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.6s ease 0.4s, transform 0.6s ease 0.4s;
 }
 
 /* ── Reduced Motion ── */
@@ -634,7 +902,10 @@
 
   .landing-header,
   .landing-split,
-  .landing-footer {
+  .landing-footer,
+  .landing-trust-bar,
+  .landing-features,
+  .landing-social-proof {
     opacity: 1 !important;
     transform: none !important;
     transition: none !important;

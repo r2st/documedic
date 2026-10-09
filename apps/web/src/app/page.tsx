@@ -29,6 +29,57 @@ const DOAIDE_PRODUCTS = [
   { name: 'Trade', url: 'https://trade.doaide.com' },
 ];
 
+const FEATURES = [
+  {
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="1.5" strokeLinecap="round">
+        <path d="M9 12l2 2 4-4" />
+        <rect x="3" y="3" width="18" height="18" rx="4" />
+      </svg>
+    ),
+    title: 'Drug Interaction Checker',
+    desc: 'Full-regimen analysis with Indian brand name support',
+  },
+  {
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="1.5" strokeLinecap="round">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 8v4l3 3" />
+      </svg>
+    ),
+    title: 'Symptom Triage',
+    desc: 'AI-ranked differential diagnosis in seconds',
+  },
+  {
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="1.5" strokeLinecap="round">
+        <path d="M4 19V5a2 2 0 012-2h8l6 6v10a2 2 0 01-2 2H6a2 2 0 01-2-2z" />
+        <path d="M14 3v6h6" />
+        <line x1="8" y1="13" x2="16" y2="13" />
+        <line x1="8" y1="17" x2="14" y2="17" />
+      </svg>
+    ),
+    title: 'Evidence-Based Guidance',
+    desc: 'ICMR, WHO, and NICE guidelines at point of care',
+  },
+  {
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={GOLD} strokeWidth="1.5" strokeLinecap="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      </svg>
+    ),
+    title: 'Safety-First Design',
+    desc: 'Allergy cross-checks and contraindication alerts',
+  },
+];
+
+const TRUST_STATS = [
+  { value: 'Free', label: 'Clinical Tools' },
+  { value: 'Indian', label: 'Drug Database' },
+  { value: 'DPDP', label: 'Compliant' },
+  { value: '24/7', label: 'Available' },
+];
+
 function RobotIcon({ size = 24 }: { size?: number }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width={size} height={size}>
@@ -100,45 +151,27 @@ function Pipeline() {
           </linearGradient>
         </defs>
 
-        {/* Connecting lines */}
         <line x1="96" y1="36" x2="148" y2="36" stroke="url(#pip-line-grad)" strokeWidth="1.5" />
         <line x1="228" y1="36" x2="280" y2="36" stroke="url(#pip-line-grad)" strokeWidth="1.5" />
         <line x1="360" y1="36" x2="412" y2="36" stroke="url(#pip-line-grad)" strokeWidth="1.5" />
 
-        {/* Flowing dots — 3 per connector, staggered */}
         {[0, 1, 2].map((seg) => (
           <g key={seg}>
             <circle r="2.5" fill={GOLD} filter="url(#pip-glow)" opacity="0.9">
-              <animateMotion
-                dur="2.4s"
-                repeatCount="indefinite"
-                begin={`${seg * 0.5}s`}
-                path={`M${96 + seg * 132},36 L${148 + seg * 132},36`}
-              />
+              <animateMotion dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5}s`} path={`M${96 + seg * 132},36 L${148 + seg * 132},36`} />
               <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5}s`} />
             </circle>
             <circle r="2.5" fill={GOLD} filter="url(#pip-glow)" opacity="0.9">
-              <animateMotion
-                dur="2.4s"
-                repeatCount="indefinite"
-                begin={`${seg * 0.5 + 0.8}s`}
-                path={`M${96 + seg * 132},36 L${148 + seg * 132},36`}
-              />
+              <animateMotion dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5 + 0.8}s`} path={`M${96 + seg * 132},36 L${148 + seg * 132},36`} />
               <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5 + 0.8}s`} />
             </circle>
             <circle r="2.5" fill={GOLD} filter="url(#pip-glow)" opacity="0.9">
-              <animateMotion
-                dur="2.4s"
-                repeatCount="indefinite"
-                begin={`${seg * 0.5 + 1.6}s`}
-                path={`M${96 + seg * 132},36 L${148 + seg * 132},36`}
-              />
+              <animateMotion dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5 + 1.6}s`} path={`M${96 + seg * 132},36 L${148 + seg * 132},36`} />
               <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2.4s" repeatCount="indefinite" begin={`${seg * 0.5 + 1.6}s`} />
             </circle>
           </g>
         ))}
 
-        {/* Stage 1: Symptoms (stethoscope) */}
         <g className="landing-pipeline-node">
           <rect x="8" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
           <circle cx="48" cy="26" r="8" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
@@ -147,7 +180,6 @@ function Pipeline() {
           <text x="48" y="58" textAnchor="middle" fill={GOLD} fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Symptoms</text>
         </g>
 
-        {/* Stage 2: Analyze (brain/AI) */}
         <g className="landing-pipeline-node">
           <rect x="148" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
           <ellipse cx="188" cy="25" rx="9" ry="10" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
@@ -159,7 +191,6 @@ function Pipeline() {
           <text x="188" y="58" textAnchor="middle" fill={GOLD} fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Analyze</text>
         </g>
 
-        {/* Stage 3: Evidence (book/database) */}
         <g className="landing-pipeline-node">
           <rect x="280" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
           <rect x="311" y="17" width="18" height="22" rx="2" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
@@ -170,7 +201,6 @@ function Pipeline() {
           <text x="320" y="58" textAnchor="middle" fill={GOLD} fontSize="8" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Evidence</text>
         </g>
 
-        {/* Stage 4: Recommend (clipboard + check) */}
         <g className="landing-pipeline-node">
           <rect x="412" y="4" width="80" height="64" rx="14" fill="rgba(16,16,18,0.8)" stroke="rgba(240,180,41,0.2)" strokeWidth="1" />
           <rect x="443" y="19" width="16" height="20" rx="2" stroke={GOLD} strokeWidth="1.5" fill="none" opacity="0.8" />
@@ -179,7 +209,6 @@ function Pipeline() {
           <text x="452" y="58" textAnchor="middle" fill={GOLD} fontSize="7.5" fontFamily="'IBM Plex Mono', monospace" fontWeight="500" opacity="0.8">Recommend</text>
         </g>
 
-        {/* Subtle glow pulse on each node */}
         {[48, 188, 320, 452].map((cx, i) => (
           <circle key={cx} cx={cx} cy="36" r="28" fill="none" stroke={GOLD} strokeWidth="0.5" opacity="0">
             <animate attributeName="opacity" values="0;0.15;0" dur="3s" repeatCount="indefinite" begin={`${i * 0.6}s`} />
@@ -470,6 +499,12 @@ export default function LandingPage() {
             DoAide <em>Med</em>
           </span>
         </a>
+        <nav className="landing-header-nav">
+          <a href="/tools" className="landing-header-link">Free Tools</a>
+          <a href="/about" className="landing-header-link">About</a>
+          <a href="/blog" className="landing-header-link">Blog</a>
+          <a href="/compare" className="landing-header-link">Compare</a>
+        </nav>
       </header>
 
       {/* Main split layout */}
@@ -486,12 +521,12 @@ export default function LandingPage() {
 
           <p className="landing-subtitle">
             AI-powered clinical decision support for evidence-based patient care.
-            Trusted by doctors across India.
+            Built for Indian doctors. Free to start.
           </p>
 
           <div className="landing-cta-row">
-            <a href="/tools" className="landing-cta-secondary">
-              Try Free Clinical Tools
+            <a href="/tools" className="landing-cta-primary">
+              Try Free Tools &mdash; No Signup
             </a>
             <a href="/about" className="landing-cta-tertiary">
               Learn More
@@ -512,6 +547,47 @@ export default function LandingPage() {
         </div>
       </main>
 
+      {/* Trust stats bar — visible on all sizes */}
+      <section className="landing-trust-bar" aria-label="Key highlights">
+        <div className="landing-trust-bar-inner">
+          {TRUST_STATS.map((stat) => (
+            <div key={stat.label} className="landing-trust-stat">
+              <span className="landing-trust-value">{stat.value}</span>
+              <span className="landing-trust-label">{stat.label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Feature cards — shown on mobile to replace hidden pipeline/robot */}
+      <section className="landing-features" aria-label="Key features">
+        <div className="landing-features-grid">
+          {FEATURES.map((f) => (
+            <div key={f.title} className="landing-feature-card">
+              <div className="landing-feature-icon">{f.icon}</div>
+              <div>
+                <h3 className="landing-feature-title">{f.title}</h3>
+                <p className="landing-feature-desc">{f.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Social proof — visible on mobile */}
+      <section className="landing-social-proof" aria-label="Testimonial">
+        <blockquote className="landing-testimonial">
+          <p className="landing-testimonial-text">
+            &ldquo;The drug interaction checker caught a dangerous combination I almost missed. It flags what matters
+            and skips the noise &mdash; exactly what we need in a busy OPD.&rdquo;
+          </p>
+          <footer className="landing-testimonial-author">
+            <span className="landing-testimonial-name">Dr. Anand Kulkarni</span>
+            <span className="landing-testimonial-role">Consultant Physician, Pune</span>
+          </footer>
+        </blockquote>
+      </section>
+
       {/* Footer */}
       <footer className="landing-footer">
         <div className="landing-footer-products">
@@ -527,6 +603,8 @@ export default function LandingPage() {
             doaide.com
           </a>
           <span className="landing-footer-copy">&copy; 2026 DoAide</span>
+          <a href="/privacy" className="landing-footer-legal">Privacy</a>
+          <a href="/terms" className="landing-footer-legal">Terms</a>
         </div>
       </footer>
     </div>
