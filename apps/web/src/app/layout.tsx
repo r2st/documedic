@@ -75,7 +75,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Script
           defer
           src="https://analytics.doaide.com/script.js"
-          data-website-id="a5ae8d1f-1100-447f-bdf9-dd7497c4d1a0"
+          data-website-id="9f3291d6-8cff-44b1-846c-833ac001b4b0"
           strategy="afterInteractive"
         />
         <script
