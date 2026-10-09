@@ -18,5 +18,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${base}/blog/medical-ai-tools-indian-doctors-guide`, lastModified: new Date('2026-10-08'), changeFrequency: 'monthly', priority: 0.7 },
     { url: `${base}/blog/clinical-decision-support-rural-healthcare-india`, lastModified: new Date('2026-10-10'), changeFrequency: 'monthly', priority: 0.7 },
     { url: `${base}/embed`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.7 },
+    { url: `${base}/privacy`, lastModified: new Date(), changeFrequency: 'yearly', priority: 0.4 },
+    { url: `${base}/terms`, lastModified: new Date(), changeFrequency: 'yearly', priority: 0.4 },
   ];
 }

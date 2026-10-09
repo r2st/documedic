@@ -3,11 +3,12 @@ import Script from 'next/script';
 import './globals.css';
 import { AuthProvider } from '@/lib/auth';
 import { OfflineBanner } from '@/components/Banners';
-import { DoAideFooter } from '@/components/DoAideFooter';
+
 
 export const metadata: Metadata = {
   title: 'DoAide Med',
-  description: 'Your digital robot for clinical decisions',
+  description:
+    'AI-powered clinical decision support for Indian doctors — drug interaction checks, symptom triage, differential diagnosis, and evidence-based treatment recommendations.',
   icons: {
     icon: [
       { url: '/favicon.svg', type: 'image/svg+xml' },
@@ -134,7 +135,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <OfflineBanner />
         <AuthProvider>
           {children}
-          <DoAideFooter />
         </AuthProvider>
       </body>
     </html>
