@@ -43,11 +43,27 @@ export default async function BlogPost({ params }: Props) {
           <div className="prose prose-invert max-w-none text-[var(--doaide-text-secondary)] [&_p]:mb-4 [&_p]:leading-relaxed">
             {post.content.split('\n\n').map((block, i) => <p key={i}>{block}</p>)}
           </div>
+          {post.faqs && post.faqs.length > 0 && (
+            <section className="mt-12">
+              <h2 className="text-xl font-bold text-[var(--doaide-text)] mb-6" style={{ fontFamily: 'var(--doaide-font-display)' }}>Frequently Asked Questions</h2>
+              <div className="space-y-6">
+                {post.faqs.map((faq, i) => (
+                  <div key={i} className="p-5 rounded-lg border border-[var(--doaide-border)] bg-[var(--doaide-surface)]">
+                    <h3 className="text-base font-semibold text-[var(--doaide-text)] mb-2">{faq.question}</h3>
+                    <p className="text-sm text-[var(--doaide-text-secondary)] leading-relaxed">{faq.answer}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
           <hr className="my-8 border-[var(--doaide-border)]" />
           <ShareButtons url={`https://med.doaide.com/blog/${slug}`} title={`${post.title} — DoAide Med`} />
         </article>
         <CrossProductLinks page="blog" />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify({ '@context': 'https://schema.org', '@type': 'BlogPosting', headline: post.title, datePublished: post.date, author: { '@type': 'Organization', name: 'Apprend Technologies' }, publisher: { '@type': 'Organization', name: 'DoAide Med' }, url: `https://med.doaide.com/blog/${slug}` }) }} />
+        {post.faqs && post.faqs.length > 0 && (
+          <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: post.faqs.map((faq) => ({ '@type': 'Question', name: faq.question, acceptedAnswer: { '@type': 'Answer', text: faq.answer } })) }) }} />
+        )}
       </main>
       <PublicFooter />
     </div>
