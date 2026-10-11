@@ -227,7 +227,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
         <div>
           <Link
             href="/patients"
-            className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
+            className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[var(--da-primary)] hover:text-[var(--da-primary-light)]"
           >
             <svg
               aria-hidden="true"
@@ -242,7 +242,7 @@ export default function PatientDetailPage({ params }: { params: { id: string } }
             All patients
           </Link>
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#F0B429]/15 text-lg font-bold text-[#F0B429]">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#0D9488]/15 text-lg font-bold text-[var(--da-primary)]">
               {patient.full_name?.[0]?.toUpperCase() ?? '?'}
             </div>
             <div>

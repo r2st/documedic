@@ -11,14 +11,24 @@ const NAV_LINKS = [
   { href: '/embed', label: 'Embed' },
 ];
 
+const DOAIDE_PRODUCTS = [
+  { name: 'GST', url: 'https://gst.doaide.com' },
+  { name: '409A', url: 'https://409a.doaide.com' },
+  { name: 'Pulse', url: 'https://pulse.doaide.com' },
+  { name: 'Med', url: 'https://med.doaide.com' },
+  { name: 'Jobs', url: 'https://job.doaide.com' },
+  { name: 'Desk', url: 'https://desk.doaide.com' },
+  { name: 'Realty', url: 'https://realty.doaide.com' },
+];
+
 export function PublicNav() {
   const [open, setOpen] = useState(false);
 
   return (
-    <nav className="border-b border-[var(--doaide-border)] bg-[var(--doaide-bg)] sticky top-0 z-50">
+    <nav className="border-b border-[var(--da-border)] bg-[var(--da-bg)] sticky top-0 z-50">
       <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 font-semibold text-[var(--doaide-gold)] no-underline">
-          DoAide Med
+        <Link href="/" className="flex items-center gap-2 text-base font-semibold text-[var(--da-text)] no-underline">
+          DoAide <span className="text-[var(--da-text-muted)]">|</span> <span className="text-[var(--da-primary)]">Med</span>
         </Link>
 
         {/* Desktop nav */}
@@ -27,14 +37,14 @@ export function PublicNav() {
             <Link
               key={link.href}
               href={link.href}
-              className="text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] no-underline transition-colors"
+              className="text-[var(--da-text-secondary)] hover:text-[var(--da-primary)] no-underline transition-colors"
             >
               {link.label}
             </Link>
           ))}
           <Link
             href="/"
-            className="px-4 py-1.5 rounded-md text-sm font-medium bg-[var(--doaide-gold)] text-[var(--doaide-text-on-gold)] hover:bg-[var(--doaide-gold-hover)] no-underline transition-colors"
+            className="px-4 py-1.5 rounded-md text-sm font-medium bg-[var(--da-primary)] text-[var(--da-text-on-primary)] hover:bg-[var(--da-primary-hover)] no-underline transition-colors"
           >
             Get Started
           </Link>
@@ -43,7 +53,7 @@ export function PublicNav() {
         {/* Mobile hamburger */}
         <button
           type="button"
-          className="md:hidden flex items-center justify-center w-10 h-10 rounded-lg text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] transition-colors"
+          className="md:hidden flex items-center justify-center w-10 h-10 rounded-lg text-[var(--da-text-secondary)] hover:text-[var(--da-primary)] transition-colors"
           onClick={() => setOpen(!open)}
           aria-expanded={open}
           aria-label="Toggle navigation menu"
@@ -65,13 +75,13 @@ export function PublicNav() {
 
       {/* Mobile menu */}
       {open && (
-        <div className="md:hidden border-t border-[var(--doaide-border)] bg-[var(--doaide-bg)] px-6 py-4 space-y-1">
+        <div className="md:hidden border-t border-[var(--da-border)] bg-[var(--da-bg)] px-6 py-4 space-y-1">
           {NAV_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
               onClick={() => setOpen(false)}
-              className="block py-2.5 text-sm text-[var(--doaide-text-secondary)] hover:text-[var(--doaide-gold)] no-underline transition-colors"
+              className="block py-2.5 text-sm text-[var(--da-text-secondary)] hover:text-[var(--da-primary)] no-underline transition-colors"
             >
               {link.label}
             </Link>
@@ -79,7 +89,7 @@ export function PublicNav() {
           <Link
             href="/"
             onClick={() => setOpen(false)}
-            className="block mt-2 px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-[var(--doaide-gold)] text-[var(--doaide-text-on-gold)] hover:bg-[var(--doaide-gold-hover)] no-underline transition-colors"
+            className="block mt-2 px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-[var(--da-primary)] text-[var(--da-text-on-primary)] hover:bg-[var(--da-primary-hover)] no-underline transition-colors"
           >
             Get Started
           </Link>
@@ -91,17 +101,33 @@ export function PublicNav() {
 
 export function PublicFooter() {
   return (
-    <footer className="border-t border-[var(--doaide-border)] mt-16 py-8">
-      <div className="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--doaide-text-muted)]">
-        <p>&copy; {new Date().getFullYear()} Apprend Technologies. All rights reserved.</p>
-        <div className="flex items-center gap-4 sm:gap-6 flex-wrap justify-center">
-          <Link href="/about" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">About</Link>
-          <Link href="/compare" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Compare</Link>
-          <Link href="/tools" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Free Tools</Link>
-          <Link href="/blog" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Blog</Link>
-          <Link href="/privacy" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Privacy</Link>
-          <Link href="/terms" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">Terms</Link>
-          <a href="https://doaide.com" className="hover:text-[var(--doaide-gold)] no-underline transition-colors">DoAide</a>
+    <footer className="border-t border-[var(--da-border)] mt-16 py-8">
+      <div className="max-w-5xl mx-auto px-6">
+        {/* Cross-product links */}
+        <div className="flex flex-wrap justify-center gap-4 sm:gap-6 mb-6">
+          {DOAIDE_PRODUCTS.map((p) => (
+            <a
+              key={p.name}
+              href={p.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[var(--da-text-muted)] hover:text-[var(--da-primary)] no-underline transition-colors"
+            >
+              {p.name}
+            </a>
+          ))}
+        </div>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--da-text-muted)]">
+          <p>&copy; {new Date().getFullYear()} Apprend Technologies. All rights reserved.</p>
+          <div className="flex items-center gap-4 sm:gap-6 flex-wrap justify-center">
+            <Link href="/about" className="hover:text-[var(--da-primary)] no-underline transition-colors">About</Link>
+            <Link href="/compare" className="hover:text-[var(--da-primary)] no-underline transition-colors">Compare</Link>
+            <Link href="/tools" className="hover:text-[var(--da-primary)] no-underline transition-colors">Free Tools</Link>
+            <Link href="/blog" className="hover:text-[var(--da-primary)] no-underline transition-colors">Blog</Link>
+            <Link href="/privacy" className="hover:text-[var(--da-primary)] no-underline transition-colors">Privacy</Link>
+            <Link href="/terms" className="hover:text-[var(--da-primary)] no-underline transition-colors">Terms</Link>
+            <a href="https://doaide.com" className="hover:text-[var(--da-primary)] no-underline transition-colors">DoAide</a>
+          </div>
         </div>
       </div>
     </footer>

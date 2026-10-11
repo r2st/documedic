@@ -64,7 +64,7 @@ export default function SafetyPage({ params }: { params: { id: string } }) {
     <div className="space-y-5">
       <Link
         href={`/patients/${id}`}
-        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
+        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[var(--da-primary)] hover:text-[var(--da-primary-light)]"
       >
         <svg
           aria-hidden="true"

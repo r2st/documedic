@@ -34,7 +34,7 @@ const SEVERITY_STYLES: Record<string, string> = {
   hard_block: 'border-red-600 bg-red-950/30 text-red-300',
   critical: 'border-red-500 bg-red-950/30 text-red-300',
   warning: 'border-amber-500 bg-amber-950/30 text-amber-300',
-  info: 'border-[#F0B429] bg-[#F0B429]/10 text-[#F0B429]',
+  info: 'border-[var(--da-primary)] bg-[var(--da-primary-bg)] text-[var(--da-primary)]',
 };
 
 /**
@@ -95,7 +95,7 @@ export function SafetyFlagCard({
         {checkType ? (
           // Not colour-coded. The severity carries the colour, and giving the label its own
           // would compete with it for the same glance.
-          <span className="rounded bg-[#0A0A0B]/60 px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset ring-white/10">
+          <span className="rounded bg-[var(--da-bg)]/60 px-1.5 py-0.5 text-xs font-semibold ring-1 ring-inset ring-[var(--da-border)]">
             {checkTypeLabel(checkType)}
           </span>
         ) : null}

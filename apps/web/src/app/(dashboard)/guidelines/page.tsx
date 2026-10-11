@@ -131,7 +131,7 @@ export default function GuidelinesPage() {
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center rounded-md bg-[#F0B429]/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-[#F0B429] ring-1 ring-inset ring-[#F0B429]/20">
+                      <span className="inline-flex items-center rounded-md bg-[#0D9488]/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-[var(--da-primary)] ring-1 ring-inset ring-[#0D9488]/20">
                         {c.source}
                       </span>
                       <span className="text-sm font-semibold text-[#E5E7EB]">

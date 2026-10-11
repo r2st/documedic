@@ -94,9 +94,9 @@ describe('DashboardLayout', () => {
       </DashboardLayout>,
     );
 
-    expect(screen.getAllByRole('link', { name: 'Patients' })[0].className).toContain('bg-[#F0B429]/10');
+    expect(screen.getAllByRole('link', { name: 'Patients' })[0].className).toContain('bg-[var(--da-primary-bg)]');
     expect(screen.getAllByRole('link', { name: 'Metrics' })[0].className).not.toContain(
-      'bg-[#F0B429]/10',
+      'bg-[var(--da-primary-bg)]',
     );
   });
 

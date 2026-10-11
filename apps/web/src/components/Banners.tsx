@@ -123,7 +123,7 @@ export function SessionExpiryBanner() {
         <button
           type="button"
           onClick={() => void refresh()}
-          className="rounded-lg bg-[#F0B429] px-3 py-1 text-xs font-semibold text-[#0A0A0B] hover:bg-[#F7D070]"
+          className="rounded-lg bg-[var(--da-primary)] px-3 py-1 text-xs font-semibold text-[var(--da-text-on-primary)] hover:bg-[var(--da-primary-hover)]"
         >
           Stay signed in
         </button>

@@ -9,7 +9,7 @@ const THEMES = ['dark', 'light', 'auto'] as const;
 export function EmbedGenerator() {
   const [position, setPosition] = useState<(typeof POSITIONS)[number]>('bottom-right');
   const [theme, setTheme] = useState<(typeof THEMES)[number]>('dark');
-  const [brandColor, setBrandColor] = useState('#F0B429');
+  const [brandColor, setBrandColor] = useState('#0D9488');
   const [copied, setCopied] = useState(false);
 
   const snippet = `<script

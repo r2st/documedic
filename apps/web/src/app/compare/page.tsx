@@ -125,7 +125,7 @@ export default function ComparePage() {
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-[var(--doaide-text-muted)] border-b-2 border-[var(--doaide-border)]">
                   Feature
                 </th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-[var(--doaide-gold)] border-b-2 border-[var(--doaide-gold)] bg-[rgba(240,180,41,0.05)]">
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-[var(--doaide-gold)] border-b-2 border-[var(--doaide-gold)] bg-[rgba(13,148,136,0.05)]">
                   DoAide Med
                 </th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-[var(--doaide-text-muted)] border-b-2 border-[var(--doaide-border)]">
@@ -145,7 +145,7 @@ export default function ComparePage() {
                   <td className="py-3 px-4 font-semibold text-[var(--doaide-text)] border-b border-[var(--doaide-border)]">
                     {row.feature}
                   </td>
-                  <td className="py-3 px-4 border-b border-[var(--doaide-border)] bg-[rgba(240,180,41,0.03)]">
+                  <td className="py-3 px-4 border-b border-[var(--doaide-border)] bg-[rgba(13,148,136,0.03)]">
                     <Badge ok={row.doaide.ok} />
                     <span className="ml-2 text-[var(--doaide-text-secondary)]">{row.doaide.text}</span>
                   </td>

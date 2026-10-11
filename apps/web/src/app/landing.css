@@ -1,17 +1,18 @@
-/* DoAide Split Landing — 409A template adapted for Med */
-
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap');
+/* DoAide Split Landing — Unified teal theme */
 
 .landing-root {
-  --gold: #F0B429;
-  --gold-hover: #F7CC5F;
-  --gold-dim: rgba(240, 180, 41, 0.15);
-  --bg: #0A0A0B;
-  --bg-card: rgba(16, 16, 18, 0.8);
-  --border: rgba(255, 255, 255, 0.07);
-  --text: #E5E7EB;
-  --text-secondary: #9CA3AF;
-  --text-muted: #6B7280;
+  --teal: #0D9488;
+  --teal-hover: #0F766E;
+  --teal-light: #2DD4BF;
+  --teal-dim: rgba(13, 148, 136, 0.15);
+  --bg: var(--da-bg, #FFFFFF);
+  --bg-card: var(--da-surface, #F9FAFB);
+  --border: var(--da-border, #E5E7EB);
+  --text: var(--da-text, #111827);
+  --text-secondary: var(--da-text-secondary, #6B7280);
+  --text-muted: var(--da-text-muted, #9CA3AF);
+  --pip-node-bg: var(--da-surface, #F9FAFB);
+  --pip-node-stroke: var(--da-border, #E5E7EB);
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
@@ -21,13 +22,11 @@
   overflow-x: hidden;
 }
 
-/* ── Particles ── */
-
-.landing-particles {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
+@media (prefers-color-scheme: dark) {
+  .landing-root {
+    --pip-node-bg: rgba(16, 16, 18, 0.8);
+    --pip-node-stroke: rgba(45, 212, 191, 0.2);
+  }
 }
 
 /* ── Fade-in ── */
@@ -65,15 +64,43 @@
 }
 
 .landing-brand-text {
-  font-family: 'Instrument Serif', Georgia, serif;
-  font-size: 24px;
-  font-weight: 400;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
   letter-spacing: -0.3px;
 }
 
-.landing-brand-text em {
-  color: var(--gold);
-  font-style: italic;
+.landing-brand-sep {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.landing-brand-product {
+  color: var(--teal);
+}
+
+/* ── DoAide Badge ── */
+
+.landing-doaide-badge {
+  display: inline-block;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--teal);
+  background: var(--teal-dim);
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  border-radius: 6px;
+  padding: 4px 12px;
+  margin-bottom: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .landing-doaide-badge {
+    color: var(--teal-light);
+    background: rgba(45, 212, 191, 0.1);
+    border-color: rgba(45, 212, 191, 0.2);
+  }
 }
 
 /* ── Split Layout ── */
@@ -104,33 +131,6 @@
   flex-shrink: 0;
 }
 
-/* ── Robot ── */
-
-.landing-robot-wrap {
-  margin-bottom: 32px;
-  animation: landing-float 4s ease-in-out infinite;
-  filter: drop-shadow(0 0 40px rgba(240, 180, 41, 0.25));
-}
-
-.landing-hero-robot {
-  width: 160px;
-  height: 128px;
-}
-
-.landing-antenna-glow {
-  animation: landing-pulse 2s ease-in-out infinite;
-}
-
-@keyframes landing-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-14px); }
-}
-
-@keyframes landing-pulse {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
-}
-
 /* ── Headline ── */
 
 .landing-headline {
@@ -138,13 +138,13 @@
   font-size: clamp(36px, 4.5vw, 56px);
   font-weight: 400;
   line-height: 1.1;
-  color: #fff;
+  color: var(--text);
   margin: 0 0 16px;
 }
 
 .landing-headline em {
   font-style: italic;
-  color: var(--gold);
+  color: var(--teal);
 }
 
 /* ── Subtitle ── */
@@ -167,32 +167,12 @@
   flex-wrap: wrap;
 }
 
-.landing-cta-secondary {
-  display: inline-flex;
-  align-items: center;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--gold);
-  border: 1px solid var(--gold);
-  background: transparent;
-  text-decoration: none;
-  transition: background 200ms, color 200ms;
-}
-
-.landing-cta-secondary:hover {
-  background: var(--gold);
-  color: #0A0A0B;
-}
-
 .landing-cta-tertiary {
   display: inline-flex;
   align-items: center;
   padding: 10px 20px;
   border-radius: 8px;
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
@@ -203,8 +183,8 @@
 }
 
 .landing-cta-tertiary:hover {
-  color: var(--gold);
-  border-color: var(--gold);
+  color: var(--teal);
+  border-color: var(--teal);
 }
 
 /* ── Pipeline ── */
@@ -226,7 +206,7 @@
 }
 
 .landing-pipeline-node:hover {
-  filter: drop-shadow(0 0 8px rgba(240, 180, 41, 0.4));
+  filter: drop-shadow(0 0 8px rgba(13, 148, 136, 0.4));
 }
 
 /* ── Typewriter ── */
@@ -234,7 +214,7 @@
 .landing-typewriter {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 15px;
-  color: var(--gold);
+  color: var(--teal);
   height: 24px;
   display: flex;
   align-items: center;
@@ -248,7 +228,7 @@
   display: inline-block;
   width: 2px;
   height: 18px;
-  background: var(--gold);
+  background: var(--teal);
   margin-left: 2px;
   animation: landing-blink 0.8s step-end infinite;
 }
@@ -262,14 +242,20 @@
 
 .landing-auth-card {
   background: var(--bg-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border);
   border-radius: 24px;
   padding: 32px;
-  box-shadow:
-    0 1px 0 0 rgba(255, 255, 255, 0.04) inset,
-    0 16px 48px -12px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 8px 24px -12px rgba(0,0,0,0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .landing-auth-card {
+    background: rgba(16, 16, 18, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-color: rgba(255, 255, 255, 0.07);
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px -12px rgba(0, 0, 0, 0.8);
+  }
 }
 
 /* ── Auth Tabs ── */
@@ -278,7 +264,7 @@
   display: flex;
   gap: 0;
   margin-bottom: 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--border);
 }
 
 .landing-auth-tab {
@@ -286,7 +272,7 @@
   background: none;
   border: none;
   padding: 10px 0 12px;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 14px;
   font-weight: 500;
   color: var(--text-muted);
@@ -300,7 +286,7 @@
 }
 
 .landing-auth-tab-active {
-  color: #fff;
+  color: var(--text);
 }
 
 .landing-auth-tab-active::after {
@@ -310,7 +296,7 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--gold);
+  background: var(--teal);
   border-radius: 1px;
 }
 
@@ -322,14 +308,22 @@
 }
 
 .landing-auth-error {
-  background: rgba(248, 113, 113, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.25);
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.2);
   border-radius: 8px;
   padding: 10px 14px;
   margin-bottom: 16px;
   font-size: 13px;
-  color: #f87171;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  color: #DC2626;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .landing-auth-error {
+    background: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.25);
+    color: #f87171;
+  }
 }
 
 .landing-auth-field {
@@ -343,7 +337,7 @@
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--text-muted);
   margin-bottom: 6px;
 }
 
@@ -352,41 +346,42 @@
   font-weight: 400;
   text-transform: none;
   letter-spacing: normal;
-  color: rgba(255, 255, 255, 0.2);
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 
 .landing-auth-input {
   width: 100%;
-  background: rgba(10, 10, 11, 0.6) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: var(--da-bg-alt, #F3F4F6) !important;
+  border: 1px solid var(--border) !important;
   border-radius: 8px !important;
   padding: 10px 14px !important;
   font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
   font-size: 14px !important;
-  color: #fff !important;
+  color: var(--text) !important;
   outline: none;
   transition: border-color 150ms ease;
   box-sizing: border-box;
 }
 
 .landing-auth-input::placeholder {
-  color: rgba(255, 255, 255, 0.25) !important;
+  color: var(--text-muted) !important;
 }
 
 .landing-auth-input:focus {
-  border-color: rgba(240, 180, 41, 0.5) !important;
-  box-shadow: none !important;
+  border-color: var(--teal) !important;
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.15) !important;
   outline: none;
 }
 
 .landing-auth-button {
   width: 100%;
-  background: var(--gold);
-  color: #0A0A0B;
+  background: var(--teal);
+  color: #fff;
   border: none;
   border-radius: 8px;
   padding: 10px 16px;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -395,7 +390,7 @@
 }
 
 .landing-auth-button:hover:not(:disabled) {
-  background: var(--gold-hover);
+  background: var(--teal-hover);
 }
 
 .landing-auth-button:disabled {
@@ -426,7 +421,7 @@
   position: relative;
   z-index: 5;
   padding: 32px 32px 24px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--border);
   opacity: 0;
   transform: translateY(8px);
   transition: opacity 0.6s ease 0.3s, transform 0.6s ease 0.3s;
@@ -442,14 +437,14 @@
 
 .landing-footer-link {
   color: var(--text-muted) !important;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 12px;
   text-decoration: none !important;
   transition: color 150ms;
 }
 
 .landing-footer-link:hover {
-  color: var(--gold) !important;
+  color: var(--teal) !important;
 }
 
 .landing-footer-bottom {
@@ -464,19 +459,19 @@
   align-items: center;
   gap: 6px;
   color: var(--text-muted) !important;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 12px;
   text-decoration: none !important;
   transition: color 150ms;
 }
 
 .landing-footer-home:hover {
-  color: var(--gold) !important;
+  color: var(--teal) !important;
 }
 
 .landing-footer-copy {
   color: var(--text-muted);
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 12px;
 }
 
@@ -555,7 +550,6 @@
     flex: 0;
   }
 
-  .landing-robot-wrap { display: none; }
   .landing-pipeline { display: none; }
   .landing-typewriter { display: none; }
   .landing-subtitle { display: none; }
@@ -563,6 +557,10 @@
   .landing-headline {
     font-size: 1.5rem;
     margin: 0 0 12px;
+  }
+
+  .landing-doaide-badge {
+    margin-bottom: 16px;
   }
 
   .landing-cta-row {
@@ -682,8 +680,8 @@
 }
 
 .landing-header-link {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 12px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-muted) !important;
   text-decoration: none !important;
@@ -691,7 +689,7 @@
 }
 
 .landing-header-link:hover {
-  color: var(--gold) !important;
+  color: var(--teal) !important;
 }
 
 /* ── Primary CTA ── */
@@ -701,20 +699,20 @@
   align-items: center;
   padding: 12px 24px;
   border-radius: 8px;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 14px;
   font-weight: 600;
-  color: #0A0A0B;
-  background: var(--gold);
+  color: #fff;
+  background: var(--teal);
   border: none;
   text-decoration: none;
   transition: background 200ms;
-  box-shadow: 0 0 20px rgba(240, 180, 41, 0.25);
+  box-shadow: 0 0 20px rgba(13, 148, 136, 0.2);
 }
 
 .landing-cta-primary:hover {
-  background: var(--gold-hover);
-  box-shadow: 0 0 30px rgba(240, 180, 41, 0.35);
+  background: var(--teal-hover);
+  box-shadow: 0 0 30px rgba(13, 148, 136, 0.3);
 }
 
 /* ── Trust Bar ── */
@@ -748,7 +746,7 @@
   font-family: 'Instrument Serif', Georgia, serif;
   font-size: 22px;
   font-weight: 400;
-  color: var(--gold);
+  color: var(--teal);
 }
 
 .landing-trust-label {
@@ -794,7 +792,7 @@
 }
 
 .landing-feature-title {
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -829,7 +827,7 @@
 }
 
 .landing-testimonial-text {
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -844,7 +842,7 @@
 }
 
 .landing-testimonial-name {
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -860,14 +858,14 @@
 
 .landing-footer-legal {
   color: var(--text-muted) !important;
-  font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 11px;
   text-decoration: none !important;
   transition: color 150ms;
 }
 
 .landing-footer-legal:hover {
-  color: var(--gold) !important;
+  color: var(--teal) !important;
 }
 
 /* ── Fade-in for new sections ── */
@@ -890,8 +888,6 @@
 /* ── Reduced Motion ── */
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-robot-wrap,
-  .landing-antenna-glow,
   .landing-cursor {
     animation: none !important;
   }

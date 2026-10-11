@@ -1,45 +1,188 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Schibsted+Grotesk:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+/*
+ * DoAide Unified Theme v5.0 — Med
+ * White/light default, system theme detection, teal primary accent.
+ *
+ * Products: Desk · Pulse · 409A · AutoApply · Realty · Med
+ * Fonts: Inter (UI) · Instrument Serif (display) · IBM Plex Mono (data)
+ * Primary: Teal #0D9488 (light) / #2DD4BF (dark)
+ */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+/* ── Light mode (default) ─────────────────────────────────── */
 :root {
-  --doaide-bg: #0A0A0B; --doaide-bg-alt: #111113; --doaide-surface: #1A1A1D;
-  --doaide-surface-hover: #222225; --doaide-border: #2A2A2D; --doaide-border-light: #333336;
-  --doaide-gold: #F0B429; --doaide-gold-hover: #D4A017; --doaide-gold-light: #F7CC5F;
-  --doaide-gold-dim: #8B6914; --doaide-gold-bg: rgba(240,180,41,0.1);
-  --doaide-text: #E5E7EB; --doaide-text-secondary: #9CA3AF; --doaide-text-muted: #6B7280;
-  --doaide-text-on-gold: #0A0A0B;
-  --doaide-success: #34D399; --doaide-error: #F87171; --doaide-warning: #FBBF24; --doaide-info: #60A5FA;
-  --doaide-font: 'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
-  --doaide-font-display: 'Instrument Serif', Georgia, serif;
-  --doaide-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
-  --doaide-shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --doaide-shadow-md: 0 4px 6px rgba(0,0,0,0.4);
-  --doaide-shadow-lg: 0 10px 15px rgba(0,0,0,0.5); --doaide-shadow-gold: 0 0 20px rgba(240,180,41,0.15);
-  --doaide-radius-sm: 6px; --doaide-radius-md: 8px; --doaide-radius-lg: 12px; --doaide-radius-xl: 16px;
-  --doaide-transition: 150ms ease;
+  color-scheme: light;
+
+  /* DoAide unified design-system tokens */
+  --da-primary:          #0D9488;
+  --da-primary-hover:    #0F766E;
+  --da-primary-light:    #2DD4BF;
+  --da-primary-dim:      #115E59;
+  --da-primary-bg:       rgba(13, 148, 136, 0.1);
+  --da-primary-bg-hover: rgba(13, 148, 136, 0.15);
+  --da-bg:               #FFFFFF;
+  --da-bg-alt:           #F3F4F6;
+  --da-surface:          #F9FAFB;
+  --da-surface-hover:    #F3F4F6;
+  --da-border:           #E5E7EB;
+  --da-border-light:     #D1D5DB;
+  --da-text:             #111827;
+  --da-text-secondary:   #6B7280;
+  --da-text-muted:       #9CA3AF;
+  --da-text-on-primary:  #FFFFFF;
+  --da-success:          #059669;
+  --da-error:            #DC2626;
+  --da-warning:          #D97706;
+  --da-info:             #2563EB;
+
+  --da-font:         'Inter', system-ui, -apple-system, sans-serif;
+  --da-font-display: 'Instrument Serif', Georgia, serif;
+  --da-font-mono:    'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  --da-shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.06);
+  --da-shadow-md:    0 4px 6px rgba(0, 0, 0, 0.08);
+  --da-shadow-lg:    0 10px 15px rgba(0, 0, 0, 0.1);
+  --da-shadow-brand: 0 0 20px rgba(13, 148, 136, 0.15);
+  --da-radius-sm: 6px;
+  --da-radius-md: 8px;
+  --da-radius-lg: 12px;
+  --da-radius-xl: 16px;
+  --da-transition: 150ms ease;
+
+  /* Legacy aliases for backward compatibility */
+  --doaide-bg:             var(--da-bg);
+  --doaide-bg-alt:         var(--da-bg-alt);
+  --doaide-surface:        var(--da-surface);
+  --doaide-surface-hover:  var(--da-surface-hover);
+  --doaide-border:         var(--da-border);
+  --doaide-border-light:   var(--da-border-light);
+  --doaide-gold:           var(--da-primary);
+  --doaide-gold-hover:     var(--da-primary-hover);
+  --doaide-gold-light:     var(--da-primary-light);
+  --doaide-gold-dim:       var(--da-primary-dim);
+  --doaide-gold-bg:        var(--da-primary-bg);
+  --doaide-gold-bg-hover:  var(--da-primary-bg-hover);
+  --doaide-text:           var(--da-text);
+  --doaide-text-secondary: var(--da-text-secondary);
+  --doaide-text-muted:     var(--da-text-muted);
+  --doaide-text-on-gold:   var(--da-text-on-primary);
+  --doaide-success:        var(--da-success);
+  --doaide-error:          var(--da-error);
+  --doaide-warning:        var(--da-warning);
+  --doaide-info:           var(--da-info);
+
+  --doaide-font:         var(--da-font);
+  --doaide-font-display: var(--da-font-display);
+  --doaide-font-mono:    var(--da-font-mono);
+  --doaide-shadow-sm:    var(--da-shadow-sm);
+  --doaide-shadow-md:    var(--da-shadow-md);
+  --doaide-shadow-lg:    var(--da-shadow-lg);
+  --doaide-shadow-gold:  var(--da-shadow-brand);
+  --doaide-radius-sm:    var(--da-radius-sm);
+  --doaide-radius-md:    var(--da-radius-md);
+  --doaide-radius-lg:    var(--da-radius-lg);
+  --doaide-radius-xl:    var(--da-radius-xl);
+  --doaide-transition:   var(--da-transition);
 }
-html { color-scheme: dark !important; }
-body { background-color: var(--doaide-bg) !important; color: var(--doaide-text) !important; font-family: var(--doaide-font) !important; -webkit-font-smoothing: antialiased; }
+
+/* ── Dark mode ─────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --da-primary:          #2DD4BF;
+    --da-primary-hover:    #5EEAD4;
+    --da-primary-light:    #99F6E4;
+    --da-primary-dim:      #0D9488;
+    --da-primary-bg:       rgba(45, 212, 191, 0.1);
+    --da-primary-bg-hover: rgba(45, 212, 191, 0.15);
+    --da-bg:               #0A0A0B;
+    --da-bg-alt:           #111113;
+    --da-surface:          #1A1A1D;
+    --da-surface-hover:    #222225;
+    --da-border:           #2A2A2D;
+    --da-border-light:     #333336;
+    --da-text:             #E5E7EB;
+    --da-text-secondary:   #9CA3AF;
+    --da-text-muted:       #6B7280;
+    --da-text-on-primary:  #0A0A0B;
+    --da-success:          #34D399;
+    --da-error:            #F87171;
+    --da-warning:          #FBBF24;
+    --da-info:             #60A5FA;
+    --da-shadow-sm:        0 1px 2px rgba(0, 0, 0, 0.3);
+    --da-shadow-md:        0 4px 6px rgba(0, 0, 0, 0.4);
+    --da-shadow-lg:        0 10px 15px rgba(0, 0, 0, 0.5);
+    --da-shadow-brand:     0 0 20px rgba(45, 212, 191, 0.15);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --da-primary:          #2DD4BF;
+  --da-primary-hover:    #5EEAD4;
+  --da-primary-light:    #99F6E4;
+  --da-primary-dim:      #0D9488;
+  --da-primary-bg:       rgba(45, 212, 191, 0.1);
+  --da-primary-bg-hover: rgba(45, 212, 191, 0.15);
+  --da-bg:               #0A0A0B;
+  --da-bg-alt:           #111113;
+  --da-surface:          #1A1A1D;
+  --da-surface-hover:    #222225;
+  --da-border:           #2A2A2D;
+  --da-border-light:     #333336;
+  --da-text:             #E5E7EB;
+  --da-text-secondary:   #9CA3AF;
+  --da-text-muted:       #6B7280;
+  --da-text-on-primary:  #0A0A0B;
+  --da-success:          #34D399;
+  --da-error:            #F87171;
+  --da-warning:          #FBBF24;
+  --da-info:             #60A5FA;
+  --da-shadow-sm:        0 1px 2px rgba(0, 0, 0, 0.3);
+  --da-shadow-md:        0 4px 6px rgba(0, 0, 0, 0.4);
+  --da-shadow-lg:        0 10px 15px rgba(0, 0, 0, 0.5);
+  --da-shadow-brand:     0 0 20px rgba(45, 212, 191, 0.15);
+}
+
+body {
+  background-color: var(--da-bg) !important;
+  color: var(--da-text) !important;
+  font-family: var(--da-font) !important;
+  -webkit-font-smoothing: antialiased;
+}
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--doaide-bg); }
-::-webkit-scrollbar-thumb { background: var(--doaide-border); border-radius: 4px; }
-a:not([class*="text-"]) { color: var(--doaide-gold); } a:not([class*="text-"]):hover { color: var(--doaide-gold-light); }
-button[class*="primary"], .btn-primary, [class*="bg-indigo"], [class*="bg-blue-6"], [class*="bg-purple"], [class*="bg-brand"] { background-color: var(--doaide-gold) !important; color: var(--doaide-text-on-gold) !important; border-color: var(--doaide-gold) !important; }
-[class*="bg-white"], [class*="bg-gray-50"], [class*="bg-gray-100"], [class*="bg-slate-50"], [class*="bg-slate-100"] { background-color: var(--doaide-surface) !important; }
-[class*="bg-gray-200"], [class*="bg-slate-200"] { background-color: var(--doaide-surface-hover) !important; }
-[class*="border-gray"], [class*="border-slate"], [class*="divide-gray"], [class*="divide-slate"] { border-color: var(--doaide-border) !important; }
-[class*="text-gray-900"], [class*="text-gray-800"], [class*="text-slate-900"], [class*="text-slate-800"], [class*="text-black"] { color: var(--doaide-text) !important; }
-[class*="text-gray-700"], [class*="text-gray-600"], [class*="text-slate-700"], [class*="text-slate-600"] { color: var(--doaide-text) !important; }
-[class*="text-gray-500"], [class*="text-gray-400"], [class*="text-slate-500"], [class*="text-slate-400"] { color: var(--doaide-text-secondary) !important; }
-[class*="text-indigo"], [class*="text-blue-6"], [class*="text-purple"], [class*="text-brand"] { color: var(--doaide-gold) !important; }
-input, textarea, select { background-color: var(--doaide-bg-alt) !important; border-color: var(--doaide-border) !important; color: var(--doaide-text) !important; }
-input:focus, textarea:focus, select:focus { border-color: var(--doaide-gold) !important; box-shadow: 0 0 0 2px var(--doaide-gold-bg) !important; }
-input::placeholder, textarea::placeholder { color: var(--doaide-text-muted) !important; }
-table { border-color: var(--doaide-border) !important; }
-thead, th { background-color: var(--doaide-surface) !important; color: var(--doaide-text-secondary) !important; }
-td { border-color: var(--doaide-border) !important; }
-tbody tr:hover { background-color: var(--doaide-surface) !important; }
-[class*="dropdown"], [class*="popover"], [role="menu"], [role="listbox"] { background-color: var(--doaide-surface) !important; border-color: var(--doaide-border) !important; }
-[class*="modal"], [class*="dialog"], [role="dialog"] { background-color: var(--doaide-bg-alt) !important; border-color: var(--doaide-border) !important; }
-nav, [class*="sidebar"], [class*="nav-"] { background-color: var(--doaide-bg) !important; border-color: var(--doaide-border) !important; }
-[class*="tooltip"] { background-color: var(--doaide-surface) !important; color: var(--doaide-text) !important; }
-[class*="badge"] { background-color: var(--doaide-gold-bg) !important; color: var(--doaide-gold) !important; }
-::selection { background-color: var(--doaide-gold) !important; color: var(--doaide-text-on-gold) !important; }
+::-webkit-scrollbar-track { background: var(--da-bg); }
+::-webkit-scrollbar-thumb { background: var(--da-border); border-radius: 4px; }
+a:not([class*="text-"]) { color: var(--da-primary); } a:not([class*="text-"]):hover { color: var(--da-primary-hover); }
+button[class*="primary"], .btn-primary, [class*="bg-indigo"], [class*="bg-blue-6"], [class*="bg-purple"], [class*="bg-brand"] { background-color: var(--da-primary) !important; color: var(--da-text-on-primary) !important; border-color: var(--da-primary) !important; }
+[class*="bg-white"], [class*="bg-gray-50"], [class*="bg-gray-100"], [class*="bg-slate-50"], [class*="bg-slate-100"] { background-color: var(--da-surface) !important; }
+[class*="bg-gray-200"], [class*="bg-slate-200"] { background-color: var(--da-surface-hover) !important; }
+[class*="border-gray"], [class*="border-slate"], [class*="divide-gray"], [class*="divide-slate"] { border-color: var(--da-border) !important; }
+[class*="text-gray-900"], [class*="text-gray-800"], [class*="text-slate-900"], [class*="text-slate-800"], [class*="text-black"] { color: var(--da-text) !important; }
+[class*="text-gray-700"], [class*="text-gray-600"], [class*="text-slate-700"], [class*="text-slate-600"] { color: var(--da-text) !important; }
+[class*="text-gray-500"], [class*="text-gray-400"], [class*="text-slate-500"], [class*="text-slate-400"] { color: var(--da-text-secondary) !important; }
+[class*="text-indigo"], [class*="text-blue-6"], [class*="text-purple"], [class*="text-brand"] { color: var(--da-primary) !important; }
+input, textarea, select { background-color: var(--da-bg-alt) !important; border-color: var(--da-border) !important; color: var(--da-text) !important; }
+input:focus, textarea:focus, select:focus { border-color: var(--da-primary) !important; box-shadow: 0 0 0 2px var(--da-primary-bg) !important; }
+input::placeholder, textarea::placeholder { color: var(--da-text-muted) !important; }
+table { border-color: var(--da-border) !important; }
+thead, th { background-color: var(--da-surface) !important; color: var(--da-text-secondary) !important; }
+td { border-color: var(--da-border) !important; }
+tbody tr:hover { background-color: var(--da-surface) !important; }
+[class*="dropdown"], [class*="popover"], [role="menu"], [role="listbox"] { background-color: var(--da-surface) !important; border-color: var(--da-border) !important; }
+[class*="modal"], [class*="dialog"], [role="dialog"] { background-color: var(--da-bg-alt) !important; border-color: var(--da-border) !important; }
+nav, [class*="sidebar"], [class*="nav-"] { background-color: var(--da-bg) !important; border-color: var(--da-border) !important; }
+[class*="tooltip"] { background-color: var(--da-surface) !important; color: var(--da-text) !important; }
+[class*="badge"] { background-color: var(--da-primary-bg) !important; color: var(--da-primary) !important; }
+::selection { background-color: var(--da-primary) !important; color: var(--da-text-on-primary) !important; }
 [class*="backdrop"], [class*="overlay"] { background-color: rgba(0,0,0,0.7) !important; }
+
+/* ── Utility classes (shared DoAide design system) ─────────── */
+.doaide-gold    { color: var(--da-primary); }
+.doaide-gold-bg { background-color: var(--da-primary); color: var(--da-text-on-primary); }
+.doaide-surface { background-color: var(--da-surface); }
+.doaide-card {
+  background-color: var(--da-surface);
+  border: 1px solid var(--da-border);
+  border-radius: var(--da-radius-lg);
+}

@@ -129,10 +129,10 @@ export default function PatientsPage() {
         patients.length > 0 && <PatientList patients={patients} />
       ) : patients.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#2A2A2D] bg-[#1A1A1D] py-16 text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#F0B429]/10">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#0D9488]/10">
             <svg
               aria-hidden="true"
-              className="h-7 w-7 text-[#F0B429]"
+              className="h-7 w-7 text-[var(--da-primary)]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
@@ -161,16 +161,16 @@ function PatientList({ patients }: { patients: PatientSummary[] }) {
       {patients.map((p) => (
         <li key={p.id} className="animate-fade-in">
           <Link href={`/patients/${p.id}`} className="block group">
-            <Card className="transition-all duration-200 group-hover:border-[#F0B429]/30 group-hover:shadow-card-hover">
+            <Card className="transition-all duration-200 group-hover:border-[var(--da-primary)]/30 group-hover:shadow-card-hover">
               <div className="flex items-center gap-4">
                 <div
                   aria-hidden="true"
-                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#F0B429]/10 text-sm font-semibold text-[#F0B429] group-hover:bg-[#F0B429]/15 transition-colors"
+                  className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#0D9488]/10 text-sm font-semibold text-[var(--da-primary)] group-hover:bg-[#0D9488]/15 transition-colors"
                 >
                   {p.full_name?.[0]?.toUpperCase() ?? '?'}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-[#E5E7EB] group-hover:text-[#F0B429] transition-colors">
+                  <p className="font-semibold text-[#E5E7EB] group-hover:text-[var(--da-primary)] transition-colors">
                     {p.full_name}
                   </p>
                   <p className="text-sm text-[#9CA3AF]">
@@ -180,7 +180,7 @@ function PatientList({ patients }: { patients: PatientSummary[] }) {
                 </div>
                 <svg
                   aria-hidden="true"
-                  className="h-5 w-5 flex-shrink-0 text-[#6B7280] group-hover:text-[#F0B429] transition-colors"
+                  className="h-5 w-5 flex-shrink-0 text-[#6B7280] group-hover:text-[var(--da-primary)] transition-colors"
                   fill="none"
                   viewBox="0 0 24 24"
                   strokeWidth={2}
@@ -310,7 +310,7 @@ function CreatePatientForm({ onCreated }: { onCreated: () => void }) {
             type="checkbox"
             checked={consent}
             onChange={(e) => setConsent(e.target.checked)}
-            className="h-4 w-4 rounded border-[#2A2A2D] text-[#F0B429] focus:ring-[#F0B429]"
+            className="h-4 w-4 rounded border-[#2A2A2D] text-[var(--da-primary)] focus:ring-[var(--da-primary)]"
           />
           <span className="text-[#9CA3AF]">
             Patient consent obtained for data processing (required — DPDP Act)

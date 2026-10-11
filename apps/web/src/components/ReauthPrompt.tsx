@@ -90,7 +90,7 @@ export function ReauthPrompt({
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="min-w-[14rem] flex-1 rounded-lg border border-[#2A2A2D] bg-[#111113] px-3 py-2 text-sm text-[#E5E7EB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F0B429]"
+          className="min-w-[14rem] flex-1 rounded-lg border border-[#2A2A2D] bg-[#111113] px-3 py-2 text-sm text-[#E5E7EB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--da-primary)]"
           aria-describedby={error ? 'reauth-error' : undefined}
           aria-invalid={error ? true : undefined}
         />

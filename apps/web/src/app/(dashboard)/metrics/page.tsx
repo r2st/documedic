@@ -10,7 +10,7 @@ import { Button, Card, ErrorBanner, LoadingBlock, Skeleton } from '@aether/ui';
 // TypeScript rejects an unknown metric label at the call site instead of silently
 // falling back to a default colour at runtime.
 const METRIC_COLORS = {
-  Sessions: 'border-t-[#F0B429]',
+  Sessions: 'border-t-[var(--da-primary)]',
   'Hard blocks': 'border-t-red-500',
   "Can't-miss flags": 'border-t-amber-500',
   'Awaiting review': 'border-t-purple-500',

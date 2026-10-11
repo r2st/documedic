@@ -1,31 +1,31 @@
 const CROSS_LINKS: Record<string, { href: string; label: string; text: string }[]> = {
   tools: [
     {
-      href: 'https://comply.doaide.com',
-      label: 'Compliance Tracker',
-      text: 'Ensure compliance with healthcare regulations and track deadlines',
+      href: 'https://gst.doaide.com',
+      label: 'DoAide GST',
+      text: 'GST filing, compliance and tax management tools',
     },
     {
-      href: 'https://write.doaide.com',
-      label: 'DoAide Write',
-      text: 'Generate professional medical documents and clinical reports',
+      href: 'https://pulse.doaide.com',
+      label: 'DoAide Pulse',
+      text: 'Email marketing and newsletter management platform',
     },
     {
-      href: 'https://fincalc.doaide.com',
-      label: 'Financial Calculators',
-      text: 'Healthcare cost estimators and financial planning tools',
+      href: 'https://desk.doaide.com',
+      label: 'DoAide Desk',
+      text: 'Help desk and customer support tools',
     },
   ],
   blog: [
     {
-      href: 'https://comply.doaide.com',
-      label: 'Compliance Tracker',
-      text: 'Track healthcare compliance requirements and regulatory deadlines',
+      href: 'https://gst.doaide.com',
+      label: 'DoAide GST',
+      text: 'GST filing and compliance for Indian businesses',
     },
     {
-      href: 'https://contracts.doaide.com',
-      label: 'Contract Generator',
-      text: 'Draft healthcare provider agreements and patient consent forms',
+      href: 'https://409a.doaide.com',
+      label: 'DoAide 409A',
+      text: '409A valuations for startups and private companies',
     },
   ],
 };
@@ -35,10 +35,10 @@ export function CrossProductLinks({ page }: { page: string }) {
   if (!links) return null;
 
   return (
-    <aside className="mt-12 border-t border-[var(--doaide-border)] pt-8" aria-label="Explore more DoAide tools">
+    <aside className="mt-12 border-t border-[var(--da-border)] pt-8" aria-label="Explore more DoAide tools">
       <h3
-        className="mb-4 text-lg font-semibold text-[var(--doaide-text)]"
-        style={{ fontFamily: 'var(--doaide-font-display)' }}
+        className="mb-4 text-lg font-semibold text-[var(--da-text)]"
+        style={{ fontFamily: 'var(--da-font-display)' }}
       >
         Explore More Tools
       </h3>
@@ -49,15 +49,15 @@ export function CrossProductLinks({ page }: { page: string }) {
             href={link.href}
             target="_blank"
             rel="noopener noreferrer"
-            className="group relative flex flex-col gap-1 rounded-xl border border-[var(--doaide-border)] bg-[var(--doaide-surface)] p-4 no-underline transition-all hover:border-[var(--doaide-gold)] hover:shadow-[var(--doaide-shadow-gold)]"
+            className="group relative flex flex-col gap-1 rounded-xl border border-[var(--da-border)] bg-[var(--da-surface)] p-4 no-underline transition-all hover:border-[var(--da-primary)] hover:shadow-[var(--da-shadow-brand)]"
           >
-            <strong className="text-sm text-[var(--doaide-gold)] group-hover:text-[var(--doaide-gold-light)]">
+            <strong className="text-sm text-[var(--da-primary)] group-hover:text-[var(--da-primary-hover)]">
               {link.label}
             </strong>
-            <span className="text-xs leading-relaxed text-[var(--doaide-text-secondary)]">
+            <span className="text-xs leading-relaxed text-[var(--da-text-secondary)]">
               {link.text}
             </span>
-            <span className="absolute right-3 top-3 text-xs text-[var(--doaide-text-muted)]" aria-hidden="true">
+            <span className="absolute right-3 top-3 text-xs text-[var(--da-text-muted)]" aria-hidden="true">
               ↗
             </span>
           </a>

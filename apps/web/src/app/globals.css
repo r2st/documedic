@@ -4,12 +4,7 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
-}
-
 body {
-  @apply bg-[#0A0A0B] text-[#E5E7EB] antialiased;
   font-feature-settings: 'cv11', 'ss01';
 }
 
@@ -22,7 +17,13 @@ body {
 
 /* --- Focus ring utility --- */
 *:focus-visible {
-  @apply outline-none ring-2 ring-[#F0B429] ring-offset-2 ring-offset-[#0A0A0B];
+  @apply outline-none ring-2 ring-[#0D9488] ring-offset-2 ring-offset-white;
+}
+
+@media (prefers-color-scheme: dark) {
+  *:focus-visible {
+    @apply ring-[#2DD4BF] ring-offset-[#0A0A0B];
+  }
 }
 
 /* --- Form inputs global styling --- */
@@ -35,11 +36,11 @@ input[type='number'],
 input[type='search'],
 select,
 textarea {
-  @apply rounded-lg border border-[#2A2A2D] bg-[#111113] px-3.5 py-2.5 text-sm text-[#E5E7EB]
-    placeholder:text-[#6B7280]
+  @apply rounded-lg border border-[var(--da-border)] bg-[var(--da-bg-alt)] px-3.5 py-2.5 text-sm text-[var(--da-text)]
+    placeholder:text-[var(--da-text-muted)]
     transition-colors duration-150
-    hover:border-[#333336]
-    focus:border-[#F0B429] focus:ring-2 focus:ring-[#F0B429]/20 focus:outline-none;
+    hover:border-[var(--da-border-light)]
+    focus:border-[var(--da-primary)] focus:ring-2 focus:ring-[var(--da-primary-bg)] focus:outline-none;
 }
 
 /* --- Scrollbar styling --- */
@@ -49,20 +50,22 @@ textarea {
 }
 
 ::-webkit-scrollbar-track {
-  background: #0A0A0B;
+  background: var(--da-bg);
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-[#2A2A2D];
+  @apply rounded-full;
+  background: var(--da-border);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-[#333336];
+  background: var(--da-border-light);
 }
 
 /* --- Selection color --- */
 ::selection {
-  @apply bg-[#F0B429] text-[#0A0A0B];
+  background: var(--da-primary);
+  color: var(--da-text-on-primary);
 }
 
 /* --- Smooth transitions for interactive elements --- */

@@ -56,7 +56,7 @@ describe('EmbedGenerator', () => {
 
   it('updates brand color via text input', () => {
     render(<EmbedGenerator />);
-    const textInput = screen.getByDisplayValue('#F0B429');
+    const textInput = screen.getByDisplayValue('#0D9488');
     fireEvent.change(textInput, { target: { value: '#FF0000' } });
     const pre = document.querySelector('pre');
     expect(pre?.textContent).toContain('data-color="#FF0000"');

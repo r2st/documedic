@@ -449,7 +449,7 @@ export function SuggestionCard({
                     <p className="text-xs font-medium text-[#E5E7EB]">
                       {c.source && (
                         <>
-                          <span className="rounded bg-[#F0B429]/10 px-1.5 py-0.5 text-[#F0B429] ring-1 ring-[#F0B429]/30">
+                          <span className="rounded bg-[#0D9488]/10 px-1.5 py-0.5 text-[var(--da-primary)] ring-1 ring-[#0D9488]/30">
                             {c.source.toUpperCase()}
                           </span>{' '}
                         </>

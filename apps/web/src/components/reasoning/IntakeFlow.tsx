@@ -68,7 +68,7 @@ export function IntakeFlow({
       <div className="mb-4 flex items-center gap-2">
         <svg
           aria-hidden="true"
-          className="h-5 w-5 text-[#F0B429]"
+          className="h-5 w-5 text-[var(--da-primary)]"
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={1.5}
@@ -92,7 +92,7 @@ export function IntakeFlow({
               {/* Decorative ordinal: the questions are already a numbered visual list. */}
               <span
                 aria-hidden="true"
-                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-[#F0B429]/15 text-xs font-bold text-[#F0B429]"
+                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-[#0D9488]/15 text-xs font-bold text-[var(--da-primary)]"
               >
                 {index + 1}
               </span>

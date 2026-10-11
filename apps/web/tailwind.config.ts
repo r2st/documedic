@@ -14,17 +14,17 @@ const config: Config = {
     extend: {
       colors: {
         brand: {
-          50: 'rgba(240,180,41,0.1)',
-          100: 'rgba(240,180,41,0.15)',
-          200: 'rgba(240,180,41,0.25)',
-          300: '#F7CC5F',
-          400: '#F0B429',
-          500: '#F0B429',
-          600: '#F0B429',
-          700: '#D4A017',
-          800: '#8B6914',
-          900: '#5C4510',
-          950: '#2E220A',
+          50: 'rgba(13,148,136,0.1)',
+          100: 'rgba(13,148,136,0.15)',
+          200: 'rgba(13,148,136,0.25)',
+          300: '#5EEAD4',
+          400: '#2DD4BF',
+          500: '#0D9488',
+          600: '#0D9488',
+          700: '#0F766E',
+          800: '#115E59',
+          900: '#134E4A',
+          950: '#042F2E',
         },
         severity: {
           hard: '#b91c1c',
@@ -40,7 +40,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: [
-          'Schibsted Grotesk',
+          'Inter',
           'system-ui',
           '-apple-system',
           'BlinkMacSystemFont',
@@ -52,11 +52,11 @@ const config: Config = {
         mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       boxShadow: {
-        card: '0 1px 3px 0 rgb(0 0 0 / 0.2), 0 1px 2px -1px rgb(0 0 0 / 0.2)',
-        'card-hover': '0 4px 6px -1px rgb(0 0 0 / 0.25), 0 2px 4px -2px rgb(0 0 0 / 0.25)',
-        elevated: '0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.3)',
-        nav: '0 1px 3px 0 rgb(0 0 0 / 0.2)',
-        gold: '0 0 20px rgba(240,180,41,0.15)',
+        card: '0 1px 3px 0 rgb(0 0 0 / 0.08), 0 1px 2px -1px rgb(0 0 0 / 0.06)',
+        'card-hover': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.08)',
+        elevated: '0 10px 15px -3px rgb(0 0 0 / 0.12), 0 4px 6px -4px rgb(0 0 0 / 0.08)',
+        nav: '0 1px 3px 0 rgb(0 0 0 / 0.06)',
+        brand: '0 0 20px rgba(13,148,136,0.15)',
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',

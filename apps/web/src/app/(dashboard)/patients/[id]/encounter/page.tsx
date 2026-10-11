@@ -40,9 +40,9 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                 <span
                   className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors sm:h-7 sm:w-7 ${
                     isComplete
-                      ? 'bg-[#F0B429] text-[#0A0A0B]'
+                      ? 'bg-[var(--da-primary)] text-[var(--da-text-on-primary)]'
                       : isCurrent
-                        ? 'bg-[#F0B429]/15 text-[#F0B429] ring-2 ring-[#F0B429]'
+                        ? 'bg-[#0D9488]/15 text-[var(--da-primary)] ring-2 ring-[var(--da-primary)]'
                         : 'bg-[#2A2A2D] text-[#6B7280]'
                   }`}
                 >
@@ -68,7 +68,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
                 {/* On the smallest screens only the active step's label shows, to avoid overflow. */}
                 <span
                   className={`whitespace-nowrap text-[11px] font-medium sm:text-xs ${isCurrent ? 'inline' : 'hidden sm:inline'} ${
-                    isCurrent ? 'text-[#F0B429]' : isComplete ? 'text-[#E5E7EB]' : 'text-[#6B7280]'
+                    isCurrent ? 'text-[var(--da-primary)]' : isComplete ? 'text-[#E5E7EB]' : 'text-[#6B7280]'
                   }`}
                 >
                   {p.label}
@@ -76,7 +76,7 @@ function StepIndicator({ currentPhase }: { currentPhase: Phase }) {
               </div>
               {i < PHASES.length - 1 && (
                 <div
-                  className={`mx-2 h-px flex-1 ${isComplete ? 'bg-[#F0B429]' : 'bg-[#2A2A2D]'}`}
+                  className={`mx-2 h-px flex-1 ${isComplete ? 'bg-[var(--da-primary)]' : 'bg-[#2A2A2D]'}`}
                 />
               )}
             </li>
@@ -152,7 +152,7 @@ export default function EncounterPage() {
     <div className="space-y-5">
       <Link
         href={`/patients/${id}`}
-        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
+        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[var(--da-primary)] hover:text-[var(--da-primary-light)]"
       >
         <svg
           aria-hidden="true"

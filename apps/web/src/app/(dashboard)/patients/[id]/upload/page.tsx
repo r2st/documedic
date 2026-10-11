@@ -176,7 +176,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
     <div className="space-y-5">
       <Link
         href={`/patients/${id}`}
-        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[#F0B429] hover:text-[#F7CC5F]"
+        className="group mb-2 inline-flex items-center gap-1 text-sm font-medium text-[var(--da-primary)] hover:text-[var(--da-primary-light)]"
       >
         <svg
           aria-hidden="true"
@@ -208,15 +208,15 @@ export default function UploadPage({ params }: { params: { id: string } }) {
             onDrop={handleDrop}
             className={`relative rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
               isDragging
-                ? 'border-[#F0B429] bg-[#F0B429]/10'
-                : 'border-[#2A2A2D] bg-[#111113] hover:border-[#F0B429]/30 hover:bg-[#F0B429]/5'
-            } ${inputFocused ? 'ring-2 ring-[#F0B429] ring-offset-2 ring-offset-[#0A0A0B]' : ''}`}
+                ? 'border-[var(--da-primary)] bg-[#0D9488]/10'
+                : 'border-[#2A2A2D] bg-[#111113] hover:border-[var(--da-primary)]/30 hover:bg-[#0D9488]/5'
+            } ${inputFocused ? 'ring-2 ring-[var(--da-primary)] ring-offset-2 ring-offset-[#0A0A0B]' : ''}`}
           >
             {busy ? (
               <div className="flex flex-col items-center" role="status">
                 <svg
                   aria-hidden="true"
-                  className="h-8 w-8 animate-spin text-[#F0B429]"
+                  className="h-8 w-8 animate-spin text-[var(--da-primary)]"
                   viewBox="0 0 24 24"
                   fill="none"
                 >
@@ -359,7 +359,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                 }`}
               >
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="inline-flex items-center rounded-md bg-[#F0B429]/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-[#F0B429] ring-1 ring-inset ring-[#F0B429]/20">
+                  <span className="inline-flex items-center rounded-md bg-[#0D9488]/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-[var(--da-primary)] ring-1 ring-inset ring-[#0D9488]/20">
                     {ent.entity_type}
                   </span>
                   {/* Every row's visible label reads "Include", so the accessible name has to
@@ -370,7 +370,7 @@ export default function UploadPage({ params }: { params: { id: string } }) {
                       checked={!rejected.has(i)}
                       onChange={() => toggleReject(i)}
                       aria-label={`Include ${ent.entity_type} ${i + 1} in the record`}
-                      className="rounded border-[#2A2A2D] text-[#F0B429] focus:ring-[#F0B429]"
+                      className="rounded border-[#2A2A2D] text-[var(--da-primary)] focus:ring-[var(--da-primary)]"
                     />
                     Include
                   </label>

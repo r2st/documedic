@@ -14,7 +14,7 @@ import { Card, ErrorBanner } from '@aether/ui';
 // silently renders with no dot and reads out a raw enum value to a screen reader.
 const DOT: Record<AgentLane['status'], string> = {
   idle: 'bg-[#6B7280] ring-2 ring-[#2A2A2D]',
-  running: 'bg-[#F0B429] ring-2 ring-[#F0B429]/20 animate-pulse',
+  running: 'bg-[var(--da-primary)] ring-2 ring-[#0D9488]/20 animate-pulse',
   done: 'bg-emerald-500 ring-2 ring-emerald-500/20',
   failed: 'bg-amber-500 ring-2 ring-amber-500/20',
 };
@@ -133,7 +133,7 @@ export function ReasoningTheatre({
     ? 'text-red-600'
     : state.done
       ? 'text-emerald-600'
-      : 'text-[#F0B429]';
+      : 'text-[var(--da-primary)]';
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -142,7 +142,7 @@ export function ReasoningTheatre({
           <div className="flex items-center gap-2">
             <svg
               aria-hidden="true"
-              className="h-5 w-5 text-[#F0B429]"
+              className="h-5 w-5 text-[var(--da-primary)]"
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
@@ -162,7 +162,7 @@ export function ReasoningTheatre({
             role="status"
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${statusColor} ${
               state.running
-                ? 'bg-[#F0B429]/10 ring-1 ring-[#F0B429]/30'
+                ? 'bg-[#0D9488]/10 ring-1 ring-[#0D9488]/30'
                 : state.done
                   ? 'bg-emerald-950/30 ring-1 ring-emerald-800/50'
                   : state.error
@@ -173,7 +173,7 @@ export function ReasoningTheatre({
             {state.running && (
               <span
                 aria-hidden="true"
-                className="h-1.5 w-1.5 rounded-full bg-[#F0B429] animate-pulse"
+                className="h-1.5 w-1.5 rounded-full bg-[var(--da-primary)] animate-pulse"
               />
             )}
             {statusLabel}
