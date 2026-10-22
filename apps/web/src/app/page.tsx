@@ -457,20 +457,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Social proof — visible on mobile */}
-      <section className="landing-social-proof" aria-label="Testimonial">
-        <blockquote className="landing-testimonial">
-          <p className="landing-testimonial-text">
-            &ldquo;The drug interaction checker caught a dangerous combination I almost missed. It flags what matters
-            and skips the noise &mdash; exactly what we need in a busy OPD.&rdquo;
-          </p>
-          <footer className="landing-testimonial-author">
-            <span className="landing-testimonial-name">Dr. Anand Kulkarni</span>
-            <span className="landing-testimonial-role">Consultant Physician, Pune</span>
-          </footer>
-        </blockquote>
-      </section>
-
       {/* Footer */}
       <footer className="landing-footer">
         <div className="landing-footer-products">
