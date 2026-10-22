@@ -4,13 +4,13 @@ import { CrossProductLinks } from '@/components/CrossProductLinks';
 import { PublicNav, PublicFooter } from '@/components/PublicLayout';
 
 export const metadata: Metadata = {
-  title: 'Free Clinical Tools — BMI Calculator, Drug Interaction Checker, Symptom Triage | DoAide Med',
+  title: 'Free Clinical Tools — Drug Interactions, CrCl, CHA₂DS₂-VASc, BMI | DoAide Med',
   description:
-    'Free clinical tools for healthcare professionals: BMI calculator, drug interaction checker, and symptom triage. No sign-up required.',
+    'Free clinical tools for healthcare professionals: drug interaction checker, creatinine clearance, CHA₂DS₂-VASc, BMI calculator, and symptom triage. No sign-up required.',
   openGraph: {
     title: 'Free Clinical Tools — DoAide Med',
     description:
-      'BMI calculator, drug interaction checker, and symptom triage — free clinical tools for Indian doctors. No sign-up required.',
+      'Drug interaction checker, creatinine clearance, CHA₂DS₂-VASc, BMI calculator, and symptom triage — free clinical tools for Indian doctors. No sign-up required.',
     url: 'https://med.doaide.com/tools',
   },
 };
@@ -33,6 +33,18 @@ const TOOLS = [
     title: 'Symptom Triage',
     description: 'AI-powered symptom assessment to help prioritize care and generate differential diagnoses.',
     icon: '🩺',
+  },
+  {
+    slug: 'creatinine-clearance-calculator',
+    title: 'Creatinine Clearance Calculator',
+    description: 'Estimate creatinine clearance with the Cockcroft-Gault equation for renal drug dosing.',
+    icon: '🧪',
+  },
+  {
+    slug: 'chads-vasc-calculator',
+    title: 'CHA₂DS₂-VASc Calculator',
+    description: 'Score stroke risk in atrial fibrillation with annual risk estimates and anticoagulation guidance.',
+    icon: '🫀',
   },
 ] as const;
 

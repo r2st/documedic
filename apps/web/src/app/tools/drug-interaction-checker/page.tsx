@@ -4,7 +4,7 @@ import { DrugInteractionChecker } from './checker';
 
 export const metadata: Metadata = {
   title: 'Drug Interaction Checker — DoAide Med',
-  description: 'Check common drug-drug interactions from a curated database of 20 frequently prescribed medications.',
+  description: 'Check common drug-drug interactions from a curated database of 36 clinically important combinations, with severity ratings and search.',
 };
 
 export default function Page() {

@@ -37,8 +37,19 @@ describe('findInteractions', () => {
 });
 
 describe('INTERACTIONS database', () => {
-  it('has 20 entries', () => {
-    expect(INTERACTIONS).toHaveLength(20);
+  it('has at least 36 entries', () => {
+    expect(INTERACTIONS.length).toBeGreaterThanOrEqual(36);
+  });
+
+  it('has no duplicate drug pairs', () => {
+    const keys = INTERACTIONS.map((i) => [...i.drugs].map((d) => d.toLowerCase()).sort().join('+'));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('sorts results by severity (major first)', () => {
+    const result = findInteractions(['Digoxin', 'Furosemide', 'Amiodarone']);
+    expect(result.length).toBeGreaterThanOrEqual(2);
+    expect(result[0].severity).toBe('major');
   });
 
   it('each entry has required fields', () => {
@@ -84,5 +95,22 @@ describe('DrugInteractionChecker', () => {
   it('shows medical disclaimer', () => {
     render(<DrugInteractionChecker />);
     expect(screen.getByText(/educational purposes only/)).toBeInTheDocument();
+  });
+
+  it('filters drug buttons with the search box', () => {
+    render(<DrugInteractionChecker />);
+    fireEvent.change(screen.getByLabelText('Search medications'), { target: { value: 'warf' } });
+    expect(screen.getByText('Warfarin')).toBeInTheDocument();
+    expect(screen.queryByText('Aspirin')).not.toBeInTheDocument();
+  });
+
+  it('clears all selections with the Clear all button', () => {
+    render(<DrugInteractionChecker />);
+    fireEvent.click(screen.getByText('Warfarin'));
+    fireEvent.click(screen.getByText('Aspirin'));
+    expect(screen.getByText('1 interaction found')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Clear all'));
+    expect(screen.queryByText('1 interaction found')).not.toBeInTheDocument();
+    expect(screen.queryByText('Clear all')).not.toBeInTheDocument();
   });
 });

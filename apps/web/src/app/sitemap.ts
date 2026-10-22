@@ -11,6 +11,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${base}/tools/bmi-calculator`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
     { url: `${base}/tools/drug-interaction-checker`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
     { url: `${base}/tools/symptom-triage`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
+    { url: `${base}/tools/creatinine-clearance-calculator`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
+    { url: `${base}/tools/chads-vasc-calculator`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
     { url: `${base}/blog`, lastModified: new Date(), changeFrequency: 'weekly', priority: 0.9 },
     ...POSTS.map((post) => ({
       url: `${base}/blog/${post.slug}`,
