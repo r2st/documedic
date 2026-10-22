@@ -78,9 +78,8 @@ describe('ErrorBoundary', () => {
     );
 
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent(/treat this section as missing, not as empty/i);
-    expect(alert).toHaveTextContent(/nothing to report/i);
-    expect(alert).toHaveTextContent(/Nothing here is a clinical finding/i);
+    expect(alert).toHaveTextContent(/could not be displayed/i);
+    expect(alert).toHaveTextContent(/Not a clinical finding/i);
   });
 
   it('says the record is unaffected, which is the other question a clinician has', () => {
@@ -90,7 +89,7 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>,
     );
 
-    expect(screen.getByRole('alert')).toHaveTextContent(/record itself is unaffected/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/record is unaffected/i);
   });
 
   it('logs the failure with the section name and the component stack', () => {

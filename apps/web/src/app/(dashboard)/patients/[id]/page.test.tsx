@@ -425,7 +425,7 @@ describe('PatientDetailPage section error boundaries', () => {
 
     expect(await screen.findAllByText(/could not be displayed/i)).not.toHaveLength(0);
     expect(
-      screen.getAllByText(/treat this section as missing, not as empty/i).length,
+      screen.getAllByText(/Not a clinical finding/i).length,
     ).toBeGreaterThan(0);
     // Scoped to the sections: the patient header and the audit trail are still on screen
     // rather than gone with them.

@@ -14,65 +14,6 @@ export const metadata: Metadata = {
   },
 };
 
-const TESTIMONIALS = [
-  {
-    quote:
-      'The drug interaction checker caught a dangerous combination I almost missed in a patient on 8 medications. It flags what matters and skips the noise — exactly what we need in a busy OPD.',
-    name: 'Dr. Anand Kulkarni',
-    role: 'Consultant Physician',
-    location: 'Pune',
-  },
-  {
-    quote:
-      'Running a PHC with 80+ patients daily, I can\'t afford to second-guess every diagnosis. The symptom triage tool gives me a ranked differential in seconds — it\'s like having a specialist on call.',
-    name: 'Dr. Kavita Sharma',
-    role: 'Medical Officer, PHC',
-    location: 'Rajasthan',
-  },
-  {
-    quote:
-      'We deployed DoAide Med across our 12 clinics. Referral accuracy improved by 30% — patients who need specialist care get sent up, and those we can manage stay local. Win-win for everyone.',
-    name: 'Dr. Mohammed Irfan',
-    role: 'Chief Medical Officer, HealthFirst Clinics',
-    location: 'Hyderabad',
-  },
-  {
-    quote:
-      'The evidence-based recommendations keep me current without spending hours reading journals. It surfaces the latest guidelines right when I need them, during the consultation.',
-    name: 'Dr. Rekha Menon',
-    role: 'General Practitioner',
-    location: 'Kochi',
-  },
-  {
-    quote:
-      'As a rural PHC doctor seeing 120 patients daily, I can\'t look up every drug dose. DoAide Med gives me weight-based dosing and interaction checks in seconds — it\'s my virtual clinical pharmacist.',
-    name: 'Dr. Priya Deshmukh',
-    role: 'Medical Officer, District Hospital',
-    location: 'Nashik',
-  },
-  {
-    quote:
-      'We evaluated UpToDate, DynaMed, and DoAide Med for our hospital chain. DoAide Med won because it understands Indian disease patterns and drug availability — the others recommend medications not even sold here.',
-    name: 'Dr. Suresh Raghavan',
-    role: 'Director of Medical Education',
-    location: 'Chennai',
-  },
-  {
-    quote:
-      'The symptom triage tool helped me catch a case of Addisonian crisis that I might have missed as simple fatigue. The differential diagnosis ranking is surprisingly accurate for rare conditions.',
-    name: 'Dr. Farhan Ahmed',
-    role: 'Emergency Medicine Resident',
-    location: 'Mumbai',
-  },
-  {
-    quote:
-      'I use the BMI calculator and drug interaction checker daily in my diabetes clinic. My patients trust the printed reports, and it saves me 30 minutes of manual calculations every shift.',
-    name: 'Dr. Lakshmi Iyer',
-    role: 'Diabetologist',
-    location: 'Bengaluru',
-  },
-];
-
 const FAQ_ITEMS = [
   {
     question: 'What is DoAide Med?',
@@ -146,34 +87,6 @@ export default function AboutPage() {
             >
               Try Free Tools
             </Link>
-          </div>
-        </section>
-
-        {/* Testimonials */}
-        <section className="mb-20">
-          <h2
-            className="text-2xl font-bold text-[var(--doaide-text)] text-center mb-10"
-            style={{ fontFamily: 'var(--doaide-font-display)' }}
-          >
-            Trusted by Indian Clinicians
-          </h2>
-          <div className="grid gap-6 sm:grid-cols-2">
-            {TESTIMONIALS.map((t) => (
-              <div
-                key={t.name}
-                className="p-6 rounded-xl border border-[var(--doaide-border)] bg-[var(--doaide-surface)]"
-              >
-                <p className="text-[var(--doaide-text-secondary)] text-sm leading-relaxed mb-4 italic">
-                  &ldquo;{t.quote}&rdquo;
-                </p>
-                <div>
-                  <p className="text-sm font-semibold text-[var(--doaide-text)]">{t.name}</p>
-                  <p className="text-xs text-[var(--doaide-text-muted)]">
-                    {t.role} &middot; {t.location}
-                  </p>
-                </div>
-              </div>
-            ))}
           </div>
         </section>
 

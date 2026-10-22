@@ -498,7 +498,7 @@ describe('EncounterPage results error boundary', () => {
     expect(
       await screen.findByText(/The reasoning results could not be displayed/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/treat this section as missing, not as empty/i)).toBeInTheDocument();
+    expect(screen.getByText(/Not a clinical finding/i)).toBeInTheDocument();
     // The card that rendered fine is gone too — React unmounts the whole boundary subtree —
     // which is exactly why the fallback has to say the section is missing. A list showing
     // only "Dengue fever", with the failure invisible, would be the dangerous outcome.

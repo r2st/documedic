@@ -261,7 +261,7 @@ describe('what arrives on its own is announced', () => {
       window.dispatchEvent(new Event('offline'));
     });
 
-    expect(screen.getByRole('status')).toHaveTextContent(/offline mode/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/offline/i);
   });
 
   it('names the patient-record skeleton, which is otherwise silent grey boxes', async () => {

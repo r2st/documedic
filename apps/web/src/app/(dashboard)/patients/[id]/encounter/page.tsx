@@ -7,11 +7,22 @@ import { api } from '@/lib/api';
 import { discardDraft, draftKey, readDraft, saveDraft } from '@/lib/drafts';
 import { requestErrorMessage } from '@/lib/errors';
 import type { ClinicalSuggestion, IntakeQuestion } from '@/lib/types';
+import dynamic from 'next/dynamic';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { IntakeFlow } from '@/components/reasoning/IntakeFlow';
-import { ReasoningTheatre } from '@/components/reasoning/ReasoningTheatre';
-import { SuggestionCard } from '@/components/reasoning/SuggestionCard';
 import { Button, Card, ErrorBanner, LoadingBlock, SkeletonCards } from '@aether/ui';
+
+// The theatre and the suggestion cards only appear from the reasoning phase
+// on, so their ~900 lines stay out of the chunk that must load before the
+// clinician can type the complaint.
+const ReasoningTheatre = dynamic(
+  () => import('@/components/reasoning/ReasoningTheatre').then((m) => m.ReasoningTheatre),
+  { loading: () => <SkeletonCards count={1} className="space-y-3" /> },
+);
+const SuggestionCard = dynamic(
+  () => import('@/components/reasoning/SuggestionCard').then((m) => m.SuggestionCard),
+  { loading: () => <SkeletonCards count={1} className="space-y-3" /> },
+);
 
 type Phase = 'complaint' | 'intake' | 'reasoning' | 'results';
 
